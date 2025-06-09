@@ -95,33 +95,7 @@ fn configure_vcpkg_windows() {
 
 fn configure_vcpkg_linux() {
     // 禁用 pkg-config，强制使用 vcpkg 或 vendored 依赖
-    env::set_var("PKG_CONFIG_ALLOW_CROSS", "0");
-    env::set_var("PKG_CONFIG", "false");
 
-    // 强制使用 vendored OpenSSL
-    env::set_var("OPENSSL_STATIC", "1");
-    env::set_var("OPENSSL_VENDORED", "1");
-
-    // 禁用 GTK 相关的 pkg-config 查找
-    env::set_var("GLIB_2_0_NO_PKG_CONFIG", "1");
-    env::set_var("GOBJECT_2_0_NO_PKG_CONFIG", "1");
-    env::set_var("GIO_2_0_NO_PKG_CONFIG", "1");
-    env::set_var("CAIRO_NO_PKG_CONFIG", "1");
-    env::set_var("PANGO_NO_PKG_CONFIG", "1");
-    env::set_var("PANGOCAIRO_NO_PKG_CONFIG", "1");
-    env::set_var("GDK_PIXBUF_2_0_NO_PKG_CONFIG", "1");
-    env::set_var("GTK_3_0_NO_PKG_CONFIG", "1");
-
-    // Linux-specific vcpkg configuration
-    println!("cargo:rustc-link-lib=static=pthread");
-    println!("cargo:rustc-link-lib=static=dl");
-    println!("cargo:rustc-link-lib=static=m");
-
-    // For static linking on Linux
-    if env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default().contains("crt-static") {
-        println!("cargo:rustc-link-arg=-static");
-        println!("cargo:rustc-link-arg=-Wl,--gc-sections");
-    }
 
     println!("cargo:warning=Configured for Linux build without pkg-config dependencies");
 }
