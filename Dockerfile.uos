@@ -217,13 +217,12 @@ RUN rustup target add x86_64-unknown-linux-musl x86_64-unknown-linux-gnu
 # RUSTFLAGS="-C target-feature=+crt-static"
 RUN PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_STATIC=1 \
     PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/lib/x86_64-alpine-linux-musl/pkgconfig  \
-    GLIB_STATIC=1 \
+    #GLIB_STATIC=1 \
     OPENSSL_STATIC=1 \
     OPENSSL_DIR=/usr/local/musl \
-    RUSTFLAGS="-C target-feature=+crt-static" \
-    #cargo build  --release --target  x86_64-unknown-linux-musl
-    cargo build  --release --target x86_64-unknown-linux-gnu
+    #RUSTFLAGS="-C target-feature=+crt-static" \
+    cargo build --release --target x86_64-unknown-linux-gnu
 
 # Create the output directory
 RUN mkdir -p /output
-RUN cp target/release/seeu_desktop /output/
+RUN cp target/x86_64-unknown-linux-gnu/release/seeu_desktop /output/
