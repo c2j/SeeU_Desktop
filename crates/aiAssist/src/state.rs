@@ -18,6 +18,8 @@ pub struct StateUpdate {
     pub error: Option<String>,
 }
 
+// 移除模型加载状态结构
+
 /// Type for slash command callback
 pub type SlashCommandCallback = Box<dyn FnMut(SlashCommand) + Send + 'static>;
 
@@ -100,6 +102,7 @@ impl Default for AIAssistState {
 }
 
 impl AIAssistState {
+
     /// Send a message to the AI assistant
     pub fn send_message(&mut self) -> Option<SlashCommand> {
         if self.chat_input.trim().is_empty() || self.is_sending {
@@ -577,10 +580,12 @@ pub enum SlashCommand {
     Search(String),
 }
 
+// 移除ProviderType，统一使用OpenAI compatible格式
+
 /// AI settings
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AISettings {
-    pub api_url: String,
+    pub base_url: String,
     pub api_key: String,
     pub model: String,
     pub temperature: f32,
@@ -588,13 +593,36 @@ pub struct AISettings {
     pub streaming: bool,
 }
 
+impl AISettings {
+    /// Get the chat endpoint URL (OpenAI compatible)
+    pub fn get_chat_url(&self) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        // 如果base_url已经以/v1结尾，直接添加/chat/completions
+        // 否则先添加/v1再添加/chat/completions
+        if base.ends_with("/v1") {
+            format!("{}/chat/completions", base)
+        } else {
+            format!("{}/v1/chat/completions", base)
+        }
+    }
+
+    /// Get the models endpoint URL (OpenAI compatible)
+    pub fn get_models_url(&self) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        if base.ends_with("/v1") {
+            format!("{}/models", base)
+        } else {
+            format!("{}/v1/models", base)
+        }
+    }
+}
+
 impl Default for AISettings {
     fn default() -> Self {
         Self {
-            // Ollama API 端点
-            api_url: "http://localhost:11434/api/chat".to_string(),
-            api_key: "EMPTY".to_string(),
-            model: "qwen3:4b".to_string(),
+            base_url: "http://localhost:11434/v1".to_string(),
+            api_key: "".to_string(),
+            model: "qwen2.5:7b".to_string(),
             temperature: 0.7,
             max_tokens: 2000,
             streaming: true,

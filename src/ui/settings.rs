@@ -781,8 +781,8 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 ui.add_space(5.0);
 
                 ui.horizontal(|ui| {
-                    ui.label("API URL:");
-                    ui.text_edit_singleline(&mut ai_state.ai_settings.api_url);
+                    ui.label("Base URL:");
+                    ui.text_edit_singleline(&mut ai_state.ai_settings.base_url);
                 });
 
                 ui.horizontal(|ui| {
@@ -791,15 +791,8 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 });
 
                 ui.horizontal(|ui| {
-                    ui.label("模型:");
-                    egui::ComboBox::from_id_source("ai_model_selector")
-                        .selected_text(&ai_state.ai_settings.model)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut ai_state.ai_settings.model, "qwen3:4b".to_string(), "Qwen 3 (4B)");
-                            ui.selectable_value(&mut ai_state.ai_settings.model, "llama3:8b".to_string(), "Llama 3 (8B)");
-                            ui.selectable_value(&mut ai_state.ai_settings.model, "gpt-3.5-turbo".to_string(), "GPT-3.5");
-                            ui.selectable_value(&mut ai_state.ai_settings.model, "gpt-4".to_string(), "GPT-4");
-                        });
+                    ui.label("模型名称:");
+                    ui.text_edit_singleline(&mut ai_state.ai_settings.model);
                 });
             });
         });

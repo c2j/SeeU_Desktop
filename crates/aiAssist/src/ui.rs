@@ -208,7 +208,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     // 设置输入框的最大宽度
                     let available_width = ui.available_width();
 
-                    let response = ui.add(
+                    let _response = ui.add(
                         egui::TextEdit::multiline(&mut state.chat_input)
                             .hint_text("输入消息...")
                             .desired_width(available_width) // 使用全部可用宽度
@@ -241,17 +241,14 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                 // 底部工具栏
                 ui.horizontal(|ui| {
-                    // 模型选择下拉框
-                    egui::ComboBox::from_id_salt("model_selector")
-                        .selected_text(&state.ai_settings.model)
-                        .width(100.0)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut state.ai_settings.model, "qwen3:4b".to_string(), "Qwen 3 (4B)");
-                            ui.selectable_value(&mut state.ai_settings.model, "llama3:8b".to_string(), "Llama 3 (8B)");
-                            ui.selectable_value(&mut state.ai_settings.model, "gpt-3.5-turbo".to_string(), "GPT-3.5");
-                        });
+                    // 模型名称显示
+                    let display_text = if state.ai_settings.model.len() > 15 {
+                        format!("{}...", &state.ai_settings.model[..12])
+                    } else {
+                        state.ai_settings.model.clone()
+                    };
 
-                    ui.label("模型▼");
+                    ui.label(format!("模型: {}", display_text));
 
                     // 附件按钮
                     if ui.button("📎").clicked() {
@@ -315,7 +312,7 @@ fn render_ai_settings(ctx: &egui::Context, state: &mut AIAssistState) {
 
     // 获取屏幕中心位置
     let screen_rect = ctx.screen_rect();
-    let window_size = egui::vec2(350.0, 300.0);
+    let window_size = egui::vec2(400.0, 350.0);
 
     // 计算窗口位置 - 放在屏幕右上角附近
     let window_pos = egui::pos2(
@@ -333,25 +330,28 @@ fn render_ai_settings(ctx: &egui::Context, state: &mut AIAssistState) {
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("API URL:");
-                ui.text_edit_singleline(&mut state.ai_settings.api_url);
+                ui.label("Base URL:");
+                ui.text_edit_singleline(&mut state.ai_settings.base_url);
             });
+            ui.label("提示: 通常以 /v1 结尾，如 http://localhost:11434/v1");
+
+            ui.add_space(10.0);
 
             ui.horizontal(|ui| {
                 ui.label("API Key:");
                 ui.text_edit_singleline(&mut state.ai_settings.api_key);
             });
+            ui.label("提示: 本地服务可以留空");
+
+            ui.add_space(10.0);
 
             ui.horizontal(|ui| {
-                ui.label("模型:");
-                egui::ComboBox::from_id_salt("model_select")
-                    .selected_text(&state.ai_settings.model)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.ai_settings.model, "qwen3:4b".to_string(), "Qwen 3 (4B)");
-                        ui.selectable_value(&mut state.ai_settings.model, "llama3:8b".to_string(), "Llama 3 (8B)");
-                        ui.selectable_value(&mut state.ai_settings.model, "gpt-3.5-turbo".to_string(), "GPT-3.5 Turbo");
-                    });
+                ui.label("模型名称:");
+                ui.text_edit_singleline(&mut state.ai_settings.model);
             });
+            ui.label("提示: 如 gpt-3.5-turbo, qwen2.5:7b 等");
+
+            ui.separator();
 
             ui.horizontal(|ui| {
                 ui.label("温度:");
@@ -500,7 +500,7 @@ fn render_slash_commands(ctx: &egui::Context, state: &mut AIAssistState) {
 }
 
 /// 渲染消息内容，简单处理<think>标签
-fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, is_streaming: bool) {
+fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, _is_streaming: bool) {
     // 设置最大宽度
     ui.set_max_width(max_width);
 
