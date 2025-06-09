@@ -1,0 +1,169 @@
+# Cargo configuration for SeeU Desktop cross-platform builds with vcpkg
+
+# Build configuration
+[build]
+# Treat proc-macro dependencies specially during cross-compilation
+#target-applies-to-host = ["proc-macro"]
+
+# Windows MSVC x64 target configuration
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-pc-windows-msvc.env]
+VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
+
+# Windows MSVC x86 (32-bit) target configuration
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc.env]
+VCPKG_DEFAULT_TRIPLET = "x86-windows-static"
+
+# Windows GNU x64 target configuration (fallback)
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
+# Uncomment if cross-compiling from non-Windows
+# linker = "x86_64-w64-mingw32-gcc"
+
+# Windows GNU x86 target configuration (fallback)
+[target.i686-pc-windows-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
+# Uncomment if cross-compiling from non-Windows
+# linker = "i686-w64-mingw32-gcc"
+
+# Linux x86_64 GNU target configuration
+[target.x86_64-unknown-linux-gnu]
+#rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-unknown-linux-gnu.env]
+VCPKG_DEFAULT_TRIPLET = "x64-linux"
+# 禁用 pkg-config，强制使用 vcpkg
+PKG_CONFIG_ALLOW_CROSS = "0"
+PKG_CONFIG = "false"
+# 强制使用 vendored 依赖
+#OPENSSL_STATIC = "1"
+#OPENSSL_VENDORED = "1"
+
+# Linux x86_64 musl target configuration (for static linking)
+[target.x86_64-unknown-linux-musl]
+#rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-unknown-linux-musl.env]
+VCPKG_DEFAULT_TRIPLET = "x64-linux"
+# 禁用 pkg-config，强制使用 vcpkg
+PKG_CONFIG_ALLOW_CROSS = "0"
+PKG_CONFIG = "false"
+# 强制使用 vendored 依赖
+#OPENSSL_STATIC = "1"
+#OPENSSL_VENDORED = "1"
+
+#[target.x86_64-unknown-linux-musl.openssl]
+#static = "true"
+
+# Linux ARM64 GNU target configuration
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
+# Uncomment if cross-compiling
+# linker = "aarch64-linux-gnu-gcc"
+
+[target.aarch64-unknown-linux-gnu.env]
+VCPKG_DEFAULT_TRIPLET = "arm64-linux"
+# 禁用 pkg-config，强制使用 vcpkg
+PKG_CONFIG_ALLOW_CROSS = "0"
+PKG_CONFIG = "false"
+# 强制使用 vendored 依赖
+#OPENSSL_STATIC = "1"
+#OPENSSL_VENDORED = "1"
+
+# Linux ARM64 musl target configuration (for static linking)
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+# Uncomment if cross-compiling
+# linker = "aarch64-linux-musl-gcc"
+
+[target.aarch64-unknown-linux-musl.env]
+VCPKG_DEFAULT_TRIPLET = "arm64-linux"
+# 禁用 pkg-config，强制使用 vcpkg
+PKG_CONFIG_ALLOW_CROSS = "0"
+PKG_CONFIG = "false"
+# 强制使用 vendored 依赖
+#OPENSSL_STATIC = "1"
+#OPENSSL_VENDORED = "1"
+
+# macOS Intel x64 target configuration
+[target.x86_64-apple-darwin]
+rustflags = []
+
+[target.x86_64-apple-darwin.env]
+VCPKG_DEFAULT_TRIPLET = "x64-osx"
+
+# macOS Apple Silicon ARM64 target configuration
+[target.aarch64-apple-darwin]
+rustflags = []
+
+[target.aarch64-apple-darwin.env]
+VCPKG_DEFAULT_TRIPLET = "arm64-osx"
+
+# Global environment variables for vcpkg integration
+[env]
+# Uncomment and set if vcpkg is installed in a custom location
+# VCPKG_ROOT = "/path/to/vcpkg"
+
+# Enable vcpkg integration
+VCPKG_FEATURE_FLAGS = "manifests,versions"
+
+# Optimize for release builds
+[profile.release]
+opt-level = 3
+debug = false
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Optimize for debug builds
+[profile.dev]
+opt-level = 0
+debug = true
+strip = false
+lto = false
+
+# Custom profile for fast development builds
+[profile.dev-fast]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+
+# Custom profile for release with debug info
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = false
+
+# Registry configuration
+[registries]
+# Use the default crates.io registry
+crates-io = { index = "https://github.com/rust-lang/crates.io-index" }
+
+# Source replacement for faster builds (optional)
+# Uncomment to use a mirror registry
+# [source.crates-io]
+# replace-with = "ustc"
+# 
+# [source.ustc]
+# registry = "https://mirrors.ustc.edu.cn/crates.io-index"
+
+# Network configuration
+[net]
+retry = 3
+git-fetch-with-cli = true
+
+# HTTP configuration
+[http]
+timeout = 30
+multiplexing = true
+check-revoke = true
+
+# Future compatibility settings
+[future-incompat-report]
+frequency = "always"

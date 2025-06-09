@@ -1,0 +1,23 @@
+[package]
+name = "isearch"
+version = "0.1.0"
+edition = "2021"
+authors = ["SeeU Team"]
+description = "File search module for SeeU Desktop"
+
+[dependencies]
+egui = "0.31.1"
+eframe = "0.31.1"
+serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0.107"
+chrono = { version = "0.4.31", features = ["serde"] }
+uuid = { version = "1.4.1", features = ["v4", "serde"] }
+log = "0.4.20"
+dirs = "5.0.1"
+tantivy = "0.19.0"
+notify = "6.1.1"
+walkdir = "2.4.0"
+# rfd = { version = "0.12.1", default-features = false, features = ["xdg-portal"] }
+# 使用更轻量级的文件对话框实现，避免 async-recursion 依赖
+open = "5.0.0"
+ignore = "0.4.20"

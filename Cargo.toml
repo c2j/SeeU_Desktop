@@ -1,0 +1,85 @@
+[package]
+name = "seeu_desktop"
+version = "0.1.0"
+edition = "2021"
+authors = ["SeeU Team"]
+description = "A modern desktop application built with Rust, egui and eframe"
+
+[dependencies]
+# GUI Framework - 最小化配置，避免系统依赖
+egui = { version = "0.31.1", default-features = false, features = ["default_fonts"] }
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow"] }
+egui_extras = { version = "0.31.1", default-features = false }
+
+
+
+# Async runtime
+tokio = { version = "1.32.0", features = ["full"] }
+
+# Date and time
+chrono = { version = "0.4.31", features = ["serde"] }
+
+# Serialization
+serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0.107"
+
+# Utilities
+uuid = { version = "1.4.1", features = ["v4", "serde"] }
+log = "0.4.20"
+env_logger = "0.10.0"
+dirs = "5.0.1"
+image = { version = "0.24.7", features = ["jpeg", "png", "gif"] }
+
+# File dialogs - 移除 rfd 依赖以避免 async-recursion
+# rfd = { version = "0.12.0", default-features = false, features = ["xdg-portal"] }
+
+# System information
+sysinfo = "0.29.10"
+
+# For markdown rendering
+pulldown-cmark = "0.9.3"
+
+# For file watching
+notify = "6.1.1"
+
+# For file indexing
+tantivy = "0.19.0"
+
+# Local crates
+inote = { path = "crates/inote" }
+isearch = { path = "crates/isearch" }
+aiAssist = { path = "crates/aiAssist" }
+itools = { path = "crates/itools" }
+iterminal = { path = "crates/iterminal" }
+
+# vcpkg integration
+vcpkg = "0.2"
+
+# 强制使用 vcpkg 提供的库，避免 pkg-config
+openssl-sys = { version = "0.9", features = ["vendored"] }
+
+
+
+
+
+[build-dependencies]
+# vcpkg integration for cross-platform builds
+vcpkg = "0.2"
+
+
+
+[workspace]
+members = [
+    "crates/inote",
+    "crates/isearch",
+    "crates/aiAssist",
+    "crates/itools",
+    "crates/iterminal",
+]
+
+[profile.release]
+opt-level = 2
+debug = false
+strip = true
+lto = true
+codegen-units = 1

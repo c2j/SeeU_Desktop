@@ -1,0 +1,926 @@
+pub mod notebook;
+pub mod note;
+pub mod tag;
+pub mod ui;
+pub mod storage;
+pub mod db_storage;
+pub mod migration;
+pub mod db_state;
+pub mod db_ui;
+pub mod db_ui_import;
+pub mod tree_ui;
+pub mod markdown;
+pub mod siyuan_import;
+
+use eframe::egui;
+use notebook::Notebook;
+use note::{Note, Attachment};
+use tag::Tag;
+use storage::StorageManager;
+use db_storage::DbStorageManager;
+use db_state::{DbINoteState, SaveStatus};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use uuid::Uuid;
+use chrono::Utc;
+
+/// iNote state
+pub struct INoteState {
+    pub notebooks: Vec<Notebook>,
+    pub notes: HashMap<String, Note>,
+    pub tags: Vec<Tag>,
+    pub current_notebook: Option<usize>,
+    pub current_note: Option<String>,
+    pub search_query: String,
+    pub search_results: Vec<String>, // IDs of notes that match the search query
+    pub is_searching: bool,          // Whether we're currently showing search results
+    pub note_content: String,
+    pub note_title: String,
+    pub show_create_notebook: bool,
+    pub show_create_tag: bool,
+    pub new_notebook_name: String,
+    pub new_notebook_description: String,
+    pub new_tag_name: String,
+    pub new_tag_color: String,
+    pub storage: Arc<Mutex<StorageManager>>,
+}
+
+impl Default for INoteState {
+    fn default() -> Self {
+        let storage = Arc::new(Mutex::new(StorageManager::new()));
+
+        Self {
+            notebooks: Vec::new(),
+            notes: HashMap::new(),
+            tags: Vec::new(),
+            current_notebook: None,
+            current_note: None,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            is_searching: false,
+            note_content: String::new(),
+            note_title: String::new(),
+            show_create_notebook: false,
+            show_create_tag: false,
+            new_notebook_name: String::new(),
+            new_notebook_description: String::new(),
+            new_tag_name: String::new(),
+            new_tag_color: "#3498db".to_string(),
+            storage,
+        }
+    }
+}
+
+impl INoteState {
+    /// Initialize the state
+    pub fn initialize(&mut self) {
+        // Load notebooks, notes, and tags
+        self.load_notebooks();
+        self.load_notes();
+        self.load_tags();
+    }
+
+    /// Load notebooks from storage
+    fn load_notebooks(&mut self) {
+        if let Ok(storage) = self.storage.lock() {
+            match storage.list_notebooks() {
+                Ok(notebooks) => {
+                    self.notebooks = notebooks;
+                }
+                Err(err) => {
+                    log::error!("Failed to load notebooks: {}", err);
+                }
+            }
+        }
+    }
+
+    /// Load notes from storage
+    fn load_notes(&mut self) {
+        if let Ok(storage) = self.storage.lock() {
+            // Load notes for each notebook
+            for notebook in &self.notebooks {
+                for note_id in &notebook.note_ids {
+                    if self.notes.contains_key(note_id) {
+                        continue;
+                    }
+
+                    match storage.load_note(note_id) {
+                        Ok(note) => {
+                            self.notes.insert(note_id.clone(), note);
+                        }
+                        Err(err) => {
+                            log::error!("Failed to load note {}: {}", note_id, err);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Load tags from storage
+    fn load_tags(&mut self) {
+        if let Ok(storage) = self.storage.lock() {
+            match storage.list_tags() {
+                Ok(tags) => {
+                    self.tags = tags;
+                }
+                Err(err) => {
+                    log::error!("Failed to load tags: {}", err);
+                }
+            }
+        }
+    }
+
+    /// Create a new notebook
+    pub fn create_notebook(&mut self, name: String, description: String) {
+        log::info!("Creating new notebook: {}", name);
+        let notebook = Notebook::new(name, description);
+
+        // Save to storage
+        if let Ok(storage) = self.storage.lock() {
+            match storage.save_notebook(&notebook) {
+                Ok(_) => {
+                    log::info!("Notebook saved successfully: {}", notebook.id);
+                    // Add to list
+                    self.notebooks.push(notebook);
+                    log::info!("Notebook added to list, total notebooks: {}", self.notebooks.len());
+                },
+                Err(err) => {
+                    log::error!("Failed to save notebook: {}", err);
+                }
+            }
+        } else {
+            log::error!("Failed to lock storage");
+        }
+    }
+
+    /// Delete a notebook
+    pub fn delete_notebook(&mut self, index: usize) {
+        if index >= self.notebooks.len() {
+            return;
+        }
+
+        // Get note IDs to delete
+        let note_ids: Vec<String> = self.notebooks[index].note_ids.clone();
+
+        // Delete all notes in the notebook
+        for note_id in &note_ids {
+            self.delete_note(note_id);
+        }
+
+        // Remove from list
+        self.notebooks.remove(index);
+
+        // Reset current notebook if needed
+        if self.current_notebook == Some(index) {
+            self.current_notebook = None;
+            self.current_note = None;
+        } else if let Some(current) = self.current_notebook {
+            if current > index {
+                self.current_notebook = Some(current - 1);
+            }
+        }
+    }
+
+    /// Create a new note
+    pub fn create_note(&mut self, title: String, content: String) -> Option<String> {
+        if let Some(notebook_idx) = self.current_notebook {
+            if notebook_idx >= self.notebooks.len() {
+                return None;
+            }
+
+            let note = Note::new(title, content);
+            let note_id = note.id.clone();
+
+            // Save to storage
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_note(&note) {
+                    log::error!("Failed to save note: {}", err);
+                    return None;
+                }
+            }
+
+            // Add to notebook
+            self.notebooks[notebook_idx].add_note(note_id.clone());
+
+            // Save notebook
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_notebook(&self.notebooks[notebook_idx]) {
+                    log::error!("Failed to save notebook: {}", err);
+                }
+            }
+
+            // Add to notes map
+            self.notes.insert(note_id.clone(), note);
+
+            return Some(note_id);
+        }
+
+        None
+    }
+
+    /// Update a note
+    pub fn update_note(&mut self, note_id: &str, title: String, content: String) {
+        if let Some(note) = self.notes.get_mut(note_id) {
+            note.title = title;
+            note.content = content;
+            note.updated_at = Utc::now();
+
+            // Save to storage
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_note(note) {
+                    log::error!("Failed to save note: {}", err);
+                }
+            }
+        }
+    }
+
+    /// Delete a note
+    pub fn delete_note(&mut self, note_id: &str) {
+        // Remove from notebooks
+        for notebook in &mut self.notebooks {
+            notebook.remove_note(note_id);
+
+            // Save notebook
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_notebook(notebook) {
+                    log::error!("Failed to save notebook: {}", err);
+                }
+            }
+        }
+
+        // Remove from notes map
+        self.notes.remove(note_id);
+
+        // Reset current note if needed
+        if self.current_note == Some(note_id.to_string()) {
+            self.current_note = None;
+            self.note_content = String::new();
+            self.note_title = String::new();
+        }
+    }
+
+    /// Create a new tag
+    pub fn create_tag(&mut self, name: String, color: String) {
+        let tag = Tag::new(name, color);
+
+        // Save to storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.save_tag(&tag) {
+                log::error!("Failed to save tag: {}", err);
+                return;
+            }
+        }
+
+        // Add to list
+        self.tags.push(tag);
+    }
+
+    /// Delete a tag
+    pub fn delete_tag(&mut self, tag_id: &str) {
+        // Remove tag from all notes
+        for (_, note) in &mut self.notes {
+            note.remove_tag(tag_id);
+
+            // Save note
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_note(note) {
+                    log::error!("Failed to save note: {}", err);
+                }
+            }
+        }
+
+        // Remove from list
+        self.tags.retain(|tag| tag.id != tag_id);
+    }
+
+    /// Add a tag to a note
+    pub fn add_tag_to_note(&mut self, note_id: &str, tag_id: &str) {
+        if let Some(note) = self.notes.get_mut(note_id) {
+            note.add_tag(tag_id.to_string());
+
+            // Save to storage
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_note(note) {
+                    log::error!("Failed to save note: {}", err);
+                }
+            }
+        }
+    }
+
+    /// Remove a tag from a note
+    pub fn remove_tag_from_note(&mut self, note_id: &str, tag_id: &str) {
+        if let Some(note) = self.notes.get_mut(note_id) {
+            note.remove_tag(tag_id);
+
+            // Save to storage
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_note(note) {
+                    log::error!("Failed to save note: {}", err);
+                }
+            }
+        }
+    }
+
+    /// Select a notebook
+    pub fn select_notebook(&mut self, index: usize) {
+        if index < self.notebooks.len() {
+            self.current_notebook = Some(index);
+            self.current_note = None;
+            self.note_content = String::new();
+            self.note_title = String::new();
+        }
+    }
+
+    /// Select a note
+    pub fn select_note(&mut self, note_id: &str) {
+        if let Some(note) = self.notes.get(note_id) {
+            self.current_note = Some(note_id.to_string());
+            self.note_content = note.content.clone();
+            self.note_title = note.title.clone();
+        }
+    }
+
+    /// Search notes and update search results
+    pub fn search_notes(&mut self) {
+        // Clear previous search results
+        self.search_results.clear();
+
+        // If search query is empty, don't search
+        if self.search_query.is_empty() {
+            self.is_searching = false;
+            return;
+        }
+
+        log::info!("Searching notes for: {}", self.search_query);
+        let query = self.search_query.to_lowercase();
+
+        // Find matching notes
+        let matching_notes: Vec<String> = self.notes
+            .iter()
+            .filter(|(_, note)| {
+                note.title.to_lowercase().contains(&query) ||
+                note.content.to_lowercase().contains(&query)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        log::info!("Found {} matching notes", matching_notes.len());
+
+        // Update search results
+        self.search_results = matching_notes;
+        self.is_searching = true;
+    }
+
+    /// Get search result notes
+    pub fn get_search_result_notes(&self) -> Vec<&Note> {
+        self.search_results
+            .iter()
+            .filter_map(|id| self.notes.get(id))
+            .collect()
+    }
+
+    /// Get notes for current notebook
+    pub fn get_current_notebook_notes(&self) -> Vec<&Note> {
+        if let Some(notebook_idx) = self.current_notebook {
+            if notebook_idx < self.notebooks.len() {
+                let notebook = &self.notebooks[notebook_idx];
+                return notebook.note_ids
+                    .iter()
+                    .filter_map(|id| self.notes.get(id))
+                    .collect();
+            }
+        }
+
+        Vec::new()
+    }
+
+    /// Get tag by ID
+    pub fn get_tag(&self, tag_id: &str) -> Option<&Tag> {
+        self.tags.iter().find(|tag| tag.id == tag_id)
+    }
+
+    /// Get tags for a note
+    pub fn get_note_tags(&self, note_id: &str) -> Vec<&Tag> {
+        if let Some(note) = self.notes.get(note_id) {
+            return note.tag_ids
+                .iter()
+                .filter_map(|tag_id| self.get_tag(tag_id))
+                .collect();
+        }
+
+        Vec::new()
+    }
+}
+
+/// Render the iNote module
+pub fn render_inote(ui: &mut egui::Ui, state: &mut INoteState) {
+    // Initialize state if needed
+    if state.notebooks.is_empty() && state.notes.is_empty() && state.tags.is_empty() {
+        state.initialize();
+    }
+
+    // Create a default notebook if none exists
+    if state.notebooks.is_empty() {
+        state.create_notebook("默认笔记本".to_string(), "默认笔记本".to_string());
+    }
+}
+
+/// Render the iNote module with SQLite storage
+pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
+    // Initialize state if needed
+    if state.notebooks.is_empty() && state.notes.is_empty() && state.tags.is_empty() {
+        state.initialize();
+    }
+
+    // Create a default notebook if none exists
+    if state.notebooks.is_empty() {
+        state.create_notebook("默认笔记本".to_string(), "默认笔记本".to_string());
+    }
+
+    // Process dialogs
+    if state.show_create_notebook {
+        // Create a dialog window
+        let mut created = false;
+        let mut closed = false;
+
+        egui::Window::new("创建新笔记本")
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([300.0, 150.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut state.show_create_notebook)
+            .show(ui.ctx(), |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("名称:");
+                        ui.add(egui::TextEdit::singleline(&mut state.new_notebook_name)
+                            .desired_width(200.0)
+                            .hint_text("输入笔记本名称"));
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("描述:");
+                        ui.add(egui::TextEdit::singleline(&mut state.new_notebook_description)
+                            .desired_width(200.0)
+                            .hint_text("输入笔记本描述"));
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("创建").clicked() && !state.new_notebook_name.is_empty() {
+                                created = true;
+                                closed = true;
+                                log::info!("Create button clicked");
+                            }
+
+                            if ui.button("取消").clicked() {
+                                closed = true;
+                                log::info!("Cancel button clicked");
+                            }
+                        });
+                    });
+                });
+            });
+
+        // Create notebook if button was clicked
+        if created {
+            log::info!("Creating notebook: {}", state.new_notebook_name);
+            state.create_notebook(
+                state.new_notebook_name.clone(),
+                state.new_notebook_description.clone()
+            );
+
+            // Reset values
+            state.new_notebook_name.clear();
+            state.new_notebook_description.clear();
+        }
+
+        if closed {
+            state.show_create_notebook = false;
+        }
+    }
+
+    if state.show_create_tag {
+        // Create a dialog window
+        let mut created = false;
+        let mut closed = false;
+
+        egui::Window::new("创建新标签")
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([300.0, 150.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut state.show_create_tag)
+            .show(ui.ctx(), |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("名称:");
+                        ui.add(egui::TextEdit::singleline(&mut state.new_tag_name)
+                            .desired_width(200.0)
+                            .hint_text("输入标签名称"));
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("颜色:");
+                        let mut color = hex_to_color32(&state.new_tag_color);
+                        if ui.color_edit_button_srgba(&mut color).changed() {
+                            state.new_tag_color = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
+                        }
+
+                        ui.label(state.new_tag_color.clone());
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("创建").clicked() && !state.new_tag_name.is_empty() {
+                                created = true;
+                                closed = true;
+                                log::info!("Create tag button clicked");
+                            }
+
+                            if ui.button("取消").clicked() {
+                                closed = true;
+                                log::info!("Cancel tag button clicked");
+                            }
+                        });
+                    });
+                });
+            });
+
+        // Create tag if button was clicked
+        if created {
+            log::info!("Creating tag: {}", state.new_tag_name);
+            state.create_tag(
+                state.new_tag_name.clone(),
+                state.new_tag_color.clone()
+            );
+
+            // Reset values
+            state.new_tag_name.clear();
+        }
+
+        if closed {
+            state.show_create_tag = false;
+        }
+    }
+
+    // 检查是否处于全窗口最大化模式
+    if state.editor_maximized && state.current_note.is_some() {
+        // 全窗口最大化模式 - 只显示编辑器
+        ui.vertical(|ui| {
+            // 添加一个返回按钮 - 固定在顶部不随内容滚动
+            ui.horizontal(|ui| {
+                if ui.button("◀ 返回正常视图").clicked() {
+                    state.editor_maximized = false;
+                }
+
+                // 在最大化模式下仍然显示编辑/预览切换按钮
+                ui.add_space(10.0);
+                if ui.button(if state.markdown_preview { "📝 编辑" } else { "👁 预览" }).clicked() {
+                    state.auto_save_if_modified();
+                    state.markdown_preview = !state.markdown_preview;
+                }
+
+                // 显示当前笔记标题
+                if let Some(note_id) = &state.current_note {
+                    if let Some(note) = state.notes.get(note_id) {
+                        ui.add_space(20.0);
+                        ui.heading(&note.title);
+                    }
+                }
+            });
+
+            ui.separator();
+
+            // 在全屏模式下显示笔记编辑器
+            crate::db_ui::render_note_editor(ui, state);
+        });
+    } else {
+        // 正常模式
+        ui.vertical(|ui| {
+            // Search bar
+            ui.horizontal(|ui| {
+                ui.label("🔍");
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut state.search_query)
+                        .hint_text("搜索笔记... (支持 label:标签名)")
+                        .desired_width(ui.available_width() - 50.0)
+                );
+
+                if ui.button("搜索").clicked() ||
+                   (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                    if !state.search_query.is_empty() {
+                        log::info!("Searching notes: {}", state.search_query);
+                        state.search_notes();
+                    }
+                }
+
+                // 添加帮助按钮，显示搜索语法
+                let help_button = ui.button("?").on_hover_text(
+                    "搜索语法帮助:\n\n普通搜索: 直接输入关键词\n标签搜索: label:标签名"
+                );
+                if help_button.clicked() {
+                    // 可以在这里添加更详细的帮助对话框
+                }
+
+                // 如果正在搜索，显示返回按钮
+                if state.is_searching {
+                    if ui.button("◀ 返回").clicked() {
+                        state.is_searching = false;
+                        state.search_query.clear();
+                        state.search_results.clear();
+                    }
+                }
+            });
+
+            ui.separator();
+
+            // Main content with tree view
+            egui::SidePanel::left("tree_panel")
+                .resizable(true)
+                .default_width(250.0)
+                .max_width(400.0) // 设置最大宽度，防止被内容撑得过宽
+                .show_inside(ui, |ui| {
+                    // 设置固定宽度布局，防止内容自动撑开
+                    ui.set_width(ui.available_width());
+
+                    // 检查是否正在搜索
+                    if state.is_searching {
+                        // 在侧边栏显示搜索结果
+                        log::info!("Sidebar: Showing search results. Query: '{}', Results: {}",
+                            state.search_query, state.search_results.len());
+                        crate::db_ui::render_search_results(ui, state);
+                    } else {
+                        // 树状视图，整合笔记本和笔记
+                        crate::tree_ui::render_tree_view(ui, state);
+
+                        // Tags section
+                        ui.add_space(10.0);
+                        crate::tree_ui::render_tag_list(ui, state);
+                    }
+                });
+
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                // 检查是否正在搜索
+                if state.is_searching {
+                    // 如果选中了搜索结果中的笔记，显示笔记编辑器
+                    if let Some(note_id) = &state.current_note {
+                        crate::db_ui::render_note_editor(ui, state);
+                    } else {
+                        // 否则显示搜索结果的提示
+                        ui.centered_and_justified(|ui| {
+                            ui.heading("请从左侧选择一个搜索结果");
+                        });
+                    }
+                } else if let Some(note_id) = &state.current_note {
+                    // 直接显示笔记编辑器
+                    crate::db_ui::render_note_editor(ui, state);
+                } else if state.current_notebook.is_some() {
+                    // 显示笔记本信息
+                    if let Some(notebook_idx) = state.current_notebook {
+                        if notebook_idx < state.notebooks.len() {
+                            let notebook = &state.notebooks[notebook_idx];
+                            ui.heading(&notebook.name);
+                            ui.label(&notebook.description);
+                            ui.separator();
+                            ui.label(format!("包含 {} 个笔记", notebook.note_ids.len()));
+
+                            if ui.button("+ 创建新笔记").clicked() {
+                                let note_id = state.create_note("新笔记".to_string(), "".to_string());
+                                if let Some(id) = note_id {
+                                    state.select_note(&id);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("选择或创建一个笔记本");
+                    });
+                }
+            });
+        });
+    }
+
+    // Process dialogs
+    if state.show_create_notebook {
+        // Create a dialog window
+        let mut created = false;
+        let mut closed = false;
+
+        egui::Window::new("创建新笔记本")
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([300.0, 150.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut state.show_create_notebook)
+            .show(ui.ctx(), |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("名称:");
+                        ui.add(egui::TextEdit::singleline(&mut state.new_notebook_name)
+                            .desired_width(200.0)
+                            .hint_text("输入笔记本名称"));
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("描述:");
+                        ui.add(egui::TextEdit::singleline(&mut state.new_notebook_description)
+                            .desired_width(200.0)
+                            .hint_text("输入笔记本描述"));
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("创建").clicked() && !state.new_notebook_name.is_empty() {
+                                created = true;
+                                closed = true;
+                                log::info!("Create button clicked");
+                            }
+
+                            if ui.button("取消").clicked() {
+                                closed = true;
+                                log::info!("Cancel button clicked");
+                            }
+                        });
+                    });
+                });
+            });
+
+        // Create notebook if button was clicked
+        if created {
+            log::info!("Creating notebook: {}", state.new_notebook_name);
+            state.create_notebook(
+                state.new_notebook_name.clone(),
+                state.new_notebook_description.clone()
+            );
+
+            // Reset values
+            state.new_notebook_name.clear();
+            state.new_notebook_description.clear();
+        }
+
+        if closed {
+            state.show_create_notebook = false;
+        }
+    }
+
+    if state.show_create_tag {
+        // Create a dialog window
+        let mut created = false;
+        let mut closed = false;
+
+        egui::Window::new("创建新标签")
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([300.0, 150.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut state.show_create_tag)
+            .show(ui.ctx(), |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("名称:");
+                        ui.add(egui::TextEdit::singleline(&mut state.new_tag_name)
+                            .desired_width(200.0)
+                            .hint_text("输入标签名称"));
+                    });
+
+                    ui.add_space(5.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("颜色:");
+                        let mut color = hex_to_color32(&state.new_tag_color);
+                        if ui.color_edit_button_srgba(&mut color).changed() {
+                            state.new_tag_color = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
+                        }
+
+                        ui.label(state.new_tag_color.clone());
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("创建").clicked() && !state.new_tag_name.is_empty() {
+                                created = true;
+                                closed = true;
+                                log::info!("Create tag button clicked");
+                            }
+
+                            if ui.button("取消").clicked() {
+                                closed = true;
+                                log::info!("Cancel tag button clicked");
+                            }
+                        });
+                    });
+                });
+            });
+
+        // Create tag if button was clicked
+        if created {
+            log::info!("Creating tag: {}", state.new_tag_name);
+            state.create_tag(
+                state.new_tag_name.clone(),
+                state.new_tag_color.clone()
+            );
+
+            // Reset values
+            state.new_tag_name.clear();
+        }
+
+        if closed {
+            state.show_create_tag = false;
+        }
+    }
+
+    // ui.vertical(|ui| {
+
+    //     // Main content
+    //     egui::SidePanel::left("notebooks_panel")
+    //         .resizable(true)
+    //         .default_width(200.0)
+    //         .show_inside(ui, |ui| {
+    //             // Notebook section
+    //             crate::db_ui::render_notebook_list(ui, state);
+
+    //             // Tags section
+    //             ui.add_space(10.0);
+    //             crate::db_ui::render_tag_list(ui, state);
+    //         });
+
+    //     egui::CentralPanel::default().show_inside(ui, |ui| {
+    //         // Notes panel
+    //         if let Some(notebook_idx) = state.current_notebook {
+    //             if notebook_idx < state.notebooks.len() {
+    //                 // Split the central panel
+    //                 egui::SidePanel::left("notes_list_panel")
+    //                     .resizable(true)
+    //                     .default_width(200.0)
+    //                     .show_inside(ui, |ui| {
+    //                         // Notes list
+    //                         crate::db_ui::render_note_list(ui, state);
+    //                     });
+
+    //                 // Note editor
+    //                 egui::CentralPanel::default().show_inside(ui, |ui| {
+    //                     crate::db_ui::render_note_editor(ui, state);
+    //                 });
+    //             }
+    //         } else {
+    //             ui.centered_and_justified(|ui| {
+    //                 ui.label("选择或创建一个笔记本");
+    //             });
+    //         }
+    //     });
+    // });
+}
+
+// Dialog processing functions have been moved inline to render_inote
+
+/// Convert hex color string to egui::Color32
+fn hex_to_color32(hex: &str) -> egui::Color32 {
+    let hex = hex.trim_start_matches('#');
+
+    if hex.len() == 6 {
+        // Parse RGB
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&hex[0..2], 16),
+            u8::from_str_radix(&hex[2..4], 16),
+            u8::from_str_radix(&hex[4..6], 16),
+        ) {
+            return egui::Color32::from_rgb(r, g, b);
+        }
+    }
+
+    // Default color if parsing fails
+    egui::Color32::BLUE
+}

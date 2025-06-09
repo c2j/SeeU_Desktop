@@ -1,0 +1,52 @@
+{
+  "name": "seeu-desktop",
+  "version": "0.1.0",
+  "description": "SeeU Desktop application dependencies",
+  "homepage": "https://github.com/SeeU-Team/SeeU-Desktop",
+  "documentation": "https://github.com/SeeU-Team/SeeU-Desktop",
+  "dependencies": [
+    {
+      "name": "openssl",
+      "features": ["tools"]
+    },
+    {
+      "name": "sqlite3",
+      "features": ["tool"]
+    },
+    {
+      "name": "zlib"
+    },
+    {
+      "name": "libpng"
+    },
+    {
+      "name": "libjpeg-turbo"
+    },
+    {
+      "name": "giflib"
+    },
+    {
+      "name": "fontconfig",
+      "platform": "linux"
+    },
+    {
+      "name": "freetype",
+      "platform": "linux"
+    },
+    {
+      "name": "expat",
+      "platform": "linux"
+    },
+    {
+      "name": "bzip2",
+      "platform": "linux"
+    }
+  ],
+  "overrides": [
+    {
+      "name": "openssl",
+      "version": "3.1.4"
+    }
+  ],
+  "builtin-baseline": "a42af01b72c28a8e1d7b48107b33e4f286a55ef6"
+}

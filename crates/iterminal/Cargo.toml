@@ -1,0 +1,47 @@
+[package]
+name = "iterminal"
+version = "0.1.0"
+edition = "2021"
+authors = ["SeeU Team"]
+description = "Terminal module for SeeU Desktop - Cross-platform terminal emulator"
+
+[dependencies]
+# GUI Framework
+egui = "0.31.1"
+eframe = "0.31.1"
+egui_extras = "0.31.1"
+
+# Async runtime
+tokio = { version = "1.32.0", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0.107"
+
+# UUID for unique identifiers
+uuid = { version = "1.4.1", features = ["v4", "serde"] }
+
+# Logging
+log = "0.4.20"
+
+# Date and time
+chrono = { version = "0.4.31", features = ["serde"] }
+
+# Cross-platform process handling
+portable-pty = "0.8.1"
+
+# ANSI escape sequence parsing
+vte = "0.11.1"
+
+# Configuration
+dirs = "5.0.1"
+
+# Terminal utilities
+crossterm = "0.27.0"
+
+# Text processing
+regex = "1.10.0"
+
+# System information
+hostname = "0.3.1"
+sysinfo = "0.30.0"
