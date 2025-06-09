@@ -52,20 +52,6 @@ aiAssist = { path = "crates/aiAssist" }
 itools = { path = "crates/itools" }
 iterminal = { path = "crates/iterminal" }
 
-# vcpkg integration
-vcpkg = "0.2"
-
-# 强制使用 vcpkg 提供的库，避免 pkg-config
-openssl-sys = { version = "0.9", features = ["vendored"] }
-
-
-
-
-
-[build-dependencies]
-# vcpkg integration for cross-platform builds
-vcpkg = "0.2"
-
 
 
 [workspace]
