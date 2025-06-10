@@ -102,7 +102,11 @@ pub fn render_siyuan_import_dialog(ui: &mut egui::Ui, state: &mut DbINoteState) 
                 ui.text_edit_singleline(&mut state.siyuan_import.siyuan_path);
 
                 ui.add_space(5.0);
-                ui.label("提示: 思源笔记工作空间目录通常包含 data 子目录");
+                ui.label("💡 提示:");
+                ui.label("• 请选择思源笔记的工作空间根目录");
+                ui.label("• 该目录应包含以时间戳格式命名的笔记本文件夹");
+                ui.label("• 例如: ~/SiYuan/ 或 /Users/username/Documents/SiYuan/");
+                ui.label("• 工具将自动识别笔记本、解析.sy文件并导入附件");
 
                 ui.add_space(20.0);
                 ui.separator();
@@ -141,44 +145,59 @@ fn start_import(state: &mut DbINoteState) {
         return;
     }
 
+    // 重置状态
+    state.siyuan_import.import_error = None;
+    state.siyuan_import.import_completed = false;
+    state.siyuan_import.import_stats = None;
+
     // 标记导入开始
     state.siyuan_import.import_in_progress = true;
 
     // 克隆必要的数据用于线程
     let path_clone = path.clone();
     let storage_clone = state.storage.clone();
-    let state_clone = Arc::new(Mutex::new(state.siyuan_import.clone()));
 
-    // 在后台线程中执行导入
-    std::thread::spawn(move || {
-        let result: Result<ImportStats, Box<dyn std::error::Error>> = (|| {
-            // 获取存储管理器
-            let storage = storage_clone.lock().map_err(|e| format!("无法获取存储锁: {}", e))?;
+    // 简化版本：直接在当前线程中执行导入（避免线程同步问题）
+    let result: Result<ImportStats, Box<dyn std::error::Error>> = (|| {
+        log::info!("开始导入思源笔记，路径: {}", path_clone.display());
 
-            // 创建导入器
-            let mut importer = SiyuanImporter::new(storage.clone(), path_clone);
+        // 获取存储管理器
+        let storage = storage_clone.lock().map_err(|e| {
+            log::error!("无法获取存储锁: {}", e);
+            format!("无法获取存储锁: {}", e)
+        })?;
 
-            // 执行导入
-            let stats = importer.import()?;
+        // 创建导入器
+        let mut importer = SiyuanImporter::new(storage.clone(), path_clone);
 
-            Ok(stats)
-        })();
+        // 执行导入
+        let stats = importer.import()?;
 
-        // 更新状态
-        if let Ok(mut import_state) = state_clone.lock() {
-            import_state.import_in_progress = false;
+        log::info!("导入完成: {} 个笔记本, {} 个笔记, {} 个标签",
+            stats.notebooks_count, stats.notes_count, stats.tags_count);
 
-            match result {
-                Ok(stats) => {
-                    import_state.import_completed = true;
-                    import_state.import_stats = Some(stats);
-                },
-                Err(e) => {
-                    import_state.import_error = Some(format!("导入失败: {}", e));
-                }
-            }
+        Ok(stats)
+    })();
+
+    // 更新状态
+    state.siyuan_import.import_in_progress = false;
+
+    match result {
+        Ok(stats) => {
+            log::info!("导入成功完成");
+            state.siyuan_import.import_completed = true;
+            state.siyuan_import.import_stats = Some(stats);
+            state.siyuan_import.import_error = None;
+
+            // 重新加载数据
+            state.initialize();
+        },
+        Err(e) => {
+            log::error!("导入失败: {}", e);
+            state.siyuan_import.import_error = Some(format!("导入失败: {}", e));
+            state.siyuan_import.import_completed = false;
         }
-    });
+    }
 }
 
 /// 添加思源笔记导入按钮到工具栏

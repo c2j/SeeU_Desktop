@@ -332,7 +332,7 @@ impl ISearchState {
 
         // Check if directory is already indexed
         if self.indexed_directories.iter().any(|dir| dir.path == path) {
-            log::info!("Directory already indexed: {}", path);
+            // Directory already indexed, skip silently
             return;
         }
 
@@ -370,9 +370,7 @@ impl ISearchState {
             if let Ok(indexer_lock) = indexer.lock() {
                 match indexer_lock.index_directory(&directory_clone) {
                     Ok(stats) => {
-                        log::info!("Successfully indexed directory '{}': {} files, {:.1} MB",
-                                 directory_clone.path, stats.total_files,
-                                 stats.total_size_bytes as f64 / (1024.0 * 1024.0));
+                        // Directory indexed successfully, send results silently
 
                         // Send results back to main thread
                         if let Some(sender) = &stats_sender {

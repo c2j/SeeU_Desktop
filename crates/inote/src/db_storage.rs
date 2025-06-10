@@ -70,7 +70,6 @@ impl DbStorageManager {
             ],
         )?;
 
-        log::info!("Notebook saved: {}", notebook.id);
         Ok(())
     }
 
@@ -216,10 +215,31 @@ impl DbStorageManager {
             )?;
         }
 
+        // Delete existing attachments
+        tx.execute(
+            "DELETE FROM attachments WHERE note_id = ?",
+            params![note.id],
+        )?;
+
+        // Add attachments
+        for attachment in &note.attachments {
+            tx.execute(
+                "INSERT INTO attachments (id, note_id, name, file_path, file_type, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![
+                    attachment.id,
+                    note.id,
+                    attachment.name,
+                    attachment.file_path,
+                    attachment.file_type,
+                    attachment.created_at.to_rfc3339()
+                ],
+            )?;
+        }
+
         // Commit transaction
         tx.commit()?;
 
-        log::info!("Note saved: {}", note.id);
         Ok(())
     }
 
@@ -252,7 +272,7 @@ impl DbStorageManager {
                     created_at,
                     updated_at,
                     tag_ids: Vec::new(),
-                    attachments: Vec::new(), // Attachments not implemented yet
+                    attachments: Vec::new(),
                 };
 
                 // Load tag IDs for this note
@@ -264,6 +284,11 @@ impl DbStorageManager {
 
                 for tag_id in tag_ids_iter {
                     note.tag_ids.push(tag_id?);
+                }
+
+                // Load attachments for this note
+                if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                    log::error!("Error loading attachments for note {}: {}", note.id, err);
                 }
 
                 Ok(note)
@@ -295,7 +320,6 @@ impl DbStorageManager {
         // Commit transaction
         tx.commit()?;
 
-        log::info!("Note deleted: {}", id);
         Ok(())
     }
 
@@ -314,7 +338,6 @@ impl DbStorageManager {
             ],
         )?;
 
-        log::info!("Tag saved: {}", tag.id);
         Ok(())
     }
 
@@ -381,6 +404,48 @@ impl DbStorageManager {
         Ok(tags)
     }
 
+    /// Delete a notebook
+    pub fn delete_notebook(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.get_connection()?;
+
+        // Begin transaction
+        let tx = conn.transaction()?;
+
+        // Get all note IDs in this notebook
+        let note_ids: Vec<String> = {
+            let mut stmt = tx.prepare("SELECT id FROM notes WHERE notebook_id = ?")?;
+            let note_ids: Result<Vec<String>, _> = stmt.query_map(params![id], |row| {
+                Ok(row.get::<_, String>(0)?)
+            })?.collect();
+            note_ids?
+        };
+
+        // Delete note tags for all notes in this notebook
+        for note_id in &note_ids {
+            tx.execute(
+                "DELETE FROM note_tags WHERE note_id = ?",
+                params![note_id],
+            )?;
+        }
+
+        // Delete all notes in this notebook
+        tx.execute(
+            "DELETE FROM notes WHERE notebook_id = ?",
+            params![id],
+        )?;
+
+        // Delete the notebook
+        tx.execute(
+            "DELETE FROM notebooks WHERE id = ?",
+            params![id],
+        )?;
+
+        // Commit transaction
+        tx.commit()?;
+
+        Ok(())
+    }
+
     /// Delete a tag
     pub fn delete_tag(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut conn = self.get_connection()?;
@@ -403,7 +468,6 @@ impl DbStorageManager {
         // Commit transaction
         tx.commit()?;
 
-        log::info!("Tag deleted: {}", id);
         Ok(())
     }
 
@@ -466,7 +530,12 @@ impl DbStorageManager {
         })?;
 
         for note_result in note_iter {
-            notes.push(note_result?);
+            let mut note = note_result?;
+            // Load attachments for this note
+            if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                log::error!("Error loading attachments for note {}: {}", note.id, err);
+            }
+            notes.push(note);
         }
 
         Ok(notes)
@@ -537,7 +606,12 @@ impl DbStorageManager {
         })?;
 
         for note_result in note_iter {
-            notes.push(note_result?);
+            let mut note = note_result?;
+            // Load attachments for this note
+            if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                log::error!("Error loading attachments for note {}: {}", note.id, err);
+            }
+            notes.push(note);
         }
 
         Ok(notes)
@@ -545,8 +619,6 @@ impl DbStorageManager {
 
     /// Get notes for a tag
     pub fn get_notes_for_tag(&self, tag_id: &str) -> Result<Vec<Note>, Box<dyn std::error::Error>> {
-        log::info!("DB: Getting notes for tag ID: {}", tag_id);
-
         let conn = self.get_connection()?;
         let mut notes = Vec::new();
 
@@ -556,19 +628,11 @@ impl DbStorageManager {
             params![tag_id],
             |row| row.get::<_, i64>(0)
         ) {
-            Ok(count) => {
-                let exists = count > 0;
-                log::info!("DB: Tag ID {} exists: {}", tag_id, exists);
-                exists
-            },
-            Err(err) => {
-                log::error!("DB: Error checking if tag exists: {}", err);
-                false
-            }
+            Ok(count) => count > 0,
+            Err(_) => false
         };
 
         if !tag_exists {
-            log::warn!("DB: Tag ID {} does not exist", tag_id);
             return Ok(Vec::new());
         }
 
@@ -578,18 +642,11 @@ impl DbStorageManager {
             params![tag_id],
             |row| row.get(0)
         ) {
-            Ok(count) => {
-                log::info!("DB: Found {} note-tag associations for tag ID {}", count, tag_id);
-                count
-            },
-            Err(err) => {
-                log::error!("DB: Error checking note-tag associations: {}", err);
-                0
-            }
+            Ok(count) => count,
+            Err(_) => 0
         };
 
         if association_count == 0 {
-            log::warn!("DB: No notes associated with tag ID {}", tag_id);
             return Ok(Vec::new());
         }
 
@@ -600,8 +657,6 @@ impl DbStorageManager {
              WHERE nt.tag_id = ?
              ORDER BY n.updated_at DESC"
         )?;
-
-        log::info!("DB: Executing query for notes with tag ID {}", tag_id);
 
         let note_iter = stmt.query_map(params![tag_id], |row| {
             let id: String = row.get(0)?;
@@ -648,7 +703,11 @@ impl DbStorageManager {
 
         for note_result in note_iter {
             match note_result {
-                Ok(note) => {
+                Ok(mut note) => {
+                    // Load attachments for this note
+                    if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                        log::error!("DB: Error loading attachments for note {}: {}", note.id, err);
+                    }
                     notes.push(note);
                 },
                 Err(err) => {
@@ -670,6 +729,36 @@ impl DbStorageManager {
 
         // Check database version
         self.check_version(&conn)?;
+
+        Ok(())
+    }
+
+    /// Load attachments for a note
+    fn load_attachments_for_note(note: &mut Note, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let mut stmt = conn.prepare("SELECT id, name, file_path, file_type, created_at FROM attachments WHERE note_id = ?")?;
+        let attachment_iter = stmt.query_map(params![note.id], |row| {
+            let id: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let file_path: String = row.get(2)?;
+            let file_type: String = row.get(3)?;
+            let created_at_str: String = row.get(4)?;
+
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| SqlError::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?
+                .with_timezone(&Utc);
+
+            Ok(crate::note::Attachment {
+                id,
+                name,
+                file_path,
+                file_type,
+                created_at,
+            })
+        })?;
+
+        for attachment in attachment_iter {
+            note.attachments.push(attachment?);
+        }
 
         Ok(())
     }
@@ -730,6 +819,20 @@ impl DbStorageManager {
                 PRIMARY KEY (note_id, tag_id),
                 FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
                 FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Create attachments table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS attachments (
+                id TEXT PRIMARY KEY,
+                note_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
             )",
             [],
         )?;

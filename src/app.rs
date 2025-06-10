@@ -550,6 +550,13 @@ impl eframe::App for SeeUApp {
         // 更新 iTerminal 模块
         iterminal::update_iterminal(&mut self.iterminal_state);
 
+        // 定期保存笔记数据（每5秒检查一次）
+        if ctx.input(|i| i.time) % 5.0 < 0.1 {
+            if self.inote_state.save_status == inote::db_state::SaveStatus::Modified {
+                self.inote_state.auto_save_if_modified();
+            }
+        }
+
         // 让 egui 自动处理面板高度
 
         // 右侧边栏 (如果启用) - 放在主面板之前

@@ -151,7 +151,7 @@ impl IToolsState {
     /// Load user preferences from storage
     fn load_user_preferences(&mut self) {
         // TODO: Implement user preferences loading
-        log::debug!("Loading user preferences");
+        // Removed debug log to reduce noise
     }
 
     /// Clean up old audit log entries

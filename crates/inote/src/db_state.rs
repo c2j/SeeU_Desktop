@@ -11,6 +11,23 @@ use crate::db_storage::DbStorageManager;
 use crate::migration::DataMigration;
 use crate::db_ui_import::SiyuanImportState;
 
+/// 删除确认类型
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeleteConfirmationType {
+    Note,
+    Notebook,
+    Tag,
+}
+
+/// 删除确认信息
+#[derive(Debug, Clone)]
+pub struct DeleteConfirmation {
+    pub confirmation_type: DeleteConfirmationType,
+    pub target_id: String,
+    pub target_name: String,
+    pub target_index: Option<usize>, // For notebooks that need index
+}
+
 /// Save status for auto-save feature
 #[derive(Debug, Clone, PartialEq)]
 pub enum SaveStatus {
@@ -48,6 +65,10 @@ pub struct DbINoteState {
     pub combined_editor: bool,       // Whether title and content are combined in editor
     pub siyuan_import: SiyuanImportState, // 思源笔记导入状态
     pub show_markdown_help: bool,    // Whether to show the Markdown help popup
+
+    // 删除确认对话框
+    pub show_delete_confirmation: bool,
+    pub delete_confirmation: Option<DeleteConfirmation>,
 }
 
 impl Default for DbINoteState {
@@ -87,6 +108,8 @@ impl Default for DbINoteState {
             combined_editor: false,  // 默认使用分离标题模式
             siyuan_import: SiyuanImportState::default(),
             show_markdown_help: false,
+            show_delete_confirmation: false,
+            delete_confirmation: None,
         }
     }
 }
@@ -121,7 +144,6 @@ impl DbINoteState {
             match storage.list_notebooks() {
                 Ok(notebooks) => {
                     self.notebooks = notebooks;
-                    log::info!("Loaded {} notebooks", self.notebooks.len());
                 }
                 Err(err) => {
                     log::error!("Failed to load notebooks: {}", err);
@@ -166,7 +188,6 @@ impl DbINoteState {
             match storage.list_tags() {
                 Ok(tags) => {
                     self.tags = tags;
-                    log::info!("Loaded {} tags", self.tags.len());
                 }
                 Err(err) => {
                     log::error!("Failed to load tags: {}", err);
@@ -177,17 +198,14 @@ impl DbINoteState {
 
     /// Create a new notebook
     pub fn create_notebook(&mut self, name: String, description: String) {
-        log::info!("Creating new notebook: {}", name);
         let notebook = Notebook::new(name, description);
 
         // Save to storage
         if let Ok(storage) = self.storage.lock() {
             match storage.save_notebook(&notebook) {
                 Ok(_) => {
-                    log::info!("Notebook saved successfully: {}", notebook.id);
                     // Add to list
                     self.notebooks.push(notebook);
-                    log::info!("Notebook added to list, total notebooks: {}", self.notebooks.len());
                 },
                 Err(err) => {
                     log::error!("Failed to save notebook: {}", err);
@@ -198,8 +216,24 @@ impl DbINoteState {
         }
     }
 
-    /// Delete a notebook
-    pub fn delete_notebook(&mut self, index: usize) {
+    /// Show delete confirmation for notebook
+    pub fn show_delete_notebook_confirmation(&mut self, index: usize) {
+        if index >= self.notebooks.len() {
+            return;
+        }
+
+        let notebook = &self.notebooks[index];
+        self.delete_confirmation = Some(DeleteConfirmation {
+            confirmation_type: DeleteConfirmationType::Notebook,
+            target_id: notebook.id.clone(),
+            target_name: notebook.name.clone(),
+            target_index: Some(index),
+        });
+        self.show_delete_confirmation = true;
+    }
+
+    /// Delete a notebook (internal method)
+    fn delete_notebook_internal(&mut self, index: usize) {
         if index >= self.notebooks.len() {
             return;
         }
@@ -212,7 +246,15 @@ impl DbINoteState {
 
         // Delete all notes in the notebook
         for note_id in &note_ids {
-            self.delete_note(note_id);
+            self.delete_note_internal(note_id);
+        }
+
+        // Delete from storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.delete_notebook(&notebook_id) {
+                log::error!("Failed to delete notebook from storage: {}", err);
+                return; // Don't update UI state if database deletion failed
+            }
         }
 
         // Remove from list
@@ -227,6 +269,14 @@ impl DbINoteState {
                 self.current_notebook = Some(current - 1);
             }
         }
+
+        // Force reload from database to ensure consistency
+        self.force_reload_data();
+    }
+
+    /// Delete a notebook (public method with confirmation)
+    pub fn delete_notebook(&mut self, index: usize) {
+        self.show_delete_notebook_confirmation(index);
     }
 
     /// Create a new note
@@ -265,23 +315,28 @@ impl DbINoteState {
         // First find the notebook ID before mutably borrowing the note
         let notebook_id = self.find_notebook_for_note(note_id).clone();
 
-        // 在新的UI布局中，标题和内容已经分开，不需要从内容中提取标题
+        if notebook_id.is_none() {
+            log::error!("Failed to find notebook for note: {}", note_id);
+            return;
+        }
 
         if let Some(note) = self.notes.get_mut(note_id) {
-            note.title = title;
-            note.content = content;
+            note.title = title.clone();
+            note.content = content.clone();
             note.updated_at = Utc::now();
 
             // Save to storage
             if let Ok(storage) = self.storage.lock() {
                 if let Some(notebook_id) = notebook_id {
                     if let Err(err) = storage.save_note(note, &notebook_id) {
-                        log::error!("Failed to save note: {}", err);
+                        log::error!("Failed to save note to database: {}", err);
                     }
-                } else {
-                    log::error!("Failed to find notebook for note: {}", note_id);
                 }
+            } else {
+                log::error!("Failed to lock storage for note: {}", note_id);
             }
+        } else {
+            log::error!("Note not found in memory: {}", note_id);
         }
     }
 
@@ -296,18 +351,32 @@ impl DbINoteState {
         None
     }
 
-    /// Delete a note
-    pub fn delete_note(&mut self, note_id: &str) {
-        // Remove from notebooks
-        for notebook in &mut self.notebooks {
-            notebook.remove_note(note_id);
+    /// Show delete confirmation for note
+    pub fn show_delete_note_confirmation(&mut self, note_id: &str) {
+        if let Some(note) = self.notes.get(note_id) {
+            self.delete_confirmation = Some(DeleteConfirmation {
+                confirmation_type: DeleteConfirmationType::Note,
+                target_id: note_id.to_string(),
+                target_name: note.title.clone(),
+                target_index: None,
+            });
+            self.show_delete_confirmation = true;
         }
+    }
 
-        // Remove from storage
+    /// Delete a note (internal method)
+    fn delete_note_internal(&mut self, note_id: &str) {
+        // Remove from storage first
         if let Ok(storage) = self.storage.lock() {
             if let Err(err) = storage.delete_note(note_id) {
                 log::error!("Failed to delete note from storage: {}", err);
+                return; // Don't update UI state if database deletion failed
             }
+        }
+
+        // Remove from notebooks
+        for notebook in &mut self.notebooks {
+            notebook.remove_note(note_id);
         }
 
         // Remove from notes map
@@ -319,6 +388,14 @@ impl DbINoteState {
             self.note_content = String::new();
             self.note_title = String::new();
         }
+
+        // Force reload to ensure consistency
+        self.force_reload_data();
+    }
+
+    /// Delete a note (public method with confirmation)
+    pub fn delete_note(&mut self, note_id: &str) {
+        self.show_delete_note_confirmation(note_id);
     }
 
     /// Create a new tag
@@ -337,42 +414,39 @@ impl DbINoteState {
         self.tags.push(tag);
     }
 
-    /// Delete a tag
-    pub fn delete_tag(&mut self, tag_id: &str) {
-        // First, collect all note IDs that need to be updated
-        let note_ids: Vec<String> = self.notes.iter()
-            .filter(|(_, note)| note.tag_ids.contains(&tag_id.to_string()))
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        // Remove tag from all notes and save them
-        for note_id in &note_ids {
-            // Find notebook ID for this note
-            let notebook_id = self.find_notebook_for_note(note_id).clone();
-
-            if let Some(note) = self.notes.get_mut(note_id) {
-                note.remove_tag(tag_id);
-
-                // Save note
-                if let Ok(storage) = self.storage.lock() {
-                    if let Some(notebook_id) = notebook_id {
-                        if let Err(err) = storage.save_note(note, &notebook_id) {
-                            log::error!("Failed to save note: {}", err);
-                        }
-                    }
-                }
-            }
+    /// Show delete confirmation for tag
+    pub fn show_delete_tag_confirmation(&mut self, tag_id: &str) {
+        if let Some(tag) = self.tags.iter().find(|t| t.id == tag_id) {
+            self.delete_confirmation = Some(DeleteConfirmation {
+                confirmation_type: DeleteConfirmationType::Tag,
+                target_id: tag_id.to_string(),
+                target_name: tag.name.clone(),
+                target_index: None,
+            });
+            self.show_delete_confirmation = true;
         }
+    }
 
-        // Remove from storage
+    /// Delete a tag (internal method)
+    fn delete_tag_internal(&mut self, tag_id: &str) {
+        // Remove from storage first
         if let Ok(storage) = self.storage.lock() {
             if let Err(err) = storage.delete_tag(tag_id) {
                 log::error!("Failed to delete tag from storage: {}", err);
+                return; // Don't update UI state if database deletion failed
             }
         }
 
         // Remove from list
         self.tags.retain(|tag| tag.id != tag_id);
+
+        // Force reload to ensure consistency (this will also reload notes with updated tag associations)
+        self.force_reload_data();
+    }
+
+    /// Delete a tag (public method with confirmation)
+    pub fn delete_tag(&mut self, tag_id: &str) {
+        self.show_delete_tag_confirmation(tag_id);
     }
 
     /// Add a tag to a note
@@ -545,8 +619,6 @@ impl DbINoteState {
 
         // 标记笔记为已修改状态
         self.check_note_modified();
-
-        log::info!("Appended text to note content");
     }
 
     /// Search notes and update search results
@@ -560,33 +632,25 @@ impl DbINoteState {
             return;
         }
 
-        log::info!("Searching notes for: {}", self.search_query);
-
         // Check if this is a tag search using the "label:" prefix
         if self.search_query.starts_with("label:") {
             // Extract the tag name from the query
             let tag_name = self.search_query[6..].trim().to_string();
 
             if tag_name.is_empty() {
-                log::warn!("Empty tag name in search query: {}", self.search_query);
                 return;
             }
-
-            log::info!("Searching for notes with tag name: {}", tag_name);
 
             // Find the tag ID by name
             let tag_id = self.find_tag_by_name(&tag_name);
 
             if let Some(tag_id) = tag_id {
-                log::info!("Found tag ID {} for name '{}'", tag_id, tag_name);
                 // Use the existing tag search function
                 self.search_notes_by_tag(&tag_id);
             } else {
-                log::warn!("No tag found with name: {}", tag_name);
                 // Set is_searching to true but with empty results
                 self.search_query = format!("标签: {}", tag_name);
                 self.is_searching = true;
-                log::info!("No matching tag found for '{}'", tag_name);
             }
 
             return;
@@ -604,8 +668,6 @@ impl DbINoteState {
                     // Update search results
                     self.search_results = notes.iter().map(|note| note.id.clone()).collect();
                     self.is_searching = true;
-
-                    log::info!("Found {} matching notes", self.search_results.len());
                 }
                 Err(err) => {
                     log::error!("Failed to search notes: {}", err);
@@ -674,17 +736,12 @@ impl DbINoteState {
         // Set search query to tag name for display purposes
         self.search_query = format!("标签: {}", tag_name);
 
-        log::info!("Searching notes with tag ID: {} ({})", tag_id, tag_name);
-
         // Search in database
         if let Ok(storage) = self.storage.lock() {
             match storage.get_notes_for_tag(tag_id) {
                 Ok(notes) => {
-                    log::info!("Database returned {} notes with tag '{}'", notes.len(), tag_name);
-
                     // Update notes map with search results
                     for note in &notes {
-                        log::info!("  - Note: {} ({})", note.id, note.title);
                         self.notes.insert(note.id.clone(), note.clone());
                     }
 
@@ -693,9 +750,6 @@ impl DbINoteState {
 
                     // Important: Set is_searching to true to display search results
                     self.is_searching = true;
-
-                    log::info!("Found {} notes with tag '{}', is_searching={}",
-                        self.search_results.len(), tag_name, self.is_searching);
                 }
                 Err(err) => {
                     log::error!("Failed to search notes by tag: {}", err);
@@ -703,6 +757,67 @@ impl DbINoteState {
             }
         } else {
             log::error!("Failed to lock storage for tag search");
+        }
+    }
+
+    /// Confirm deletion
+    pub fn confirm_deletion(&mut self) {
+        if let Some(confirmation) = self.delete_confirmation.take() {
+            match confirmation.confirmation_type {
+                DeleteConfirmationType::Notebook => {
+                    if let Some(index) = confirmation.target_index {
+                        self.delete_notebook_internal(index);
+                    }
+                },
+                DeleteConfirmationType::Note => {
+                    self.delete_note_internal(&confirmation.target_id);
+                },
+                DeleteConfirmationType::Tag => {
+                    self.delete_tag_internal(&confirmation.target_id);
+                },
+            }
+        }
+        self.show_delete_confirmation = false;
+    }
+
+    /// Cancel deletion
+    pub fn cancel_deletion(&mut self) {
+        self.delete_confirmation = None;
+        self.show_delete_confirmation = false;
+    }
+
+    /// Force reload all data from database
+    pub fn force_reload_data(&mut self) {
+        // Save current selection
+        let current_notebook = self.current_notebook;
+        let current_note = self.current_note.clone();
+
+        // Clear current state
+        self.notebooks.clear();
+        self.notes.clear();
+        self.tags.clear();
+        self.current_notebook = None;
+        self.current_note = None;
+        self.note_content.clear();
+        self.note_title.clear();
+
+        // Reload from database
+        self.load_notebooks();
+        self.load_tags();
+        self.load_all_notes(); // 重要：重新加载所有笔记
+
+        // Try to restore selection if still valid
+        if let Some(notebook_idx) = current_notebook {
+            if notebook_idx < self.notebooks.len() {
+                self.current_notebook = Some(notebook_idx);
+
+                // Try to restore note selection
+                if let Some(note_id) = current_note {
+                    if self.notes.contains_key(&note_id) {
+                        self.select_note(&note_id);
+                    }
+                }
+            }
         }
     }
 }

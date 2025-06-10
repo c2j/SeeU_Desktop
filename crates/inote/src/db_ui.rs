@@ -356,6 +356,11 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
             // Check for title changes and mark as modified
             if title_response.changed() {
                 state.check_note_modified();
+
+                // Immediate auto-save on title change
+                if state.save_status == crate::db_state::SaveStatus::Modified {
+                    state.auto_save_if_modified();
+                }
             }
         });
         ui.separator();
@@ -420,14 +425,17 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                     // Check for content changes and mark as modified
                     if response.changed() {
                         state.check_note_modified();
-                    }
 
-                    // Auto-save after a short delay when content changes
-                    if state.save_status == crate::db_state::SaveStatus::Modified {
-                        // Auto-save when focus is lost or after a short delay
-                        if response.lost_focus() {
+                        // Immediate auto-save on content change
+                        // This ensures data is saved as soon as user types
+                        if state.save_status == crate::db_state::SaveStatus::Modified {
                             state.auto_save_if_modified();
                         }
+                    }
+
+                    // Also auto-save when focus is lost
+                    if response.lost_focus() && state.save_status == crate::db_state::SaveStatus::Modified {
+                        state.auto_save_if_modified();
                     }
                 });
         }

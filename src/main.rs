@@ -8,8 +8,8 @@ mod platform;
 use eframe::{self, egui};
 
 fn main() -> Result<(), eframe::Error> {
-    // Initialize custom logger with DEBUG level and file logging enabled
-    utils::logger::Logger::init(log::LevelFilter::Debug, true)
+    // Initialize custom logger with WARN level to reduce log noise
+    utils::logger::Logger::init(log::LevelFilter::Warn, true)
         .expect("Failed to initialize logger");
 
     // Log startup information

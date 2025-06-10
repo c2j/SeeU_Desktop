@@ -133,17 +133,14 @@ impl INoteState {
 
     /// Create a new notebook
     pub fn create_notebook(&mut self, name: String, description: String) {
-        log::info!("Creating new notebook: {}", name);
         let notebook = Notebook::new(name, description);
 
         // Save to storage
         if let Ok(storage) = self.storage.lock() {
             match storage.save_notebook(&notebook) {
                 Ok(_) => {
-                    log::info!("Notebook saved successfully: {}", notebook.id);
                     // Add to list
                     self.notebooks.push(notebook);
-                    log::info!("Notebook added to list, total notebooks: {}", self.notebooks.len());
                 },
                 Err(err) => {
                     log::error!("Failed to save notebook: {}", err);
@@ -160,12 +157,22 @@ impl INoteState {
             return;
         }
 
+        // Get notebook ID
+        let notebook_id = self.notebooks[index].id.clone();
+
         // Get note IDs to delete
         let note_ids: Vec<String> = self.notebooks[index].note_ids.clone();
 
         // Delete all notes in the notebook
         for note_id in &note_ids {
             self.delete_note(note_id);
+        }
+
+        // Delete from storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.delete_notebook(&notebook_id) {
+                log::error!("Failed to delete notebook from storage: {}", err);
+            }
         }
 
         // Remove from list
@@ -249,6 +256,13 @@ impl INoteState {
             }
         }
 
+        // Delete from storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.delete_note(note_id) {
+                log::error!("Failed to delete note from storage: {}", err);
+            }
+        }
+
         // Remove from notes map
         self.notes.remove(note_id);
 
@@ -287,6 +301,13 @@ impl INoteState {
                 if let Err(err) = storage.save_note(note) {
                     log::error!("Failed to save note: {}", err);
                 }
+            }
+        }
+
+        // Delete from storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.delete_tag(tag_id) {
+                log::error!("Failed to delete tag from storage: {}", err);
             }
         }
 
@@ -352,7 +373,6 @@ impl INoteState {
             return;
         }
 
-        log::info!("Searching notes for: {}", self.search_query);
         let query = self.search_query.to_lowercase();
 
         // Find matching notes
@@ -364,8 +384,6 @@ impl INoteState {
             })
             .map(|(id, _)| id.clone())
             .collect();
-
-        log::info!("Found {} matching notes", matching_notes.len());
 
         // Update search results
         self.search_results = matching_notes;
@@ -627,7 +645,6 @@ pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 if ui.button("搜索").clicked() ||
                    (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                     if !state.search_query.is_empty() {
-                        log::info!("Searching notes: {}", state.search_query);
                         state.search_notes();
                     }
                 }
@@ -859,6 +876,84 @@ pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
         if closed {
             state.show_create_tag = false;
+        }
+    }
+
+    // 显示删除确认对话框
+    if state.show_delete_confirmation {
+        if let Some(confirmation) = &state.delete_confirmation {
+            let mut confirmed = false;
+            let mut cancelled = false;
+
+            let title = match confirmation.confirmation_type {
+                crate::db_state::DeleteConfirmationType::Notebook => "确认删除笔记本",
+                crate::db_state::DeleteConfirmationType::Note => "确认删除笔记",
+                crate::db_state::DeleteConfirmationType::Tag => "确认删除标签",
+            };
+
+            let message = match confirmation.confirmation_type {
+                crate::db_state::DeleteConfirmationType::Notebook => {
+                    format!("您确定要删除笔记本 \"{}\" 吗？\n\n⚠️ 警告：这将同时删除笔记本中的所有笔记！\n此操作无法撤销。", confirmation.target_name)
+                },
+                crate::db_state::DeleteConfirmationType::Note => {
+                    format!("您确定要删除笔记 \"{}\" 吗？\n\n此操作无法撤销。", confirmation.target_name)
+                },
+                crate::db_state::DeleteConfirmationType::Tag => {
+                    format!("您确定要删除标签 \"{}\" 吗？\n\n此操作将从所有笔记中移除该标签。", confirmation.target_name)
+                },
+            };
+
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size([400.0, 200.0])
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .open(&mut state.show_delete_confirmation)
+                .show(ui.ctx(), |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(10.0);
+
+                        // 显示警告图标和消息
+                        ui.horizontal(|ui| {
+                            ui.label("⚠️");
+                            ui.vertical(|ui| {
+                                for line in message.lines() {
+                                    ui.label(line);
+                                }
+                            });
+                        });
+
+                        ui.add_space(20.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+
+                        ui.horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                // 删除按钮 - 红色
+                                let delete_button = ui.add(
+                                    egui::Button::new("🗑 确认删除")
+                                        .fill(egui::Color32::from_rgb(220, 53, 69))
+                                );
+                                if delete_button.clicked() {
+                                    confirmed = true;
+                                }
+
+                                ui.add_space(10.0);
+
+                                // 取消按钮
+                                if ui.button("取消").clicked() {
+                                    cancelled = true;
+                                }
+                            });
+                        });
+                    });
+                });
+
+            if confirmed {
+                state.confirm_deletion();
+            } else if cancelled {
+                state.cancel_deletion();
+            }
         }
     }
 

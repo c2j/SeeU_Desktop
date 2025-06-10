@@ -18,7 +18,7 @@ impl StorageManager {
         // Create directories if they don't exist
         match fs::create_dir_all(&base_path) {
             Ok(_) => {
-                log::info!("Storage directory created: {}", base_path.display());
+                // Directory created successfully
             },
             Err(err) => {
                 log::error!("Failed to create storage directory: {}", err);
@@ -26,8 +26,6 @@ impl StorageManager {
                 base_path = PathBuf::from("./inote_data");
                 if let Err(err) = fs::create_dir_all(&base_path) {
                     log::error!("Failed to create fallback storage directory: {}", err);
-                } else {
-                    log::info!("Fallback storage directory created: {}", base_path.display());
                 }
             }
         }
@@ -36,7 +34,6 @@ impl StorageManager {
         let test_file = base_path.join("test_write.tmp");
         match fs::write(&test_file, b"test") {
             Ok(_) => {
-                log::info!("Storage directory is writable");
                 fs::remove_file(test_file).ok();
             },
             Err(err) => {
@@ -82,7 +79,6 @@ impl StorageManager {
     /// Save a notebook
     pub fn save_notebook(&self, notebook: &Notebook) -> Result<(), Box<dyn std::error::Error>> {
         let notebooks_dir = self.notebooks_path();
-        log::info!("Saving notebook to directory: {}", notebooks_dir.display());
 
         // Ensure directory exists
         if let Err(err) = fs::create_dir_all(&notebooks_dir) {
@@ -91,7 +87,6 @@ impl StorageManager {
         }
 
         let path = notebooks_dir.join(format!("{}.json", notebook.id));
-        log::info!("Saving notebook to file: {}", path.display());
 
         // Serialize notebook to JSON
         let json = match serde_json::to_string_pretty(notebook) {
@@ -104,10 +99,7 @@ impl StorageManager {
 
         // Write JSON to file
         match fs::write(&path, &json) {
-            Ok(_) => {
-                log::info!("Notebook saved successfully: {}", notebook.id);
-                Ok(())
-            },
+            Ok(_) => Ok(()),
             Err(err) => {
                 log::error!("Failed to write notebook file: {}", err);
                 Err(Box::new(err))
@@ -159,6 +151,24 @@ impl StorageManager {
         Ok(note)
     }
 
+    /// Delete a note
+    pub fn delete_note(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let path = self.notes_path().join(format!("{}.json", id));
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    /// Delete a notebook
+    pub fn delete_notebook(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let path = self.notebooks_path().join(format!("{}.json", id));
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
     /// Save a tag
     pub fn save_tag(&self, tag: &Tag) -> Result<(), Box<dyn std::error::Error>> {
         let path = self.tags_path().join(format!("{}.json", tag.id));
@@ -193,5 +203,14 @@ impl StorageManager {
         }
 
         Ok(tags)
+    }
+
+    /// Delete a tag
+    pub fn delete_tag(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let path = self.tags_path().join(format!("{}.json", id));
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
     }
 }
