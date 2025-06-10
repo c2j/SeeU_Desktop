@@ -61,25 +61,26 @@ pub struct Model {
 /// 聊天响应消息
 #[derive(Debug, Deserialize)]
 pub struct ChatResponseMessage {
-    pub role: String,
-    pub content: String,
+    pub role: Option<String>,  // 可选，某些服务可能不返回
+    pub content: String,  // 必需，这是最重要的字段
 }
 
 /// 聊天响应 (OpenAI compatible)
+/// 为了增强兼容性，只有choices字段是必需的，其他字段都是可选的
 #[derive(Debug, Deserialize)]
 pub struct ChatResponse {
-    pub id: String,
-    pub object: String,
-    pub created: u64,
-    pub model: String,
-    pub choices: Vec<Choice>,
+    pub id: Option<String>,
+    pub object: Option<String>,
+    pub created: Option<u64>,
+    pub model: Option<String>,
+    pub choices: Vec<Choice>,  // 唯一必需的字段
     pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Choice {
-    pub index: u32,
-    pub message: ChatResponseMessage,
+    pub index: Option<u32>,  // 可选，某些服务可能不返回
+    pub message: ChatResponseMessage,  // 必需
     pub finish_reason: Option<String>,
 }
 
@@ -91,19 +92,20 @@ pub struct Usage {
 }
 
 /// 流式聊天响应 (OpenAI compatible)
+/// 为了增强兼容性，只有choices字段是必需的，其他字段都是可选的
 #[derive(Debug, Deserialize)]
 pub struct ChatStreamResponse {
-    pub id: String,
-    pub object: String,
-    pub created: u64,
-    pub model: String,
-    pub choices: Vec<StreamChoice>,
+    pub id: Option<String>,
+    pub object: Option<String>,
+    pub created: Option<u64>,
+    pub model: Option<String>,
+    pub choices: Vec<StreamChoice>,  // 唯一必需的字段
 }
 
 #[derive(Debug, Deserialize)]
 pub struct StreamChoice {
-    pub index: u32,
-    pub delta: Delta,
+    pub index: Option<u32>,  // 可选，某些服务可能不返回
+    pub delta: Delta,  // 必需
     pub finish_reason: Option<String>,
 }
 
@@ -193,9 +195,34 @@ impl ApiService {
 
         // 解析响应
         let chat_response: ChatResponse = response.json().await?;
-        log::info!("Response from model: {}", chat_response.model);
+
+        // 检查并警告缺失的字段
+        if chat_response.id.is_none() {
+            log::warn!("Response missing 'id' field");
+        }
+        if chat_response.object.is_none() {
+            log::warn!("Response missing 'object' field");
+        }
+        if chat_response.created.is_none() {
+            log::warn!("Response missing 'created' field");
+        }
+        if chat_response.model.is_none() {
+            log::warn!("Response missing 'model' field");
+        } else {
+            log::info!("Response from model: {}", chat_response.model.as_ref().unwrap());
+        }
 
         if let Some(choice) = chat_response.choices.first() {
+            // 检查choice的index字段
+            if choice.index.is_none() {
+                log::warn!("Choice missing 'index' field");
+            }
+
+            // 检查message的role字段
+            if choice.message.role.is_none() {
+                log::warn!("Message missing 'role' field");
+            }
+
             Ok(choice.message.content.clone())
         } else {
             Err(anyhow!(ApiError::ApiResponseError("No choices in response".to_string())))
@@ -281,6 +308,22 @@ impl ApiService {
 
                             match serde_json::from_str::<ChatStreamResponse>(json_str) {
                                 Ok(response) => {
+                                    // 检查并警告缺失的字段（只在第一次收到响应时警告）
+                                    if content.is_empty() {
+                                        if response.id.is_none() {
+                                            log::warn!("Stream response missing 'id' field");
+                                        }
+                                        if response.object.is_none() {
+                                            log::warn!("Stream response missing 'object' field");
+                                        }
+                                        if response.created.is_none() {
+                                            log::warn!("Stream response missing 'created' field");
+                                        }
+                                        if response.model.is_none() {
+                                            log::warn!("Stream response missing 'model' field");
+                                        }
+                                    }
+
                                     if let Some(choice) = response.choices.first() {
                                         if let Some(delta_content) = &choice.delta.content {
                                             content.push_str(delta_content);
