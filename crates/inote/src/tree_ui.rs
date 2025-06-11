@@ -10,11 +10,6 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
         ui.heading("笔记树");
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // 添加思源笔记导入按钮
-            db_ui_import::add_siyuan_import_button(ui, state);
-
-            ui.add_space(5.0);
-
             if ui.button("+ 新建笔记本").clicked() {
                 state.show_create_notebook = true;
             }

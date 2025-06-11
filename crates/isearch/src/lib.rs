@@ -176,10 +176,13 @@ impl Default for ISearchState {
         // Create indexer
         let indexer = Arc::new(Mutex::new(Indexer::new()));
 
-        // Initialize indexer
-        if let Ok(indexer_lock) = indexer.lock() {
-            let _ = indexer_lock.initialize_index();
-        }
+        // Initialize indexer asynchronously to avoid blocking startup
+        let indexer_clone = indexer.clone();
+        std::thread::spawn(move || {
+            if let Ok(indexer_lock) = indexer_clone.lock() {
+                let _ = indexer_lock.initialize_index(); // Ignore errors during startup
+            }
+        });
 
         // Create file watcher
         let file_watcher = Arc::new(Mutex::new(FileWatcher::new(indexer.clone())));
@@ -234,12 +237,17 @@ impl ISearchState {
         // Load search options from disk
         self.load_search_options();
 
-        // Start watching all directories
-        for directory in &self.indexed_directories {
-            if let Ok(mut watcher) = self.file_watcher.lock() {
-                let _ = watcher.watch_directory(directory);
+        // Start watching directories asynchronously to avoid blocking startup
+        let directories = self.indexed_directories.clone();
+        let file_watcher = self.file_watcher.clone();
+
+        std::thread::spawn(move || {
+            for directory in &directories {
+                if let Ok(mut watcher) = file_watcher.lock() {
+                    let _ = watcher.watch_directory(directory); // Ignore errors during startup
+                }
             }
-        }
+        });
     }
 
     /// Load indexed directories from disk

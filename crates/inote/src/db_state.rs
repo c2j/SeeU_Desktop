@@ -8,6 +8,7 @@ use crate::notebook::Notebook;
 use crate::note::{Note, Attachment};
 use crate::tag::Tag;
 use crate::db_storage::DbStorageManager;
+use crate::clipboard::ClipboardManager;
 use crate::migration::DataMigration;
 use crate::db_ui_import::SiyuanImportState;
 
@@ -57,6 +58,7 @@ pub struct DbINoteState {
     pub new_tag_name: String,
     pub new_tag_color: String,
     pub storage: Arc<Mutex<DbStorageManager>>,
+    pub clipboard_manager: Option<ClipboardManager>,  // Clipboard manager for rich text conversion
     pub markdown_preview: bool,      // Whether to show markdown preview instead of editor
     pub last_saved_content: String,  // Last saved content for auto-save comparison
     pub last_saved_title: String,    // Last saved title for auto-save comparison
@@ -69,16 +71,32 @@ pub struct DbINoteState {
     // 删除确认对话框
     pub show_delete_confirmation: bool,
     pub delete_confirmation: Option<DeleteConfirmation>,
+
+    // 笔记设置
+    pub settings_default_collapse_notebooks: bool, // 默认折叠笔记本
+    pub settings_enable_markdown_preview: bool,    // 启用Markdown预览
+    pub settings_show_note_stats: bool,            // 显示笔记统计信息
+    pub settings_auto_save: bool,                  // 自动保存
+    pub settings_syntax_highlight: bool,           // 语法高亮
+    pub settings_show_line_numbers: bool,          // 显示行号
 }
 
 impl Default for DbINoteState {
     fn default() -> Self {
-        // Create storage manager
+        // Create persistent database storage
         let storage = match DbStorageManager::new() {
             Ok(storage) => Arc::new(Mutex::new(storage)),
             Err(err) => {
-                log::error!("Failed to create database storage: {}", err);
-                panic!("Failed to create database storage: {}", err);
+                log::error!("Failed to create persistent database storage: {}", err);
+                // Fallback to in-memory database if persistent storage fails
+                log::warn!("Falling back to in-memory database storage");
+                match DbStorageManager::new_memory() {
+                    Ok(memory_storage) => Arc::new(Mutex::new(memory_storage)),
+                    Err(memory_err) => {
+                        log::error!("Failed to create fallback in-memory database storage: {}", memory_err);
+                        panic!("Failed to create any database storage: persistent error: {}, memory error: {}", err, memory_err);
+                    }
+                }
             }
         };
 
@@ -100,6 +118,7 @@ impl Default for DbINoteState {
             new_tag_name: String::new(),
             new_tag_color: "#3498db".to_string(),
             storage,
+            clipboard_manager: ClipboardManager::new().ok(),
             markdown_preview: false,
             last_saved_content: String::new(),
             last_saved_title: String::new(),
@@ -110,6 +129,14 @@ impl Default for DbINoteState {
             show_markdown_help: false,
             show_delete_confirmation: false,
             delete_confirmation: None,
+
+            // 笔记设置默认值
+            settings_default_collapse_notebooks: true,  // 默认折叠笔记本
+            settings_enable_markdown_preview: true,     // 启用Markdown预览
+            settings_show_note_stats: false,            // 不显示笔记统计信息
+            settings_auto_save: true,                   // 自动保存
+            settings_syntax_highlight: true,            // 语法高亮
+            settings_show_line_numbers: false,          // 不显示行号
         }
     }
 }
@@ -117,18 +144,117 @@ impl Default for DbINoteState {
 impl DbINoteState {
     /// Initialize the state
     pub fn initialize(&mut self) {
-        // Migrate data from file storage if needed
-        self.migrate_data();
+        log::info!("Initializing DbINoteState...");
 
-        // Load notebooks, notes, and tags
+        // Load settings first
+        if let Err(err) = crate::load_settings(self) {
+            log::warn!("Failed to load note settings: {}", err);
+        }
+
+        // Load data from storage
         self.load_notebooks();
         self.load_tags();
-
-        // Load notes for all notebooks
         self.load_all_notes();
+
+        // Create default data if database is empty
+        if self.notebooks.is_empty() {
+            self.create_default_data();
+        }
+
+        // 确保根据设置折叠笔记本
+        self.apply_notebook_collapse_setting();
+
+        log::info!("DbINoteState initialized with {} notebooks, {} notes",
+                   self.notebooks.len(), self.notes.len());
     }
 
-    /// Migrate data from file storage to SQLite database
+    /// Create default data when database is empty
+    fn create_default_data(&mut self) {
+        log::info!("Creating default data...");
+
+        // Create default notebook
+        self.create_notebook("默认笔记本".to_string(), "欢迎使用 SeeU Desktop 笔记功能".to_string());
+
+        // Select the first notebook
+        if !self.notebooks.is_empty() {
+            self.select_notebook(0);
+
+            // Create welcome note
+            let welcome_content = r#"# 欢迎使用 SeeU Desktop 笔记功能！
+
+## 功能特点
+
+- 📝 **Markdown 支持**: 支持完整的 Markdown 语法
+- 🏷️ **标签管理**: 为笔记添加标签，方便分类和查找
+- 🔍 **全文搜索**: 快速搜索笔记内容
+- 📁 **笔记本管理**: 将笔记组织到不同的笔记本中
+- 💾 **自动保存**: 编辑时自动保存，无需担心数据丢失
+
+## 快速开始
+
+1. 点击 "新建笔记" 创建你的第一个笔记
+2. 使用 Markdown 语法编写内容
+3. 点击预览按钮查看渲染效果
+4. 使用标签为笔记分类
+
+## Markdown 示例
+
+### 文本格式
+- **粗体文本**
+- *斜体文本*
+- ~~删除线~~
+- `代码片段`
+
+### 列表
+1. 有序列表项 1
+2. 有序列表项 2
+   - 无序子项
+   - 另一个子项
+
+### 代码块
+```rust
+fn main() {
+    println!("Hello, SeeU Desktop!");
+}
+```
+
+### 表格
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 笔记编辑 | ✅ | 支持 Markdown |
+| 标签管理 | ✅ | 多标签支持 |
+| 全文搜索 | ✅ | 快速搜索 |
+
+开始你的笔记之旅吧！"#;
+
+            let note_id = self.create_note("欢迎使用 SeeU Desktop".to_string(), welcome_content.to_string());
+
+            if let Some(note_id) = note_id {
+                self.select_note(&note_id);
+                log::info!("Created welcome note: {}", note_id);
+            }
+        }
+
+        log::info!("Default data created successfully");
+    }
+
+    /// 应用笔记本折叠设置
+    fn apply_notebook_collapse_setting(&mut self) {
+        if self.settings_default_collapse_notebooks {
+            for notebook in &mut self.notebooks {
+                notebook.expanded = false;
+            }
+            log::info!("Applied default collapse setting to {} notebooks", self.notebooks.len());
+        }
+    }
+
+    /// Migrate data from file storage to SQLite database (async)
+    fn migrate_data_async(&self) {
+        // Temporarily disabled to avoid stack overflow
+        return;
+    }
+
+    /// Migrate data from file storage to SQLite database (sync - for compatibility)
     fn migrate_data(&self) {
         if let Ok(storage) = self.storage.lock() {
             let migration = DataMigration::new_with_ref(&storage);
@@ -142,7 +268,13 @@ impl DbINoteState {
     fn load_notebooks(&mut self) {
         if let Ok(storage) = self.storage.lock() {
             match storage.list_notebooks() {
-                Ok(notebooks) => {
+                Ok(mut notebooks) => {
+                    // 根据设置决定是否折叠笔记本
+                    if self.settings_default_collapse_notebooks {
+                        for notebook in &mut notebooks {
+                            notebook.expanded = false;
+                        }
+                    }
                     self.notebooks = notebooks;
                 }
                 Err(err) => {
@@ -154,13 +286,22 @@ impl DbINoteState {
 
     /// Load notes for a notebook
     fn load_notes_for_notebook(&mut self, notebook_id: &str) {
+        // Check if notes for this notebook are already loaded
+        let notebook_notes_loaded = self.notes.values()
+            .any(|note| self.notebooks.iter().any(|nb| nb.id == notebook_id &&
+                 nb.note_ids.contains(&note.id)));
+
+        if notebook_notes_loaded {
+            return; // Already loaded
+        }
+
         if let Ok(storage) = self.storage.lock() {
             match storage.get_notes_for_notebook(notebook_id) {
                 Ok(notes) => {
+                    // Lazy loading notes for notebook
                     for note in notes {
                         self.notes.insert(note.id.clone(), note);
                     }
-                    log::info!("Loaded notes for notebook {}", notebook_id);
                 }
                 Err(err) => {
                     log::error!("Failed to load notes for notebook {}: {}", notebook_id, err);
@@ -494,6 +635,10 @@ impl DbINoteState {
             self.current_note = None;
             self.note_content = String::new();
             self.note_title = String::new();
+
+            // Lazy load notes for the selected notebook
+            let notebook_id = self.notebooks[index].id.clone();
+            self.load_notes_for_notebook(&notebook_id);
         }
     }
 
@@ -619,6 +764,73 @@ impl DbINoteState {
 
         // 标记笔记为已修改状态
         self.check_note_modified();
+    }
+
+    /// 处理富文本粘贴，自动转换为Markdown格式
+    pub fn paste_rich_text(&mut self) -> Result<bool, String> {
+        if let Some(ref mut clipboard) = self.clipboard_manager {
+            match clipboard.get_html_as_markdown() {
+                Ok(Some(markdown)) => {
+                    // 成功获取并转换了富文本内容
+                    self.insert_text_at_cursor(&markdown);
+                    log::info!("Successfully pasted rich text content as Markdown");
+                    Ok(true)
+                }
+                Ok(None) => {
+                    // 剪贴板为空或没有内容
+                    log::debug!("Clipboard is empty or has no content");
+                    Ok(false)
+                }
+                Err(e) => {
+                    // 转换失败，尝试获取纯文本
+                    log::warn!("Failed to convert rich text: {}", e);
+                    match clipboard.get_text() {
+                        Ok(text) => {
+                            if !text.trim().is_empty() {
+                                self.insert_text_at_cursor(&text);
+                                Ok(true)
+                            } else {
+                                Ok(false)
+                            }
+                        }
+                        Err(e) => Err(format!("Failed to access clipboard: {}", e)),
+                    }
+                }
+            }
+        } else {
+            Err("Clipboard manager not available".to_string())
+        }
+    }
+
+    /// 在光标位置插入文本
+    fn insert_text_at_cursor(&mut self, text: &str) {
+        if self.current_note.is_none() {
+            return;
+        }
+
+        // 简单实现：在内容末尾添加文本
+        // 在实际应用中，可以根据光标位置插入
+        if self.note_content.trim().is_empty() {
+            self.note_content = text.to_string();
+        } else {
+            // 如果当前内容不以换行符结尾，添加换行符
+            if !self.note_content.ends_with('\n') {
+                self.note_content.push('\n');
+            }
+            self.note_content.push_str(text);
+        }
+
+        // 标记笔记为已修改状态
+        self.check_note_modified();
+    }
+
+    /// 检查剪贴板是否包含富文本内容
+    pub fn clipboard_has_rich_content(&mut self) -> bool {
+        if let Some(ref mut clipboard) = self.clipboard_manager {
+            clipboard.has_rich_content()
+        } else {
+            false
+        }
     }
 
     /// Search notes and update search results

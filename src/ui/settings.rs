@@ -9,6 +9,7 @@ pub enum SettingsCategory {
     General,
     Search,
     Terminal,
+    Notes,
     ITools,
     AIAssistant,
     Advanced,
@@ -21,6 +22,7 @@ impl SettingsCategory {
             SettingsCategory::General => "🔧 常规设置",
             SettingsCategory::Search => "🔍 搜索设置",
             SettingsCategory::Terminal => "💻 终端设置",
+            SettingsCategory::Notes => "📝 笔记设置",
             SettingsCategory::ITools => "🛠️ iTools设置",
             SettingsCategory::AIAssistant => "🤖 AI助手设置",
             SettingsCategory::Advanced => "⚙️ 高级设置",
@@ -33,6 +35,7 @@ impl SettingsCategory {
             SettingsCategory::General,
             SettingsCategory::Search,
             SettingsCategory::Terminal,
+            SettingsCategory::Notes,
             SettingsCategory::ITools,
             SettingsCategory::AIAssistant,
             SettingsCategory::Advanced,
@@ -99,6 +102,7 @@ fn render_settings_content_by_category(ui: &mut egui::Ui, app: &mut SeeUApp, cur
         SettingsCategory::General => render_general_settings(ui, app),
         SettingsCategory::Search => render_search_settings(ui, app),
         SettingsCategory::Terminal => render_terminal_settings(ui, app),
+        SettingsCategory::Notes => render_notes_settings(ui, app),
         SettingsCategory::ITools => render_itools_settings(ui, app),
         SettingsCategory::AIAssistant => render_ai_assistant_settings(ui, app),
         SettingsCategory::Advanced => render_advanced_settings(ui, app),
@@ -161,16 +165,22 @@ fn render_appearance_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
 }
 
 /// Render general settings
-fn render_general_settings(ui: &mut egui::Ui, _app: &mut SeeUApp) {
+fn render_general_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
     ui.heading("🔧 常规设置");
     ui.add_space(10.0);
+
+    let mut settings_changed = false;
 
     ui.group(|ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("启动设置").strong());
             ui.add_space(5.0);
-            ui.checkbox(&mut false, "开机自动启动");
-            ui.checkbox(&mut true, "启动时恢复上次会话");
+            if ui.checkbox(&mut app.app_settings.auto_startup, "开机自动启动").changed() {
+                settings_changed = true;
+            }
+            if ui.checkbox(&mut app.app_settings.restore_session, "启动时恢复上次会话").changed() {
+                settings_changed = true;
+            }
         });
     });
 
@@ -180,10 +190,23 @@ fn render_general_settings(ui: &mut egui::Ui, _app: &mut SeeUApp) {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("数据设置").strong());
             ui.add_space(5.0);
-            ui.checkbox(&mut true, "自动保存");
-            ui.checkbox(&mut false, "定期备份数据");
+            if ui.checkbox(&mut app.app_settings.auto_save, "自动保存").changed() {
+                settings_changed = true;
+            }
+            if ui.checkbox(&mut app.app_settings.periodic_backup, "定期备份数据").changed() {
+                settings_changed = true;
+            }
         });
     });
+
+    // Auto-save settings when changed
+    if settings_changed {
+        if let Err(err) = app.save_app_settings() {
+            log::error!("Failed to save app settings: {}", err);
+        } else {
+            log::info!("General settings saved successfully");
+        }
+    }
 }
 
 /// Render search settings
@@ -771,6 +794,8 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
     ui.heading("🤖 AI助手设置");
     ui.add_space(10.0);
 
+    let mut settings_changed = false;
+
     // Get AI assistant settings from the app
     {
         let ai_state = &mut app.ai_assist_state;
@@ -782,17 +807,23 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
                 ui.horizontal(|ui| {
                     ui.label("Base URL:");
-                    ui.text_edit_singleline(&mut ai_state.ai_settings.base_url);
+                    if ui.text_edit_singleline(&mut ai_state.ai_settings.base_url).changed() {
+                        settings_changed = true;
+                    }
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("API Key:");
-                    ui.text_edit_singleline(&mut ai_state.ai_settings.api_key);
+                    if ui.text_edit_singleline(&mut ai_state.ai_settings.api_key).changed() {
+                        settings_changed = true;
+                    }
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("模型名称:");
-                    ui.text_edit_singleline(&mut ai_state.ai_settings.model);
+                    if ui.text_edit_singleline(&mut ai_state.ai_settings.model).changed() {
+                        settings_changed = true;
+                    }
                 });
             });
         });
@@ -807,19 +838,25 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
                 ui.horizontal(|ui| {
                     ui.label("Temperature:");
-                    ui.add(egui::Slider::new(&mut ai_state.ai_settings.temperature, 0.0..=2.0)
+                    if ui.add(egui::Slider::new(&mut ai_state.ai_settings.temperature, 0.0..=2.0)
                         .step_by(0.1)
-                        .text("创造性"));
+                        .text("创造性")).changed() {
+                        settings_changed = true;
+                    }
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Max Tokens:");
-                    ui.add(egui::Slider::new(&mut ai_state.ai_settings.max_tokens, 100..=8000)
+                    if ui.add(egui::Slider::new(&mut ai_state.ai_settings.max_tokens, 100..=8000)
                         .step_by(100.0)
-                        .text("最大长度"));
+                        .text("最大长度")).changed() {
+                        settings_changed = true;
+                    }
                 });
 
-                ui.checkbox(&mut ai_state.ai_settings.streaming, "启用流式输出");
+                if ui.checkbox(&mut ai_state.ai_settings.streaming, "启用流式输出").changed() {
+                    settings_changed = true;
+                }
             });
         });
 
@@ -843,6 +880,132 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
             });
         });
     }
+
+    // Auto-save AI settings when changed
+    if settings_changed {
+        if let Err(err) = aiAssist::save_settings(&app.ai_assist_state) {
+            log::error!("Failed to save AI assistant settings: {}", err);
+        } else {
+            log::info!("AI助手设置已更新并保存");
+        }
+    }
+}
+
+/// Render notes settings
+fn render_notes_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
+    ui.heading("📝 笔记设置");
+    ui.add_space(10.0);
+
+    // 数据管理设置
+    ui.group(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("数据管理").strong());
+            ui.add_space(5.0);
+
+            // 思源笔记导入
+            ui.horizontal(|ui| {
+                if ui.button("📥 从思源笔记导入").clicked() {
+                    app.inote_state.siyuan_import.show_dialog = true;
+                }
+                ui.label(egui::RichText::new("导入思源笔记的数据").weak());
+            });
+
+            ui.add_space(5.0);
+
+            // 显示导入状态
+            if app.inote_state.siyuan_import.import_in_progress {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("正在导入...");
+                });
+            } else if app.inote_state.siyuan_import.import_completed {
+                if let Some(stats) = &app.inote_state.siyuan_import.import_stats {
+                    ui.label(egui::RichText::new(format!(
+                        "✅ 导入完成: {} 个笔记本, {} 个笔记",
+                        stats.notebooks_count,
+                        stats.notes_count
+                    )).color(egui::Color32::from_rgb(0, 150, 0)));
+                }
+            }
+
+            if let Some(error) = &app.inote_state.siyuan_import.import_error {
+                ui.label(egui::RichText::new(format!("❌ {}", error))
+                    .color(egui::Color32::from_rgb(200, 0, 0)));
+            }
+        });
+    });
+
+    ui.add_space(15.0);
+
+    // 显示设置
+    ui.group(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("显示设置").strong());
+            ui.add_space(5.0);
+
+            let mut settings_changed = false;
+
+            if ui.checkbox(&mut app.inote_state.settings_default_collapse_notebooks, "默认折叠笔记本").changed() {
+                settings_changed = true;
+                // 立即应用设置：折叠所有笔记本
+                if app.inote_state.settings_default_collapse_notebooks {
+                    for notebook in &mut app.inote_state.notebooks {
+                        notebook.expanded = false;
+                    }
+                }
+            }
+
+            if ui.checkbox(&mut app.inote_state.settings_enable_markdown_preview, "启用Markdown预览").changed() {
+                settings_changed = true;
+            }
+
+            if ui.checkbox(&mut app.inote_state.settings_show_note_stats, "显示笔记统计信息").changed() {
+                settings_changed = true;
+            }
+
+            if settings_changed {
+                // Save note settings
+                if let Err(err) = inote::save_settings(&app.inote_state) {
+                    log::error!("Failed to save note settings: {}", err);
+                } else {
+                    log::info!("笔记显示设置已更新并保存");
+                }
+            }
+        });
+    });
+
+    ui.add_space(15.0);
+
+    // 编辑器设置
+    ui.group(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("编辑器设置").strong());
+            ui.add_space(5.0);
+
+            let mut editor_settings_changed = false;
+
+            if ui.checkbox(&mut app.inote_state.settings_auto_save, "自动保存").changed() {
+                editor_settings_changed = true;
+            }
+
+            if ui.checkbox(&mut app.inote_state.settings_syntax_highlight, "语法高亮").changed() {
+                editor_settings_changed = true;
+            }
+
+            if ui.checkbox(&mut app.inote_state.settings_show_line_numbers, "显示行号").changed() {
+                editor_settings_changed = true;
+            }
+
+            if editor_settings_changed {
+                // Save note settings
+                if let Err(err) = inote::save_settings(&app.inote_state) {
+                    log::error!("Failed to save note editor settings: {}", err);
+                } else {
+                    log::info!("笔记编辑器设置已更新并保存");
+                }
+            }
+        });
+    });
 }
 
 /// Render advanced settings

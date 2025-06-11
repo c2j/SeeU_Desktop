@@ -260,8 +260,7 @@ mod tests {
 
     // 辅助函数：创建测试用的存储管理器
     fn create_test_storage() -> DbStorageManager {
-        // 这里应该创建一个测试用的存储管理器
-        // 由于我们没有看到DbStorageManager的具体实现，这里先用占位符
-        todo!("需要实现测试用的DbStorageManager")
+        // 使用内存数据库进行测试
+        DbStorageManager::new_memory().expect("Failed to create test storage")
     }
 }

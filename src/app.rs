@@ -12,6 +12,8 @@ use crate::services::{
     system_service::SystemService,
 };
 
+use crate::config::{StartupConfig, StartupMetrics};
+
 // 导入模块
 use inote::db_state::DbINoteState;
 use isearch::ISearchState;
@@ -43,8 +45,38 @@ pub struct SeeUApp {
     // Theme
     pub theme: Theme,
 
+    // Application settings
+    pub app_settings: AppSettings,
+
     // Command channel
     slash_command_receiver: Option<std::sync::mpsc::Receiver<AppCommand>>,
+
+    // Startup state
+    pub startup_complete: bool,
+    pub startup_progress: f32,
+    pub startup_message: String,
+    pub startup_config: StartupConfig,
+    pub startup_metrics: StartupMetrics,
+}
+
+/// Application settings
+#[derive(Debug, Clone)]
+pub struct AppSettings {
+    pub auto_startup: bool,
+    pub restore_session: bool,
+    pub auto_save: bool,
+    pub periodic_backup: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            auto_startup: false,
+            restore_session: true,
+            auto_save: true,
+            periodic_backup: false,
+        }
+    }
 }
 
 /// Application modules
@@ -110,6 +142,9 @@ pub struct ISearchResult {
 impl SeeUApp {
     /// Create a new instance of the application
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let startup_config = StartupConfig::default();
+        let mut startup_metrics = StartupMetrics::new();
+
         // Configure fonts
         let mut fonts = egui::FontDefinitions::default();
 
@@ -140,12 +175,9 @@ impl SeeUApp {
         monospace_family.push("source-han-sans".to_owned());
         monospace_family.push("wqy-microhei".to_owned());
 
-
-
-        log::info!("Chinese font embedded and configured");
-
         // Set fonts
         cc.egui_ctx.set_fonts(fonts);
+        startup_metrics.record_font_load();
 
         // Configure theme
         let theme = Theme::DarkModern;
@@ -158,10 +190,15 @@ impl SeeUApp {
         let mut itools_state = itools::initialize();
         let iterminal_state = iterminal::initialize();
 
-        // Initialize states
+        // Initialize states based on configuration
         inote_state.initialize();
+        startup_metrics.record_database_init();
+
         isearch_state.initialize();
+        startup_metrics.record_search_init();
+
         itools_state.initialize();
+        startup_metrics.record_plugin_init();
 
         // Create app instance
         let mut app = Self {
@@ -177,7 +214,13 @@ impl SeeUApp {
             settings_state: crate::ui::settings::SettingsState::default(),
             system_service: SystemService::new(),
             theme,
+            app_settings: AppSettings::default(),
             slash_command_receiver: None,
+            startup_complete: !startup_config.show_startup_progress,
+            startup_progress: 0.0,
+            startup_message: "正在初始化应用程序...".to_string(),
+            startup_config,
+            startup_metrics,
         };
 
         // 设置命令通道
@@ -185,6 +228,16 @@ impl SeeUApp {
 
         // 设置回调函数
         app.setup_callbacks(tx);
+
+        // 启动后台任务来更新启动进度
+        app.start_startup_progress_tracker();
+
+        // Record total startup time and log metrics
+        app.startup_metrics.record_total();
+        app.startup_metrics.log_metrics();
+
+        // Load application settings
+        app.load_app_settings();
 
         app
     }
@@ -220,6 +273,15 @@ impl SeeUApp {
             // 发送插入笔记的命令
             let _ = tx_clone.send(AppCommand::InsertToNote(content));
         });
+    }
+
+    /// 启动进度跟踪器
+    fn start_startup_progress_tracker(&mut self) {
+        // 简化启动进度跟踪，避免复杂的异步操作
+        // 设置初始完成状态
+        self.startup_complete = true;
+        self.startup_progress = 1.0;
+        self.startup_message = "初始化完成".to_string();
     }
 
     /// Process any pending slash commands
@@ -492,10 +554,154 @@ impl SeeUApp {
     pub fn get_theme(&self) -> Theme {
         self.theme
     }
+
+    /// Save all application settings
+    fn save_all_settings(&mut self) {
+        log::info!("Saving all application settings before exit...");
+
+        // Save AI assistant settings
+        if let Err(err) = aiAssist::save_settings(&self.ai_assist_state) {
+            log::error!("Failed to save AI assistant settings: {}", err);
+        }
+
+        // Save search module settings
+        self.isearch_state.save_search_options();
+        self.isearch_state.save_indexed_directories();
+
+        // Save terminal settings
+        if let Err(err) = self.iterminal_state.save_config() {
+            log::error!("Failed to save terminal settings: {}", err);
+        }
+
+        // Save note module settings
+        if let Err(err) = inote::save_settings(&self.inote_state) {
+            log::error!("Failed to save note settings: {}", err);
+        }
+
+        // Save application-level settings
+        if let Err(err) = self.save_app_settings() {
+            log::error!("Failed to save application settings: {}", err);
+        }
+
+        log::info!("All settings saved successfully");
+    }
+
+    /// Save application-level settings
+    pub fn save_app_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use serde_json;
+
+        let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let config_dir = base_path.join("seeu_desktop");
+        let config_path = config_dir.join("app_settings.json");
+
+        fs::create_dir_all(&config_dir)?;
+
+        let settings = serde_json::json!({
+            "active_module": format!("{:?}", self.active_module),
+            "show_right_sidebar": self.show_right_sidebar,
+            "theme": format!("{:?}", self.theme),
+            "auto_startup": self.app_settings.auto_startup,
+            "restore_session": self.app_settings.restore_session,
+            "auto_save": self.app_settings.auto_save,
+            "periodic_backup": self.app_settings.periodic_backup
+        });
+
+        let json = serde_json::to_string_pretty(&settings)?;
+        fs::write(config_path, json)?;
+
+        Ok(())
+    }
+
+    /// Load application-level settings
+    fn load_app_settings(&mut self) {
+        use std::fs;
+        use serde_json;
+
+        let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let config_path = base_path.join("seeu_desktop").join("app_settings.json");
+
+        if let Ok(content) = fs::read_to_string(config_path) {
+            if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
+                // Load active module
+                if let Some(module_str) = settings.get("active_module").and_then(|v| v.as_str()) {
+                    match module_str {
+                        "Home" => self.active_module = Module::Home,
+                        "Terminal" => self.active_module = Module::Terminal,
+                        "Files" => self.active_module = Module::Files,
+                        "DataAnalysis" => self.active_module = Module::DataAnalysis,
+                        "Note" => self.active_module = Module::Note,
+                        "Search" => self.active_module = Module::Search,
+                        "ITools" => self.active_module = Module::ITools,
+                        "Settings" => self.active_module = Module::Settings,
+                        _ => {}
+                    }
+                }
+
+                // Load sidebar state
+                if let Some(show_sidebar) = settings.get("show_right_sidebar").and_then(|v| v.as_bool()) {
+                    self.show_right_sidebar = show_sidebar;
+                }
+
+                // Load theme
+                if let Some(theme_str) = settings.get("theme").and_then(|v| v.as_str()) {
+                    match theme_str {
+                        "DarkModern" => self.theme = Theme::DarkModern,
+                        _ => {}
+                    }
+                }
+
+                // Load app settings
+                if let Some(value) = settings.get("auto_startup").and_then(|v| v.as_bool()) {
+                    self.app_settings.auto_startup = value;
+                }
+                if let Some(value) = settings.get("restore_session").and_then(|v| v.as_bool()) {
+                    self.app_settings.restore_session = value;
+                }
+                if let Some(value) = settings.get("auto_save").and_then(|v| v.as_bool()) {
+                    self.app_settings.auto_save = value;
+                }
+                if let Some(value) = settings.get("periodic_backup").and_then(|v| v.as_bool()) {
+                    self.app_settings.periodic_backup = value;
+                }
+            }
+        }
+    }
+
+    /// Render startup screen
+    fn render_startup_screen(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.3);
+
+                // App logo/title
+                ui.heading("SeeU Desktop");
+                ui.add_space(20.0);
+
+                // Progress bar
+                let progress_bar = egui::ProgressBar::new(self.startup_progress)
+                    .desired_width(300.0)
+                    .text(&self.startup_message);
+                ui.add(progress_bar);
+
+                ui.add_space(10.0);
+                ui.label("正在加载模块和数据...");
+            });
+        });
+
+        // Request repaint to update progress
+        ctx.request_repaint();
+    }
 }
 
 impl eframe::App for SeeUApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Show startup screen if not complete
+        if !self.startup_complete {
+            self.render_startup_screen(ctx);
+            return;
+        }
+
         // Refresh system information for accurate CPU and memory usage
         self.system_service.refresh();
 
@@ -576,5 +782,11 @@ impl eframe::App for SeeUApp {
                 // 渲染工作区，让 egui 自动处理高度
                 render_workspace(ui, &current_module, self);
             });
+    }
+
+    /// Save state when the app is about to close
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        // Save all settings before exit
+        self.save_all_settings();
     }
 }

@@ -47,7 +47,8 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                         Module::Files => render_file_manager(ui),
                         Module::DataAnalysis => render_data_analysis(ui),
                         Module::Note => {
-                            inote::render_db_inote(ui, &mut app.inote_state);
+                            // 传递右侧边栏状态给笔记模块
+                            inote::render_db_inote_with_sidebar_info(ui, &mut app.inote_state, app.show_right_sidebar);
 
                             // 渲染思源笔记导入对话框
                             inote::db_ui_import::render_siyuan_import_dialog(ui, &mut app.inote_state);
@@ -60,6 +61,9 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                         },
                         Module::Settings => {
                             crate::ui::settings::render_settings(ui, app);
+
+                            // 在设置页面也需要渲染思源笔记导入对话框
+                            inote::db_ui_import::render_siyuan_import_dialog(ui, &mut app.inote_state);
                         },
                     }
                 });

@@ -4,6 +4,7 @@ mod modules;
 mod services;
 mod utils;
 mod platform;
+mod config;
 
 use eframe::{self, egui};
 

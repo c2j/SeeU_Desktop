@@ -251,11 +251,67 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 }
             }
 
-            // 编辑/预览切换按钮
-            if ui.button(if state.markdown_preview { "📝 编辑" } else { "👁 预览" }).clicked() {
-                // Auto-save before switching modes
+            // 编辑/预览切换按钮 - 添加背景色区分
+            let edit_button_color = if state.markdown_preview {
+                // 预览模式下，编辑按钮使用默认色
+                ui.style().visuals.widgets.inactive.bg_fill
+            } else {
+                // 编辑模式下，编辑按钮使用高亮色
+                ui.style().visuals.selection.bg_fill
+            };
+
+            let preview_button_color = if state.markdown_preview {
+                // 预览模式下，预览按钮使用高亮色
+                ui.style().visuals.selection.bg_fill
+            } else {
+                // 编辑模式下，预览按钮使用默认色
+                ui.style().visuals.widgets.inactive.bg_fill
+            };
+
+            // 编辑按钮
+            let edit_button = egui::Button::new("📝 编辑")
+                .fill(edit_button_color);
+            if ui.add(edit_button).clicked() && state.markdown_preview {
                 state.auto_save_if_modified();
-                state.markdown_preview = !state.markdown_preview;
+                state.markdown_preview = false;
+            }
+
+            // 预览按钮
+            let preview_button = egui::Button::new("👁 预览")
+                .fill(preview_button_color);
+            if ui.add(preview_button).clicked() && !state.markdown_preview {
+                state.auto_save_if_modified();
+                state.markdown_preview = true;
+            }
+
+            // 富文本粘贴按钮（仅在编辑模式下显示）
+            if !state.markdown_preview {
+                ui.separator();
+
+                // 检查剪贴板是否有富文本内容
+                let has_rich_content = state.clipboard_has_rich_content();
+
+                let paste_button = ui.button("📋 粘贴富文本")
+                    .on_hover_text("从剪贴板粘贴富文本内容并自动转换为Markdown格式\n支持：标题、段落、列表、表格、图片等");
+
+                if paste_button.clicked() {
+                    match state.paste_rich_text() {
+                        Ok(true) => {
+                            log::info!("Rich text pasted successfully");
+                        }
+                        Ok(false) => {
+                            log::debug!("No content to paste");
+                        }
+                        Err(e) => {
+                            log::error!("Failed to paste rich text: {}", e);
+                        }
+                    }
+                }
+
+                // 如果剪贴板有富文本内容，显示提示
+                if has_rich_content {
+                    ui.label("💡 检测到富文本内容");
+                }
             }
 
             // 在工具栏中显示标题输入框
@@ -422,6 +478,25 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
                     let response = ui.add(text_edit);
 
+                    // Check for keyboard shortcuts
+                    ui.input(|i| {
+                        // Check for Ctrl+V (Cmd+V on Mac) for rich text paste
+                        if i.modifiers.command && i.key_pressed(egui::Key::V) {
+                            // Prevent default paste behavior and handle rich text paste
+                            match state.paste_rich_text() {
+                                Ok(true) => {
+                                    log::info!("Rich text pasted via keyboard shortcut");
+                                }
+                                Ok(false) => {
+                                    log::debug!("No rich content to paste via keyboard shortcut");
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to paste rich text via keyboard shortcut: {}", e);
+                                }
+                            }
+                        }
+                    });
+
                     // Check for content changes and mark as modified
                     if response.changed() {
                         state.check_note_modified();
@@ -540,6 +615,16 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 .show(ui.ctx(), |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Markdown 格式指引");
+                        ui.separator();
+
+                        // 富文本粘贴说明
+                        ui.add_space(10.0);
+                        ui.strong("💡 富文本粘贴功能");
+                        ui.label("支持从其他应用程序复制富文本内容并自动转换为Markdown格式：");
+                        ui.label("• 从网页、Word文档、邮件等复制内容");
+                        ui.label("• 自动保留标题、段落、列表、表格、图片等格式");
+                        ui.label("• 使用 Ctrl+V (Mac: Cmd+V) 或点击「📋 粘贴富文本」按钮");
+                        ui.label("• 支持HTML内容自动转换为标准Markdown语法");
                         ui.separator();
 
                         // 使用三列布局：左侧是Markdown语法，中间是渲染效果，右侧是复制按钮

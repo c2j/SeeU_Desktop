@@ -24,6 +24,18 @@ pub struct DbStorageManager {
 type DbConnection = PooledConnection<SqliteConnectionManager>;
 
 impl DbStorageManager {
+    /// Create a new storage manager with in-memory database (for testing)
+    pub fn new_memory() -> Result<Self, Box<dyn std::error::Error>> {
+        let manager = SqliteConnectionManager::memory();
+        let pool = Pool::new(manager)?;
+        let storage = Self {
+            pool,
+            db_path: PathBuf::from(":memory:")
+        };
+        storage.init_database()?;
+        Ok(storage)
+    }
+
     /// Create a new storage manager
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // Get database path
@@ -840,6 +852,9 @@ impl DbStorageManager {
         // Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON", [])?;
 
+        // Create indexes for better performance
+        self.create_indexes(conn)?;
+
         Ok(())
     }
 
@@ -888,6 +903,77 @@ impl DbStorageManager {
         // Implement database migrations here when needed
         // For now, we don't need any migrations
 
+        Ok(())
+    }
+
+    /// Create database indexes for better performance
+    fn create_indexes(&self, conn: &Connection) -> SqlResult<()> {
+        // Index on notes.notebook_id for faster notebook queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_notebook_id ON notes(notebook_id)",
+            [],
+        )?;
+
+        // Index on notes.updated_at for faster sorting
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at)",
+            [],
+        )?;
+
+        // Index on note_tags.note_id for faster tag queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_tags_note_id ON note_tags(note_id)",
+            [],
+        )?;
+
+        // Index on note_tags.tag_id for faster tag-based searches
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_tags_tag_id ON note_tags(tag_id)",
+            [],
+        )?;
+
+        // Index on attachments.note_id for faster attachment queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_attachments_note_id ON attachments(note_id)",
+            [],
+        )?;
+
+        // Full-text search index on notes content and title
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+                id UNINDEXED,
+                title,
+                content,
+                content='notes',
+                content_rowid='rowid'
+            )",
+            [],
+        )?;
+
+        // Trigger to keep FTS table in sync
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_insert AFTER INSERT ON notes BEGIN
+                INSERT INTO notes_fts(rowid, id, title, content) VALUES (new.rowid, new.id, new.title, new.content);
+            END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_delete AFTER DELETE ON notes BEGIN
+                DELETE FROM notes_fts WHERE rowid = old.rowid;
+            END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
+                DELETE FROM notes_fts WHERE rowid = old.rowid;
+                INSERT INTO notes_fts(rowid, id, title, content) VALUES (new.rowid, new.id, new.title, new.content);
+            END",
+            [],
+        )?;
+
+        log::info!("Database indexes created successfully");
         Ok(())
     }
 }

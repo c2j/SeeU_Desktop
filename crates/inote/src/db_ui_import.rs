@@ -189,8 +189,10 @@ fn start_import(state: &mut DbINoteState) {
             state.siyuan_import.import_stats = Some(stats);
             state.siyuan_import.import_error = None;
 
-            // 重新加载数据
-            state.initialize();
+            // 重新加载数据以显示导入的笔记
+            log::info!("重新加载数据以显示导入的笔记...");
+            state.force_reload_data();
+            log::info!("数据重新加载完成");
         },
         Err(e) => {
             log::error!("导入失败: {}", e);
