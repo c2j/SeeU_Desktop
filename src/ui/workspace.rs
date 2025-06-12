@@ -54,7 +54,7 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                             inote::db_ui_import::render_siyuan_import_dialog(ui, &mut app.inote_state);
                         },
                         Module::Search => {
-                            isearch::render_isearch(ui, &mut app.isearch_state);
+                            isearch::render_isearch_with_sidebar_info(ui, &mut app.isearch_state, app.show_right_sidebar);
                         },
                         Module::ITools => {
                             itools::render_itools(ui, &mut app.itools_state);

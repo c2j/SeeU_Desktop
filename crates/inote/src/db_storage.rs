@@ -24,6 +24,17 @@ pub struct DbStorageManager {
 type DbConnection = PooledConnection<SqliteConnectionManager>;
 
 impl DbStorageManager {
+    /// Create a placeholder storage manager (will be initialized later)
+    pub fn new_placeholder() -> Self {
+        // Create a minimal in-memory database for placeholder
+        let manager = SqliteConnectionManager::memory();
+        let pool = Pool::new(manager).expect("Failed to create placeholder pool");
+        Self {
+            pool,
+            db_path: PathBuf::from(":placeholder:")
+        }
+    }
+
     /// Create a new storage manager with in-memory database (for testing)
     pub fn new_memory() -> Result<Self, Box<dyn std::error::Error>> {
         let manager = SqliteConnectionManager::memory();
@@ -59,6 +70,44 @@ impl DbStorageManager {
         storage.init_database()?;
 
         Ok(storage)
+    }
+
+    /// Initialize storage asynchronously (replaces placeholder)
+    pub fn initialize_async(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Only initialize if this is a placeholder
+        if self.db_path.to_string_lossy() == ":placeholder:" {
+            // Get database path
+            let mut db_path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+            db_path.push("seeu_desktop");
+            db_path.push("inote");
+
+            // Create directories if they don't exist
+            std::fs::create_dir_all(&db_path)?;
+
+            db_path.push("inote.db");
+
+            log::info!("Initializing database asynchronously: {}", db_path.display());
+
+            // Create connection manager
+            let manager = SqliteConnectionManager::file(&db_path);
+            let pool = Pool::new(manager)?;
+
+            // Replace placeholder with real database
+            self.pool = pool;
+            self.db_path = db_path;
+
+            // Initialize database
+            self.init_database()?;
+
+            log::info!("Database initialized successfully");
+        }
+
+        Ok(())
+    }
+
+    /// Check if this is a placeholder storage
+    pub fn is_placeholder(&self) -> bool {
+        self.db_path.to_string_lossy() == ":placeholder:"
     }
 
     /// Get a database connection from the pool
@@ -137,6 +186,11 @@ impl DbStorageManager {
 
     /// List all notebooks
     pub fn list_notebooks(&self) -> Result<Vec<Notebook>, Box<dyn std::error::Error>> {
+        // Return empty list if this is a placeholder
+        if self.is_placeholder() {
+            return Ok(Vec::new());
+        }
+
         let conn = self.get_connection()?;
         let mut notebooks = Vec::new();
 
@@ -384,6 +438,11 @@ impl DbStorageManager {
 
     /// List all tags
     pub fn list_tags(&self) -> Result<Vec<Tag>, Box<dyn std::error::Error>> {
+        // Return empty list if this is a placeholder
+        if self.is_placeholder() {
+            return Ok(Vec::new());
+        }
+
         let conn = self.get_connection()?;
         let mut tags = Vec::new();
 

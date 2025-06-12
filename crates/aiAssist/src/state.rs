@@ -26,6 +26,52 @@ pub type SlashCommandCallback = Box<dyn FnMut(SlashCommand) + Send + 'static>;
 /// Type for insert to note callback
 pub type InsertToNoteCallback = Box<dyn FnMut(String) + Send + 'static>;
 
+/// Command menu state for smart command suggestions
+#[derive(Debug, Clone)]
+pub struct CommandMenuState {
+    pub is_visible: bool,
+    pub menu_type: CommandMenuType,
+    pub selected_index: usize,
+    pub cursor_position: Option<egui::Pos2>,
+    pub trigger_position: usize, // Position in text where @ or / was typed
+}
+
+/// Type of command menu
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommandMenuType {
+    None,
+    AtCommands,
+    SlashCommands,
+}
+
+/// Available @ commands
+#[derive(Debug, Clone)]
+pub struct AtCommand {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub insert_text: &'static str,
+}
+
+/// Available slash commands
+#[derive(Debug, Clone)]
+pub struct SlashCommandInfo {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub insert_text: &'static str,
+}
+
+impl Default for CommandMenuState {
+    fn default() -> Self {
+        Self {
+            is_visible: false,
+            menu_type: CommandMenuType::None,
+            selected_index: 0,
+            cursor_position: None,
+            trigger_position: 0,
+        }
+    }
+}
+
 /// AI assistant state
 pub struct AIAssistState {
     pub chat_messages: Vec<ChatMessage>,
@@ -51,6 +97,9 @@ pub struct AIAssistState {
     // 控制@指令和Slash指令的提示框显示
     pub show_at_commands: bool,
     pub show_slash_commands: bool,
+
+    // 智能指令菜单状态
+    pub command_menu: CommandMenuState,
 
     // 存储最近的搜索查询和结果，用于 @search 引用
     pub last_search_query: Option<String>,
@@ -95,6 +144,7 @@ impl Default for AIAssistState {
             can_insert_to_note: false,
             show_at_commands: false,
             show_slash_commands: false,
+            command_menu: CommandMenuState::default(),
             last_search_query: None,
             last_search_results: None,
         }
@@ -355,9 +405,12 @@ impl AIAssistState {
             let query = self.last_search_query.as_ref().unwrap();
             let results = self.last_search_results.as_ref().unwrap();
 
-            // 替换 @search 为实际的搜索结果
-            let replacement = format!("@search (查询: \"{}\"):\n{}", query, results);
+            // 替换 @search 为实际的搜索结果（第一条结果的详细内容）
+            let replacement = format!("@search (查询: \"{}\" 的第一条结果):\n{}", query, results);
             content.replace("@search", &replacement)
+        } else if content.contains("@search") {
+            // 如果没有搜索结果，提示用户先进行搜索
+            content.replace("@search", "@search (请先使用 /search 命令进行搜索)")
         } else {
             content.to_string()
         }
@@ -486,7 +539,11 @@ impl AIAssistState {
         let system_message = ChatMessage {
             id: Uuid::new_v4(),
             role: MessageRole::System,
-            content: format!("搜索结果: 找到 {} 个匹配 \"{}\" 的结果。可以使用 @search 引用这些结果。", result_count, query),
+            content: if result_count > 0 {
+                format!("搜索完成: 找到 {} 个匹配 \"{}\" 的结果。使用 @search 可以引用第一条搜索结果的详细内容。", result_count, query)
+            } else {
+                format!("搜索完成: 未找到匹配 \"{}\" 的结果。", query)
+            },
             timestamp: Utc::now(),
             attachments: vec![],
         };
@@ -527,6 +584,155 @@ impl AIAssistState {
         } else {
             summary
         }
+    }
+
+    /// 检查输入变化并更新指令菜单状态
+    pub fn update_command_menu(&mut self, cursor_pos: Option<egui::Pos2>) {
+        let input = &self.chat_input;
+
+        // 检查是否应该显示指令菜单
+        if let Some(trigger_pos) = self.find_command_trigger(input) {
+            let trigger_char = input.chars().nth(trigger_pos).unwrap_or(' ');
+
+            // 只有在菜单不可见或者触发位置改变时才更新
+            if !self.command_menu.is_visible || self.command_menu.trigger_position != trigger_pos {
+                self.command_menu.is_visible = true;
+                self.command_menu.trigger_position = trigger_pos;
+                self.command_menu.cursor_position = cursor_pos;
+                self.command_menu.selected_index = 0;
+
+                match trigger_char {
+                    '@' => self.command_menu.menu_type = CommandMenuType::AtCommands,
+                    '/' => self.command_menu.menu_type = CommandMenuType::SlashCommands,
+                    _ => self.command_menu.menu_type = CommandMenuType::None,
+                }
+            } else {
+                // 只更新光标位置
+                self.command_menu.cursor_position = cursor_pos;
+            }
+        } else {
+            self.command_menu.is_visible = false;
+            self.command_menu.menu_type = CommandMenuType::None;
+        }
+    }
+
+    /// 查找指令触发位置（@ 或 / 在单词开头）
+    fn find_command_trigger(&self, input: &str) -> Option<usize> {
+        let chars: Vec<char> = input.chars().collect();
+
+        // 从后往前查找最近的 @ 或 /
+        for (i, &ch) in chars.iter().enumerate().rev() {
+            if ch == '@' || ch == '/' {
+                // 检查这个字符是否在单词开头（前面是空格或开头）
+                let is_word_start = i == 0 || chars[i - 1].is_whitespace();
+
+                if is_word_start {
+                    // 检查后面的字符（如果有的话）
+                    let after_chars = &chars[i + 1..];
+
+                    // 如果后面没有字符，或者后面只有字母、数字、下划线，且长度合理
+                    if after_chars.is_empty() ||
+                       (after_chars.iter().all(|&c| c.is_alphanumeric() || c == '_') && after_chars.len() <= 10) {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// 处理指令菜单的键盘输入
+    pub fn handle_command_menu_input(&mut self, key: egui::Key) -> bool {
+        if !self.command_menu.is_visible {
+            return false;
+        }
+
+        match key {
+            egui::Key::ArrowUp => {
+                let max_items = self.get_command_menu_items().len();
+                if max_items > 0 {
+                    self.command_menu.selected_index =
+                        if self.command_menu.selected_index == 0 {
+                            max_items - 1
+                        } else {
+                            self.command_menu.selected_index - 1
+                        };
+                }
+                true
+            },
+            egui::Key::ArrowDown => {
+                let max_items = self.get_command_menu_items().len();
+                if max_items > 0 {
+                    self.command_menu.selected_index =
+                        (self.command_menu.selected_index + 1) % max_items;
+                }
+                true
+            },
+            egui::Key::Enter => {
+                self.apply_selected_command();
+                true
+            },
+            egui::Key::Escape => {
+                self.command_menu.is_visible = false;
+                true
+            },
+            _ => false
+        }
+    }
+
+    /// 获取当前菜单的指令项目
+    fn get_command_menu_items(&self) -> Vec<String> {
+        match self.command_menu.menu_type {
+            CommandMenuType::AtCommands => {
+                vec![
+                    "@search".to_string(),
+                    "@date".to_string(),
+                    "@time".to_string(),
+                    "@user".to_string(),
+                ]
+            },
+            CommandMenuType::SlashCommands => {
+                vec![
+                    "/search".to_string(),
+                    "/clear".to_string(),
+                    "/help".to_string(),
+                    "/new".to_string(),
+                ]
+            },
+            CommandMenuType::None => vec![],
+        }
+    }
+
+    /// 应用选中的指令
+    pub fn apply_selected_command(&mut self) {
+        let items = self.get_command_menu_items();
+        if self.command_menu.selected_index < items.len() {
+            let selected_command = &items[self.command_menu.selected_index];
+
+            // 替换触发字符和后续文本
+            let mut chars: Vec<char> = self.chat_input.chars().collect();
+            let trigger_pos = self.command_menu.trigger_position;
+
+            // 找到要替换的范围（从触发位置到下一个空格或结尾）
+            let mut end_pos = trigger_pos + 1;
+            while end_pos < chars.len() && !chars[end_pos].is_whitespace() {
+                end_pos += 1;
+            }
+
+            // 替换文本
+            chars.splice(trigger_pos..end_pos, selected_command.chars());
+            self.chat_input = chars.into_iter().collect();
+
+            // 对于slash命令，添加空格（除了不需要参数的命令）
+            if selected_command.starts_with('/') && selected_command != "/clear" && selected_command != "/help" && selected_command != "/new" {
+                self.chat_input.push(' ');
+            }
+        }
+
+        // 隐藏菜单
+        self.command_menu.is_visible = false;
+        self.command_menu.menu_type = CommandMenuType::None;
     }
 }
 

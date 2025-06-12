@@ -83,22 +83,9 @@ pub struct DbINoteState {
 
 impl Default for DbINoteState {
     fn default() -> Self {
-        // Create persistent database storage
-        let storage = match DbStorageManager::new() {
-            Ok(storage) => Arc::new(Mutex::new(storage)),
-            Err(err) => {
-                log::error!("Failed to create persistent database storage: {}", err);
-                // Fallback to in-memory database if persistent storage fails
-                log::warn!("Falling back to in-memory database storage");
-                match DbStorageManager::new_memory() {
-                    Ok(memory_storage) => Arc::new(Mutex::new(memory_storage)),
-                    Err(memory_err) => {
-                        log::error!("Failed to create fallback in-memory database storage: {}", memory_err);
-                        panic!("Failed to create any database storage: persistent error: {}, memory error: {}", err, memory_err);
-                    }
-                }
-            }
-        };
+        // Don't create database storage in Default - this will be done asynchronously
+        // Create a placeholder that will be initialized later
+        let storage = Arc::new(Mutex::new(DbStorageManager::new_placeholder()));
 
         Self {
             notebooks: Vec::new(),
@@ -142,19 +129,59 @@ impl Default for DbINoteState {
 }
 
 impl DbINoteState {
-    /// Initialize the state
+    /// Initialize the state (lightweight initialization)
     pub fn initialize(&mut self) {
-        log::info!("Initializing DbINoteState...");
+        log::info!("Initializing DbINoteState (lightweight)...");
 
         // Load settings first
         if let Err(err) = crate::load_settings(self) {
             log::warn!("Failed to load note settings: {}", err);
         }
 
+        // Don't load data here - it will be loaded asynchronously
+        log::info!("DbINoteState lightweight initialization completed");
+    }
+
+    /// Initialize the database asynchronously (non-blocking)
+    pub fn initialize_database_async(&mut self) {
+        log::info!("Starting async database initialization...");
+
+        // Initialize the database storage
+        if let Ok(mut storage) = self.storage.lock() {
+            if let Err(err) = storage.initialize_async() {
+                log::error!("Failed to initialize database: {}", err);
+                return;
+            }
+        } else {
+            log::error!("Failed to lock storage for initialization");
+            return;
+        }
+
+        log::info!("Database storage initialized, data will be loaded on demand");
+    }
+
+    /// Load data when needed (lazy loading)
+    pub fn ensure_data_loaded(&mut self) {
+        // Check if data is already loaded
+        if !self.notebooks.is_empty() {
+            return; // Data already loaded
+        }
+
+        // Check if database is ready
+        if let Ok(storage) = self.storage.lock() {
+            if storage.is_placeholder() {
+                return; // Database not ready yet
+            }
+        } else {
+            return; // Cannot lock storage
+        }
+
+        log::info!("Loading data on demand...");
+
         // Load data from storage
         self.load_notebooks();
         self.load_tags();
-        self.load_all_notes();
+        // Don't load all notes - use lazy loading instead
 
         // Create default data if database is empty
         if self.notebooks.is_empty() {
@@ -164,8 +191,7 @@ impl DbINoteState {
         // 确保根据设置折叠笔记本
         self.apply_notebook_collapse_setting();
 
-        log::info!("DbINoteState initialized with {} notebooks, {} notes",
-                   self.notebooks.len(), self.notes.len());
+        log::info!("Data loaded on demand: {} notebooks", self.notebooks.len());
     }
 
     /// Create default data when database is empty
@@ -264,8 +290,8 @@ fn main() {
         }
     }
 
-    /// Load notebooks from storage
-    fn load_notebooks(&mut self) {
+    /// Load notebooks from storage (public method for external use)
+    pub fn load_notebooks(&mut self) {
         if let Ok(storage) = self.storage.lock() {
             match storage.list_notebooks() {
                 Ok(mut notebooks) => {
@@ -323,8 +349,8 @@ fn main() {
         }
     }
 
-    /// Load tags from storage
-    fn load_tags(&mut self) {
+    /// Load tags from storage (public method for external use)
+    pub fn load_tags(&mut self) {
         if let Ok(storage) = self.storage.lock() {
             match storage.list_tags() {
                 Ok(tags) => {

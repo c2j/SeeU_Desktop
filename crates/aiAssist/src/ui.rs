@@ -208,7 +208,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     // 设置输入框的最大宽度
                     let available_width = ui.available_width();
 
-                    let _response = ui.add(
+                    let response = ui.add(
                         egui::TextEdit::multiline(&mut state.chat_input)
                             .hint_text("输入消息...")
                             .desired_width(available_width) // 使用全部可用宽度
@@ -218,21 +218,51 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                             .interactive(!state.is_sending)
                     );
 
+                    // 获取光标位置并更新指令菜单
+                    let cursor_pos = if response.has_focus() {
+                        // 尝试获取光标在屏幕上的位置
+                        Some(response.rect.left_bottom())
+                    } else {
+                        None
+                    };
+
+                    // 更新指令菜单状态
+                    state.update_command_menu(cursor_pos);
+
                     // 处理键盘输入
                     let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let alt_pressed = ui.input(|i| i.modifiers.alt);
+                    let up_pressed = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+                    let down_pressed = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+                    let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
-                    // Alt+回车表示换行，单独的回车表示发送
-                    if !state.is_sending && enter_pressed {
+                    // 首先检查是否有指令菜单需要处理键盘输入
+                    let mut menu_handled = false;
+                    if state.command_menu.is_visible && response.has_focus() {
+                        if up_pressed {
+                            menu_handled = state.handle_command_menu_input(egui::Key::ArrowUp);
+                        } else if down_pressed {
+                            menu_handled = state.handle_command_menu_input(egui::Key::ArrowDown);
+                        } else if enter_pressed && !alt_pressed {
+                            menu_handled = state.handle_command_menu_input(egui::Key::Enter);
+                        } else if escape_pressed {
+                            menu_handled = state.handle_command_menu_input(egui::Key::Escape);
+                        }
+                    }
+
+                    // 如果菜单没有处理输入，则按正常逻辑处理
+                    if !menu_handled && !state.is_sending && enter_pressed && response.has_focus() {
                         if alt_pressed {
                             // Alt+回车：添加换行符
                             state.chat_input.push('\n');
                         } else {
-                            // 单独的回车：发送消息
-                            if let Some(cmd) = state.send_message() {
-                                // Return the slash command to be handled by the parent
-                                if let Some(callback) = &mut state.slash_command_callback {
-                                    callback(cmd);
+                            // 单独的回车：发送消息（只有在菜单不可见时）
+                            if !state.command_menu.is_visible {
+                                if let Some(cmd) = state.send_message() {
+                                    // Return the slash command to be handled by the parent
+                                    if let Some(callback) = &mut state.slash_command_callback {
+                                        callback(cmd);
+                                    }
                                 }
                             }
                         }
@@ -293,6 +323,11 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
     // 显示设置对话框
     if state.show_ai_settings {
         render_ai_settings(ui.ctx(), state);
+    }
+
+    // 显示智能指令菜单
+    if state.command_menu.is_visible {
+        render_smart_command_menu(ui.ctx(), state);
     }
 
     // 显示@命令提示框
@@ -383,6 +418,83 @@ fn render_ai_settings(ctx: &egui::Context, state: &mut AIAssistState) {
     }
 }
 
+/// 渲染智能指令菜单
+fn render_smart_command_menu(ctx: &egui::Context, state: &mut AIAssistState) {
+    use crate::state::{CommandMenuType};
+
+    if !state.command_menu.is_visible {
+        return;
+    }
+
+    let commands = match state.command_menu.menu_type {
+        CommandMenuType::AtCommands => vec![
+            ("@search", "引用最近搜索的第一条结果详细内容"),
+            ("@date", "插入当前日期"),
+            ("@time", "插入当前时间"),
+            ("@user", "引用当前用户"),
+        ],
+        CommandMenuType::SlashCommands => vec![
+            ("/search", "执行搜索"),
+            ("/clear", "清空当前会话"),
+            ("/help", "显示帮助信息"),
+            ("/new", "创建新会话"),
+        ],
+        CommandMenuType::None => return,
+    };
+
+    // 计算菜单位置
+    let menu_pos = if let Some(cursor_pos) = state.command_menu.cursor_position {
+        egui::pos2(cursor_pos.x, cursor_pos.y + 20.0) // 在光标下方显示
+    } else {
+        // 回退到屏幕中央
+        let screen_rect = ctx.screen_rect();
+        egui::pos2(screen_rect.center().x - 150.0, screen_rect.center().y)
+    };
+
+    let menu_size = egui::vec2(300.0, (commands.len() as f32 * 25.0 + 40.0).min(200.0));
+
+    egui::Window::new("指令菜单")
+        .title_bar(false)
+        .resizable(false)
+        .fixed_size(menu_size)
+        .current_pos(menu_pos)
+        .frame(egui::Frame::popup(&ctx.style()))
+        .show(ctx, |ui| {
+            ui.vertical(|ui| {
+                for (i, (command, description)) in commands.iter().enumerate() {
+                    let is_selected = i == state.command_menu.selected_index;
+
+                    // 使用不同的样式来突出显示选中项
+                    let response = if is_selected {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{} - {}", command, description))
+                                    .background_color(egui::Color32::from_rgb(100, 150, 255))
+                                    .color(egui::Color32::WHITE)
+                            )
+                            .sense(egui::Sense::click())
+                        )
+                    } else {
+                        ui.add(
+                            egui::Label::new(format!("{} - {}", command, description))
+                                .sense(egui::Sense::click())
+                        )
+                    };
+
+                    if response.clicked() {
+                        state.command_menu.selected_index = i;
+                        state.apply_selected_command();
+                    }
+
+                    // 如果是选中项，确保它在视图中可见
+                    if is_selected {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                    }
+                }
+            });
+        });
+}
+
 /// 渲染@命令提示框
 fn render_at_commands(ctx: &egui::Context, state: &mut AIAssistState) {
     let mut open = true;
@@ -406,7 +518,7 @@ fn render_at_commands(ctx: &egui::Context, state: &mut AIAssistState) {
             ui.heading("支持的@命令");
             ui.separator();
 
-            ui.label("@search - 引用最近的搜索结果");
+            ui.label("@search - 引用最近搜索的第一条结果详细内容");
             ui.label("@date - 插入当前日期");
             ui.label("@time - 插入当前时间");
             ui.label("@user - 引用当前用户");

@@ -54,6 +54,7 @@ pub fn configure_visuals(ctx: &egui::Context, theme: Theme) {
         Theme::DarkModern => {
             ctx.set_visuals(egui::Visuals {
                 dark_mode: true,
+                widgets: egui::style::Widgets::dark(),  // 使用egui的深色小部件样式
                 panel_fill: egui::Color32::from_rgb(24, 24, 27),        // Modern dark gray
                 window_fill: egui::Color32::from_rgb(39, 39, 42),       // Slightly lighter
                 faint_bg_color: egui::Color32::from_rgb(30, 30, 33),    // Subtle background
@@ -66,12 +67,13 @@ pub fn configure_visuals(ctx: &egui::Context, theme: Theme) {
                     bg_fill: egui::Color32::from_rgb(63, 81, 181),      // Modern indigo
                     stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 181, 246)),
                 },
-                ..Default::default()
+                ..egui::Visuals::dark()  // 使用深色主题的其他默认值
             });
         },
         Theme::LightModern => {
             ctx.set_visuals(egui::Visuals {
                 dark_mode: false,
+                widgets: egui::style::Widgets::light(),  // 使用egui的浅色小部件样式
                 panel_fill: egui::Color32::from_rgb(248, 249, 250),     // Modern light gray
                 window_fill: egui::Color32::from_rgb(255, 255, 255),    // Pure white
                 faint_bg_color: egui::Color32::from_rgb(243, 244, 246), // Very light gray
@@ -84,13 +86,14 @@ pub fn configure_visuals(ctx: &egui::Context, theme: Theme) {
                     bg_fill: egui::Color32::from_rgb(227, 242, 253),    // Light blue
                     stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(25, 118, 210)),
                 },
-                ..Default::default()
+                ..egui::Visuals::light()  // 使用浅色主题的其他默认值
             });
         },
         // Legacy themes for backward compatibility
         Theme::Dark => {
             ctx.set_visuals(egui::Visuals {
                 dark_mode: true,
+                widgets: egui::style::Widgets::dark(),  // 使用egui的深色小部件样式
                 panel_fill: egui::Color32::from_rgb(30, 30, 30),
                 window_fill: egui::Color32::from_rgb(40, 40, 40),
                 faint_bg_color: egui::Color32::from_rgb(35, 35, 35),
@@ -99,12 +102,13 @@ pub fn configure_visuals(ctx: &egui::Context, theme: Theme) {
                 warn_fg_color: egui::Color32::from_rgb(255, 143, 0),
                 error_fg_color: egui::Color32::from_rgb(255, 0, 0),
                 hyperlink_color: egui::Color32::from_rgb(90, 170, 255),
-                ..Default::default()
+                ..egui::Visuals::dark()  // 使用深色主题的其他默认值
             });
         },
         Theme::Light => {
             ctx.set_visuals(egui::Visuals {
                 dark_mode: false,
+                widgets: egui::style::Widgets::light(),  // 使用egui的浅色小部件样式
                 panel_fill: egui::Color32::from_rgb(240, 240, 240),
                 window_fill: egui::Color32::from_rgb(250, 250, 250),
                 faint_bg_color: egui::Color32::from_rgb(235, 235, 235),
@@ -113,7 +117,7 @@ pub fn configure_visuals(ctx: &egui::Context, theme: Theme) {
                 warn_fg_color: egui::Color32::from_rgb(230, 130, 0),
                 error_fg_color: egui::Color32::from_rgb(230, 0, 0),
                 hyperlink_color: egui::Color32::from_rgb(0, 120, 255),
-                ..Default::default()
+                ..egui::Visuals::light()  // 使用浅色主题的其他默认值
             });
         }
     }

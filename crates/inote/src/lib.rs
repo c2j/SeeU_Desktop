@@ -457,15 +457,8 @@ pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
 /// Render the iNote module with SQLite storage and sidebar information
 pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteState, right_sidebar_open: bool) {
-    // Initialize state if needed
-    if state.notebooks.is_empty() && state.notes.is_empty() && state.tags.is_empty() {
-        state.initialize();
-    }
-
-    // Create a default notebook if none exists
-    if state.notebooks.is_empty() {
-        state.create_notebook("默认笔记本".to_string(), "默认笔记本".to_string());
-    }
+    // Ensure data is loaded when needed (lazy loading)
+    state.ensure_data_loaded();
 
 
 
@@ -548,7 +541,7 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
             // 在Linux下减少间距以解决100px间隔问题
             #[cfg(target_os = "linux")]
             {
-                side_panel = side_panel.frame(egui::Frame::none().inner_margin(egui::Margin::same(0.0)));
+                side_panel = side_panel.frame(egui::Frame::none().inner_margin(egui::Margin::same(0)));
             }
 
             side_panel.show_inside(ui, |ui| {
