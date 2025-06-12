@@ -219,9 +219,14 @@ impl SeeUApp {
         // Create states
         let mut inote_state = DbINoteState::default();
         let mut isearch_state = ISearchState::default();
-        let ai_assist_state = aiAssist::initialize();
+        let mut ai_assist_state = aiAssist::initialize();
         let mut itools_state = itools::initialize();
         let iterminal_state = iterminal::initialize();
+
+        // Load AI assistant chat sessions
+        if let Err(err) = aiAssist::load_chat_sessions(&mut ai_assist_state) {
+            log::warn!("Failed to load AI assistant chat sessions: {}", err);
+        }
 
         // Initialize states based on configuration
         // Note: We'll initialize these asynchronously to avoid blocking the UI
@@ -313,6 +318,12 @@ impl SeeUApp {
             match cmd {
                 aiAssist::SlashCommand::Search(query) => {
                     let _ = tx_clone.send(AppCommand::Search(query.clone()));
+                },
+                // 其他命令已在AI助手内部处理，不需要发送到应用层
+                aiAssist::SlashCommand::Clear |
+                aiAssist::SlashCommand::New |
+                aiAssist::SlashCommand::Help => {
+                    // 这些命令已在AI助手内部处理
                 }
             }
         });
@@ -999,6 +1010,11 @@ impl SeeUApp {
         // Save AI assistant settings
         if let Err(err) = aiAssist::save_settings(&self.ai_assist_state) {
             log::error!("Failed to save AI assistant settings: {}", err);
+        }
+
+        // Save AI assistant chat sessions
+        if let Err(err) = aiAssist::save_chat_sessions(&self.ai_assist_state) {
+            log::error!("Failed to save AI assistant chat sessions: {}", err);
         }
 
         // Save search module settings

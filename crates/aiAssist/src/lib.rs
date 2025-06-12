@@ -84,6 +84,29 @@ pub fn save_settings(state: &AIAssistState) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+/// Save AI assistant chat sessions
+pub fn save_chat_sessions(state: &AIAssistState) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs;
+    use serde_json;
+
+    let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let data_dir = base_path.join("seeu_desktop").join("ai_assistant");
+    let sessions_path = data_dir.join("chat_sessions.json");
+
+    fs::create_dir_all(&data_dir)?;
+
+    let sessions_data = serde_json::json!({
+        "sessions": state.chat_sessions,
+        "active_session_idx": state.active_session_idx
+    });
+
+    let json = serde_json::to_string_pretty(&sessions_data)?;
+    fs::write(sessions_path, json)?;
+
+    log::info!("AI assistant chat sessions saved successfully");
+    Ok(())
+}
+
 /// Load AI assistant settings
 pub fn load_settings(state: &mut AIAssistState) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
@@ -115,6 +138,58 @@ pub fn load_settings(state: &mut AIAssistState) -> Result<(), Box<dyn std::error
 
             log::info!("AI assistant settings loaded successfully");
         }
+    }
+
+    Ok(())
+}
+
+/// Load AI assistant chat sessions
+pub fn load_chat_sessions(state: &mut AIAssistState) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs;
+    use serde_json;
+    use crate::state::{ChatSession, ChatMessage, MessageRole};
+    use chrono::{DateTime, Utc};
+    use uuid::Uuid;
+
+    let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let data_dir = base_path.join("seeu_desktop").join("ai_assistant");
+    let sessions_path = data_dir.join("chat_sessions.json");
+
+    if let Ok(content) = fs::read_to_string(sessions_path) {
+        if let Ok(sessions_data) = serde_json::from_str::<serde_json::Value>(&content) {
+            // Load sessions
+            if let Some(sessions_array) = sessions_data.get("sessions").and_then(|v| v.as_array()) {
+                let mut loaded_sessions = Vec::new();
+
+                for session_value in sessions_array {
+                    if let Ok(session) = serde_json::from_value::<ChatSession>(session_value.clone()) {
+                        loaded_sessions.push(session);
+                    }
+                }
+
+                // Only replace sessions if we successfully loaded some
+                if !loaded_sessions.is_empty() {
+                    state.chat_sessions = loaded_sessions;
+
+                    // Load active session index
+                    if let Some(active_idx) = sessions_data.get("active_session_idx").and_then(|v| v.as_u64()) {
+                        let idx = active_idx as usize;
+                        if idx < state.chat_sessions.len() {
+                            state.active_session_idx = idx;
+                        }
+                    }
+
+                    // Update current chat messages to match active session
+                    if let Some(active_session) = state.chat_sessions.get(state.active_session_idx) {
+                        state.chat_messages = active_session.messages.clone();
+                    }
+
+                    log::info!("AI assistant chat sessions loaded successfully: {} sessions", state.chat_sessions.len());
+                }
+            }
+        }
+    } else {
+        log::info!("No existing chat sessions found, using default session");
     }
 
     Ok(())

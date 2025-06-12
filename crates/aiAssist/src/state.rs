@@ -167,42 +167,75 @@ impl AIAssistState {
             None
         };
 
-        // If it's a slash command that should be handled externally, return it
+        // Handle slash commands
         if let Some(cmd) = &slash_command {
-            if matches!(cmd, SlashCommand::Search(_)) {
-                // Create a user message showing the command
-                let user_message = ChatMessage {
-                    id: Uuid::new_v4(),
-                    role: MessageRole::User,
-                    content: self.chat_input.clone(),
-                    timestamp: Utc::now(),
-                    attachments: vec![],
-                };
+            match cmd {
+                SlashCommand::Search(_) => {
+                    // Create a user message showing the command
+                    let user_message = ChatMessage {
+                        id: Uuid::new_v4(),
+                        role: MessageRole::User,
+                        content: self.chat_input.clone(),
+                        timestamp: Utc::now(),
+                        attachments: vec![],
+                    };
 
-                // Add the message to the current session
-                if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
-                    // 检查是否是该会话的第一条用户消息
-                    let is_first_user_message = session.messages.iter()
-                        .filter(|msg| msg.role == MessageRole::User)
-                        .count() == 0;
+                    // Add the message to the current session
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        // 检查是否是该会话的第一条用户消息
+                        let is_first_user_message = session.messages.iter()
+                            .filter(|msg| msg.role == MessageRole::User)
+                            .count() == 0;
 
-                    // 如果是第一条用户消息，更新会话名称为消息摘要
-                    if is_first_user_message {
-                        // 获取消息摘要（最多12个字符）
-                        let summary = Self::get_message_summary(&user_message.content, 12);
-                        session.name = summary;
+                        // 如果是第一条用户消息，更新会话名称为消息摘要
+                        if is_first_user_message {
+                            // 获取消息摘要（最多12个字符）
+                            let summary = Self::get_message_summary(&user_message.content, 12);
+                            session.name = summary;
+                        }
+
+                        session.messages.push(user_message.clone());
                     }
 
-                    session.messages.push(user_message.clone());
+                    // Add the message to the current chat
+                    self.chat_messages.push(user_message);
+
+                    // Clear the input
+                    self.chat_input.clear();
+
+                    return slash_command;
+                },
+                SlashCommand::Clear => {
+                    self.clear_current_session();
+                    self.chat_input.clear();
+                    return None;
+                },
+                SlashCommand::New => {
+                    self.create_new_session();
+                    self.chat_input.clear();
+                    return None;
+                },
+                SlashCommand::Help => {
+                    // Add a help message to the current chat
+                    let help_message = ChatMessage {
+                        id: Uuid::new_v4(),
+                        role: MessageRole::System,
+                        content: "可用的斜杠命令:\n/search [查询] - 执行搜索\n/clear - 清空当前会话\n/new - 创建新会话\n/help - 显示此帮助信息".to_string(),
+                        timestamp: Utc::now(),
+                        attachments: vec![],
+                    };
+
+                    self.chat_messages.push(help_message.clone());
+
+                    // Add to current session
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        session.messages.push(help_message);
+                    }
+
+                    self.chat_input.clear();
+                    self.auto_save_sessions();
+                    return None;
                 }
-
-                // Add the message to the current chat
-                self.chat_messages.push(user_message);
-
-                // Clear the input
-                self.chat_input.clear();
-
-                return slash_command;
             }
         }
 
@@ -238,6 +271,9 @@ impl AIAssistState {
         // Clear the input
         self.chat_input.clear();
 
+        // Auto-save sessions after adding a message
+        self.auto_save_sessions();
+
         // Mark as sending
         self.is_sending = true;
 
@@ -263,6 +299,9 @@ impl AIAssistState {
                     Some(SlashCommand::Search(String::new()))
                 }
             },
+            "/clear" => Some(SlashCommand::Clear),
+            "/new" => Some(SlashCommand::New),
+            "/help" => Some(SlashCommand::Help),
             _ => None
         }
     }
@@ -448,6 +487,9 @@ impl AIAssistState {
         self.streaming_message_id = None;
         self.streaming_content.clear();
         self.current_request_id = None;
+
+        // Auto-save sessions after completing a response
+        self.auto_save_sessions();
     }
 
     /// Check for updates from async tasks
@@ -504,6 +546,9 @@ impl AIAssistState {
         self.chat_sessions.push(new_session);
         self.active_session_idx = self.chat_sessions.len() - 1;
         self.chat_messages = self.chat_sessions[self.active_session_idx].messages.clone();
+
+        // Auto-save sessions after creating a new session
+        self.auto_save_sessions();
     }
 
     /// Switch to a different chat session
@@ -511,6 +556,9 @@ impl AIAssistState {
         if idx < self.chat_sessions.len() {
             self.active_session_idx = idx;
             self.chat_messages = self.chat_sessions[idx].messages.clone();
+
+            // Auto-save sessions after switching
+            self.auto_save_sessions();
         }
     }
 
@@ -565,6 +613,84 @@ impl AIAssistState {
     /// 更新是否可以插入到笔记的状态
     pub fn update_can_insert_to_note(&mut self, can_insert: bool) {
         self.can_insert_to_note = can_insert;
+    }
+
+    /// Save current chat sessions to persistent storage
+    pub fn save_sessions(&self) -> Result<(), Box<dyn std::error::Error>> {
+        crate::save_chat_sessions(self)
+    }
+
+    /// Auto-save sessions after important operations
+    pub fn auto_save_sessions(&self) {
+        if let Err(err) = self.save_sessions() {
+            log::error!("Failed to auto-save chat sessions: {}", err);
+        }
+    }
+
+    /// Delete a chat session
+    pub fn delete_session(&mut self, idx: usize) {
+        if idx < self.chat_sessions.len() && self.chat_sessions.len() > 1 {
+            self.chat_sessions.remove(idx);
+
+            // Adjust active session index
+            if self.active_session_idx >= self.chat_sessions.len() {
+                self.active_session_idx = self.chat_sessions.len() - 1;
+            } else if self.active_session_idx > idx {
+                self.active_session_idx -= 1;
+            }
+
+            // Update current chat messages
+            if let Some(active_session) = self.chat_sessions.get(self.active_session_idx) {
+                self.chat_messages = active_session.messages.clone();
+            }
+
+            // Auto-save after deletion
+            self.auto_save_sessions();
+        }
+    }
+
+    /// Rename a chat session
+    pub fn rename_session(&mut self, idx: usize, new_name: String) {
+        if idx < self.chat_sessions.len() {
+            self.chat_sessions[idx].name = new_name;
+
+            // Auto-save after renaming
+            self.auto_save_sessions();
+        }
+    }
+
+    /// Clear current chat session (keep only the initial assistant message)
+    pub fn clear_current_session(&mut self) {
+        if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+            // Keep only the initial assistant message
+            let initial_message = ChatMessage {
+                id: Uuid::new_v4(),
+                role: MessageRole::Assistant,
+                content: "你好！我是SeeU智能助手，有什么我可以帮助你的吗？".to_string(),
+                timestamp: Utc::now(),
+                attachments: vec![],
+            };
+
+            session.messages = vec![initial_message.clone()];
+            self.chat_messages = vec![initial_message];
+
+            // Auto-save after clearing
+            self.auto_save_sessions();
+        }
+    }
+
+    /// Get session count
+    pub fn get_session_count(&self) -> usize {
+        self.chat_sessions.len()
+    }
+
+    /// Get current session name
+    pub fn get_current_session_name(&self) -> String {
+        if let Some(session) = self.chat_sessions.get(self.active_session_idx) {
+            session.name.clone()
+        } else {
+            "未知会话".to_string()
+        }
     }
 
     /// 获取消息摘要，截取指定长度的字符
@@ -784,6 +910,9 @@ pub enum AttachmentType {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SlashCommand {
     Search(String),
+    Clear,
+    New,
+    Help,
 }
 
 // 移除ProviderType，统一使用OpenAI compatible格式

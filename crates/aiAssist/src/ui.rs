@@ -56,21 +56,53 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                 if state.show_history_dropdown {
                     egui::Frame::NONE
                         .fill(ui.style().visuals.window_fill)
+                        .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
                         .show(ui, |ui| {
-                            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                                 let mut selected_idx = None;
+                                let mut delete_idx = None;
 
                                 for (idx, session) in state.chat_sessions.iter().enumerate() {
                                     let is_active = idx == state.active_session_idx;
-                                    if ui.selectable_label(is_active, &session.name).clicked() {
-                                        selected_idx = Some(idx);
-                                    }
+
+                                    ui.horizontal(|ui| {
+                                        // Session name (clickable)
+                                        let session_response = ui.selectable_label(is_active, &session.name);
+                                        if session_response.clicked() {
+                                            selected_idx = Some(idx);
+                                        }
+
+                                        // Show session creation time on hover
+                                        if session_response.hovered() {
+                                            session_response.on_hover_text(format!(
+                                                "创建时间: {}\n消息数量: {}",
+                                                session.created_at.format("%Y-%m-%d %H:%M"),
+                                                session.messages.len()
+                                            ));
+                                        }
+
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            // Delete button (only show if more than one session)
+                                            if state.chat_sessions.len() > 1 {
+                                                if ui.small_button("🗑").clicked() {
+                                                    delete_idx = Some(idx);
+                                                }
+                                            }
+                                        });
+                                    });
+
+                                    ui.separator();
                                 }
 
                                 // Handle session selection outside the loop to avoid borrowing issues
                                 if let Some(idx) = selected_idx {
                                     state.switch_session(idx);
                                     state.show_history_dropdown = false;
+                                }
+
+                                // Handle session deletion
+                                if let Some(idx) = delete_idx {
+                                    state.delete_session(idx);
                                 }
                             });
                         });
