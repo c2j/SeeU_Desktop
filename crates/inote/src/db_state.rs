@@ -310,8 +310,8 @@ fn main() {
         }
     }
 
-    /// Load notes for a notebook
-    fn load_notes_for_notebook(&mut self, notebook_id: &str) {
+    /// Load notes for a notebook (public method for external use)
+    pub fn load_notes_for_notebook(&mut self, notebook_id: &str) {
         // Check if notes for this notebook are already loaded
         let notebook_notes_loaded = self.notes.values()
             .any(|note| self.notebooks.iter().any(|nb| nb.id == notebook_id &&
@@ -947,6 +947,28 @@ fn main() {
     /// Get tag by ID
     pub fn get_tag(&self, tag_id: &str) -> Option<&Tag> {
         self.tags.iter().find(|tag| tag.id == tag_id)
+    }
+
+    /// Get current search terms for highlighting
+    pub fn get_search_terms(&self) -> Vec<String> {
+        if !self.is_searching || self.search_query.is_empty() {
+            return Vec::new();
+        }
+
+        // Handle tag search - extract tag name for highlighting
+        if self.search_query.starts_with("标签: ") {
+            let tag_name = self.search_query[6..].trim();
+            if !tag_name.is_empty() {
+                return vec![tag_name.to_string()];
+            }
+        }
+
+        // For regular search, extract search terms using simple splitting
+        self.search_query
+            .split_whitespace()
+            .filter(|term| term.len() > 2)
+            .map(|term| term.to_lowercase())
+            .collect()
     }
 
     /// Get tags for a note

@@ -4,6 +4,119 @@ use crate::db_state::DbINoteState;
 use crate::hex_to_color32;
 use crate::siyuan_import::SiyuanImporter;
 
+/// Create a highlighted layout job for text editor with search terms
+fn create_highlighted_layout_job(
+    text: &str,
+    search_terms: &[String],
+    wrap_width: f32,
+    ui: &egui::Ui,
+) -> egui::text::LayoutJob {
+    use egui::{text::LayoutJob, Color32, FontId, TextFormat};
+
+    if search_terms.is_empty() {
+        // No search terms, create normal layout
+        let mut layout_job = LayoutJob::default();
+        let text_format = TextFormat {
+            font_id: FontId::monospace(14.0),
+            color: ui.visuals().text_color(),
+            ..Default::default()
+        };
+        layout_job.wrap.max_width = wrap_width;
+        layout_job.append(text, 0.0, text_format);
+        return layout_job;
+    }
+
+    // Convert to character vector for safe indexing
+    let chars: Vec<char> = text.chars().collect();
+    let text_lower = text.to_lowercase();
+    let text_lower_chars: Vec<char> = text_lower.chars().collect();
+
+    let mut highlighted_ranges = Vec::new();
+
+    // Find all matches
+    for term in search_terms {
+        let term_lower = term.to_lowercase();
+        let term_chars: Vec<char> = term_lower.chars().collect();
+
+        if term_chars.is_empty() {
+            continue;
+        }
+
+        let mut start = 0;
+        while start + term_chars.len() <= text_lower_chars.len() {
+            // Check if term matches at current position
+            let mut matches = true;
+            for (i, &term_char) in term_chars.iter().enumerate() {
+                if text_lower_chars[start + i] != term_char {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if matches {
+                // Check if this range overlaps with existing highlights
+                let range = (start, start + term_chars.len());
+                let overlaps = highlighted_ranges.iter().any(|&(existing_start, existing_end)| {
+                    range.0 < existing_end && range.1 > existing_start
+                });
+
+                if !overlaps {
+                    highlighted_ranges.push(range);
+                }
+
+                start += term_chars.len();
+            } else {
+                start += 1;
+            }
+        }
+    }
+
+    // Sort ranges by start position
+    highlighted_ranges.sort_by_key(|&(start, _)| start);
+
+    // Create LayoutJob with highlighting
+    let mut layout_job = LayoutJob::default();
+    layout_job.wrap.max_width = wrap_width;
+    let mut last_end = 0;
+
+    // Default text format
+    let normal_format = TextFormat {
+        font_id: FontId::monospace(14.0),
+        color: ui.visuals().text_color(),
+        ..Default::default()
+    };
+
+    // Highlighted text format
+    let highlight_format = TextFormat {
+        font_id: FontId::monospace(14.0),
+        color: Color32::BLACK,
+        background: Color32::YELLOW,
+        ..Default::default()
+    };
+
+    for (start, end) in highlighted_ranges {
+        // Add normal text before highlight
+        if start > last_end {
+            let normal_text: String = chars[last_end..start].iter().collect();
+            layout_job.append(&normal_text, 0.0, normal_format.clone());
+        }
+
+        // Add highlighted text
+        let highlighted_text: String = chars[start..end].iter().collect();
+        layout_job.append(&highlighted_text, 0.0, highlight_format.clone());
+
+        last_end = end;
+    }
+
+    // Add remaining normal text
+    if last_end < chars.len() {
+        let remaining_text: String = chars[last_end..].iter().collect();
+        layout_job.append(&remaining_text, 0.0, normal_format);
+    }
+
+    layout_job
+}
+
 /// Render the notebook list
 // pub fn render_notebook_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
     // ui.horizontal(|ui| {
@@ -423,13 +536,14 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
         // Note content - either editor or preview
         if state.markdown_preview {
-            // Markdown preview
+            // Markdown preview with search highlighting
+            let search_terms = state.get_search_terms();
             egui::ScrollArea::vertical()
                 .id_salt("markdown_preview_scroll")
                 .max_height(editor_height)
                 .show(ui, |ui| {
                     ui.add_space(10.0);
-                    crate::markdown::render_markdown(ui, &state.note_content);
+                    crate::markdown::render_markdown_with_highlight(ui, &state.note_content, &search_terms);
                     ui.add_space(10.0);
                 });
         } else {
@@ -438,6 +552,9 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 .id_salt("editor_scroll")
                 .max_height(editor_height)
                 .show(ui, |ui| {
+                    // 获取搜索关键字（在创建 layouter 之前）
+                    let search_terms = state.get_search_terms();
+
                     // 设置等宽字体，确保中英文宽度比例为1:2
                     let mut text_edit = egui::TextEdit::multiline(&mut state.note_content)
                         .desired_width(f32::INFINITY)
@@ -453,25 +570,31 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                         font_id.size = 14.0; // 设置等宽字体大小
                     });
 
-                    // 自定义字体渲染 - 使用简单的方法处理文本
+                    // 自定义字体渲染 - 支持搜索高亮
                     let mut layouter = move |ui: &egui::Ui, text: &str, wrap_width: f32| {
-                        // 创建一个简单的布局作业
-                        let mut layout_job = egui::text::LayoutJob::default();
+                        // 如果有搜索关键字，创建高亮布局
+                        if !search_terms.is_empty() {
+                            let layout_job = create_highlighted_layout_job(text, &search_terms, wrap_width, ui);
+                            ui.fonts(|f| f.layout_job(layout_job))
+                        } else {
+                            // 创建一个简单的布局作业
+                            let mut layout_job = egui::text::LayoutJob::default();
 
-                        // 设置基本字体格式
-                        let text_format = egui::TextFormat {
-                            font_id: egui::FontId::monospace(14.0),
-                            color: ui.visuals().text_color(),
-                            ..Default::default()
-                        };
+                            // 设置基本字体格式
+                            let text_format = egui::TextFormat {
+                                font_id: egui::FontId::monospace(14.0),
+                                color: ui.visuals().text_color(),
+                                ..Default::default()
+                            };
 
-                        // 设置换行属性
-                        layout_job.wrap.max_width = wrap_width;
+                            // 设置换行属性
+                            layout_job.wrap.max_width = wrap_width;
 
-                        // 直接添加整个文本，让字体系统处理字符宽度
-                        layout_job.append(text, 0.0, text_format);
+                            // 直接添加整个文本，让字体系统处理字符宽度
+                            layout_job.append(text, 0.0, text_format);
 
-                        ui.fonts(|f| f.layout_job(layout_job))
+                            ui.fonts(|f| f.layout_job(layout_job))
+                        }
                     };
 
                     text_edit = text_edit.layouter(&mut layouter);

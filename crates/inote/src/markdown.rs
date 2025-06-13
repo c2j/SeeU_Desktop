@@ -22,6 +22,11 @@ pub fn markdown_to_html(markdown: &str) -> String {
 
 /// Render markdown text directly to egui
 pub fn render_markdown(ui: &mut Ui, markdown: &str) {
+    render_markdown_with_highlight(ui, markdown, &[]);
+}
+
+/// Render markdown text directly to egui with search term highlighting
+pub fn render_markdown_with_highlight(ui: &mut Ui, markdown: &str, search_terms: &[String]) {
     // Set up options and parser
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -32,9 +37,8 @@ pub fn render_markdown(ui: &mut Ui, markdown: &str) {
     let parser = Parser::new_ext(markdown, options);
 
     // Process markdown events and render them
-    let mut renderer = MarkdownRenderer::new(ui);
+    let mut renderer = MarkdownRenderer::new(ui, search_terms);
     renderer.render(parser);
-
 }
 
 /// Table cell content with formatting information
@@ -108,10 +112,11 @@ struct MarkdownRenderer<'a> {
     current_cell: MarkdownTableCell,
     is_table_header: bool,
     table_counter: usize,
+    search_terms: Vec<String>,
 }
 
 impl<'a> MarkdownRenderer<'a> {
-    fn new(ui: &'a mut Ui) -> Self {
+    fn new(ui: &'a mut Ui, search_terms: &[String]) -> Self {
         Self {
             ui,
             current_text: String::new(),
@@ -128,6 +133,7 @@ impl<'a> MarkdownRenderer<'a> {
             current_cell: MarkdownTableCell::new(),
             is_table_header: false,
             table_counter: 0,
+            search_terms: search_terms.to_vec(),
         }
     }
 
@@ -297,10 +303,94 @@ impl<'a> MarkdownRenderer<'a> {
     }
 
     fn render_text(&mut self, text: &str) {
-        let mut rich_text = egui::RichText::new(text);
+        // If we have search terms, create highlighted layout job
+        if !self.search_terms.is_empty() {
+            let layout_job = self.create_highlighted_text_layout(text);
+            self.ui.add(egui::Label::new(layout_job));
+        } else {
+            let mut rich_text = egui::RichText::new(text);
 
-        // Apply formatting
-        if self.is_heading {
+            // Apply formatting
+            if self.is_heading {
+                let size = match self.heading_level {
+                    1 => 24.0,
+                    2 => 20.0,
+                    3 => 18.0,
+                    4 => 16.0,
+                    _ => 14.0,
+                };
+                rich_text = rich_text.size(size).color(Color32::from_rgb(60, 120, 216));
+            }
+
+            if self.is_bold {
+                rich_text = rich_text.strong();
+            }
+
+            if self.is_code {
+                rich_text = rich_text.monospace().background_color(Color32::from_rgb(240, 240, 240));
+            }
+
+            self.ui.add(egui::Label::new(rich_text));
+        }
+    }
+
+    fn create_highlighted_text_layout(&self, text: &str) -> LayoutJob {
+        use egui::{text::LayoutJob, Color32, FontId, TextFormat};
+
+        // Convert to character vector for safe indexing
+        let chars: Vec<char> = text.chars().collect();
+        let text_lower = text.to_lowercase();
+        let text_lower_chars: Vec<char> = text_lower.chars().collect();
+
+        let mut highlighted_ranges = Vec::new();
+
+        // Find all matches
+        for term in &self.search_terms {
+            let term_lower = term.to_lowercase();
+            let term_chars: Vec<char> = term_lower.chars().collect();
+
+            if term_chars.is_empty() {
+                continue;
+            }
+
+            let mut start = 0;
+            while start + term_chars.len() <= text_lower_chars.len() {
+                // Check if term matches at current position
+                let mut matches = true;
+                for (i, &term_char) in term_chars.iter().enumerate() {
+                    if text_lower_chars[start + i] != term_char {
+                        matches = false;
+                        break;
+                    }
+                }
+
+                if matches {
+                    // Check if this range overlaps with existing highlights
+                    let range = (start, start + term_chars.len());
+                    let overlaps = highlighted_ranges.iter().any(|&(existing_start, existing_end)| {
+                        range.0 < existing_end && range.1 > existing_start
+                    });
+
+                    if !overlaps {
+                        highlighted_ranges.push(range);
+                    }
+
+                    start += term_chars.len();
+                } else {
+                    start += 1;
+                }
+            }
+        }
+
+        // Sort ranges by start position
+        highlighted_ranges.sort_by_key(|&(start, _)| start);
+
+        // Create LayoutJob with highlighting
+        let mut layout_job = LayoutJob::default();
+        let mut last_end = 0;
+
+        // Determine base font size and style
+        let (font_size, text_color) = if self.is_heading {
             let size = match self.heading_level {
                 1 => 24.0,
                 2 => 20.0,
@@ -308,18 +398,59 @@ impl<'a> MarkdownRenderer<'a> {
                 4 => 16.0,
                 _ => 14.0,
             };
-            rich_text = rich_text.size(size).color(Color32::from_rgb(60, 120, 216));
-        }
+            (size, Color32::from_rgb(60, 120, 216))
+        } else {
+            (14.0, Color32::from_gray(200))
+        };
+
+        // Default text format
+        let mut normal_format = TextFormat {
+            font_id: if self.is_code {
+                FontId::monospace(font_size)
+            } else {
+                FontId::default()
+            },
+            color: text_color,
+            ..Default::default()
+        };
 
         if self.is_bold {
-            rich_text = rich_text.strong();
+            // Note: egui doesn't have a direct bold font, but we can use strong style
         }
 
         if self.is_code {
-            rich_text = rich_text.monospace().background_color(Color32::from_rgb(240, 240, 240));
+            normal_format.background = Color32::from_rgb(240, 240, 240);
         }
 
-        self.ui.add(egui::Label::new(rich_text));
+        // Highlighted text format
+        let highlight_format = TextFormat {
+            font_id: normal_format.font_id.clone(),
+            color: Color32::BLACK,
+            background: Color32::YELLOW,
+            ..Default::default()
+        };
+
+        for (start, end) in highlighted_ranges {
+            // Add normal text before highlight
+            if start > last_end {
+                let normal_text: String = chars[last_end..start].iter().collect();
+                layout_job.append(&normal_text, 0.0, normal_format.clone());
+            }
+
+            // Add highlighted text
+            let highlighted_text: String = chars[start..end].iter().collect();
+            layout_job.append(&highlighted_text, 0.0, highlight_format.clone());
+
+            last_end = end;
+        }
+
+        // Add remaining normal text
+        if last_end < chars.len() {
+            let remaining_text: String = chars[last_end..].iter().collect();
+            layout_job.append(&remaining_text, 0.0, normal_format);
+        }
+
+        layout_job
     }
 
     fn render_link(&mut self, text: &str, url: &str) {

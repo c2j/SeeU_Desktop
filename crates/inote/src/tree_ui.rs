@@ -34,9 +34,14 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
             ui.horizontal(|ui| {
                 // 展开/折叠图标
                 if ui.button(if notebook.expanded { "▼" } else { "▶" }).clicked() {
-                    // 切换展开状态
+                    // 切换展开状态并加载笔记
                     if let Some(nb) = state.notebooks.get_mut(notebook_idx) {
                         nb.toggle_expanded();
+                        // 如果展开了，加载该笔记本的笔记
+                        if nb.expanded {
+                            let notebook_id = nb.id.clone();
+                            state.load_notes_for_notebook(&notebook_id);
+                        }
                     }
                 }
 
@@ -46,6 +51,14 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
                     state.select_notebook(notebook_idx);
                     // 选择笔记本时清除当前笔记选择
                     state.current_note = None;
+                    // 选择笔记本时自动展开并加载笔记
+                    if let Some(nb) = state.notebooks.get_mut(notebook_idx) {
+                        if !nb.expanded {
+                            nb.expanded = true;
+                            let notebook_id = nb.id.clone();
+                            state.load_notes_for_notebook(&notebook_id);
+                        }
+                    }
                 }
 
                 // 删除按钮
