@@ -24,6 +24,29 @@ pub struct DbStorageManager {
 type DbConnection = PooledConnection<SqliteConnectionManager>;
 
 impl DbStorageManager {
+    /// Create a placeholder storage manager (will be initialized later)
+    pub fn new_placeholder() -> Self {
+        // Create a minimal in-memory database for placeholder
+        let manager = SqliteConnectionManager::memory();
+        let pool = Pool::new(manager).expect("Failed to create placeholder pool");
+        Self {
+            pool,
+            db_path: PathBuf::from(":placeholder:")
+        }
+    }
+
+    /// Create a new storage manager with in-memory database (for testing)
+    pub fn new_memory() -> Result<Self, Box<dyn std::error::Error>> {
+        let manager = SqliteConnectionManager::memory();
+        let pool = Pool::new(manager)?;
+        let storage = Self {
+            pool,
+            db_path: PathBuf::from(":memory:")
+        };
+        storage.init_database()?;
+        Ok(storage)
+    }
+
     /// Create a new storage manager
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // Get database path
@@ -49,6 +72,44 @@ impl DbStorageManager {
         Ok(storage)
     }
 
+    /// Initialize storage asynchronously (replaces placeholder)
+    pub fn initialize_async(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Only initialize if this is a placeholder
+        if self.db_path.to_string_lossy() == ":placeholder:" {
+            // Get database path
+            let mut db_path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+            db_path.push("seeu_desktop");
+            db_path.push("inote");
+
+            // Create directories if they don't exist
+            std::fs::create_dir_all(&db_path)?;
+
+            db_path.push("inote.db");
+
+            log::info!("Initializing database asynchronously: {}", db_path.display());
+
+            // Create connection manager
+            let manager = SqliteConnectionManager::file(&db_path);
+            let pool = Pool::new(manager)?;
+
+            // Replace placeholder with real database
+            self.pool = pool;
+            self.db_path = db_path;
+
+            // Initialize database
+            self.init_database()?;
+
+            log::info!("Database initialized successfully");
+        }
+
+        Ok(())
+    }
+
+    /// Check if this is a placeholder storage
+    pub fn is_placeholder(&self) -> bool {
+        self.db_path.to_string_lossy() == ":placeholder:"
+    }
+
     /// Get a database connection from the pool
     fn get_connection(&self) -> Result<DbConnection, Box<dyn std::error::Error>> {
         Ok(self.pool.get()?)
@@ -70,7 +131,6 @@ impl DbStorageManager {
             ],
         )?;
 
-        log::info!("Notebook saved: {}", notebook.id);
         Ok(())
     }
 
@@ -126,6 +186,11 @@ impl DbStorageManager {
 
     /// List all notebooks
     pub fn list_notebooks(&self) -> Result<Vec<Notebook>, Box<dyn std::error::Error>> {
+        // Return empty list if this is a placeholder
+        if self.is_placeholder() {
+            return Ok(Vec::new());
+        }
+
         let conn = self.get_connection()?;
         let mut notebooks = Vec::new();
 
@@ -216,10 +281,31 @@ impl DbStorageManager {
             )?;
         }
 
+        // Delete existing attachments
+        tx.execute(
+            "DELETE FROM attachments WHERE note_id = ?",
+            params![note.id],
+        )?;
+
+        // Add attachments
+        for attachment in &note.attachments {
+            tx.execute(
+                "INSERT INTO attachments (id, note_id, name, file_path, file_type, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![
+                    attachment.id,
+                    note.id,
+                    attachment.name,
+                    attachment.file_path,
+                    attachment.file_type,
+                    attachment.created_at.to_rfc3339()
+                ],
+            )?;
+        }
+
         // Commit transaction
         tx.commit()?;
 
-        log::info!("Note saved: {}", note.id);
         Ok(())
     }
 
@@ -252,7 +338,7 @@ impl DbStorageManager {
                     created_at,
                     updated_at,
                     tag_ids: Vec::new(),
-                    attachments: Vec::new(), // Attachments not implemented yet
+                    attachments: Vec::new(),
                 };
 
                 // Load tag IDs for this note
@@ -264,6 +350,11 @@ impl DbStorageManager {
 
                 for tag_id in tag_ids_iter {
                     note.tag_ids.push(tag_id?);
+                }
+
+                // Load attachments for this note
+                if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                    log::error!("Error loading attachments for note {}: {}", note.id, err);
                 }
 
                 Ok(note)
@@ -295,7 +386,6 @@ impl DbStorageManager {
         // Commit transaction
         tx.commit()?;
 
-        log::info!("Note deleted: {}", id);
         Ok(())
     }
 
@@ -314,7 +404,6 @@ impl DbStorageManager {
             ],
         )?;
 
-        log::info!("Tag saved: {}", tag.id);
         Ok(())
     }
 
@@ -349,6 +438,11 @@ impl DbStorageManager {
 
     /// List all tags
     pub fn list_tags(&self) -> Result<Vec<Tag>, Box<dyn std::error::Error>> {
+        // Return empty list if this is a placeholder
+        if self.is_placeholder() {
+            return Ok(Vec::new());
+        }
+
         let conn = self.get_connection()?;
         let mut tags = Vec::new();
 
@@ -381,6 +475,48 @@ impl DbStorageManager {
         Ok(tags)
     }
 
+    /// Delete a notebook
+    pub fn delete_notebook(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.get_connection()?;
+
+        // Begin transaction
+        let tx = conn.transaction()?;
+
+        // Get all note IDs in this notebook
+        let note_ids: Vec<String> = {
+            let mut stmt = tx.prepare("SELECT id FROM notes WHERE notebook_id = ?")?;
+            let note_ids: Result<Vec<String>, _> = stmt.query_map(params![id], |row| {
+                Ok(row.get::<_, String>(0)?)
+            })?.collect();
+            note_ids?
+        };
+
+        // Delete note tags for all notes in this notebook
+        for note_id in &note_ids {
+            tx.execute(
+                "DELETE FROM note_tags WHERE note_id = ?",
+                params![note_id],
+            )?;
+        }
+
+        // Delete all notes in this notebook
+        tx.execute(
+            "DELETE FROM notes WHERE notebook_id = ?",
+            params![id],
+        )?;
+
+        // Delete the notebook
+        tx.execute(
+            "DELETE FROM notebooks WHERE id = ?",
+            params![id],
+        )?;
+
+        // Commit transaction
+        tx.commit()?;
+
+        Ok(())
+    }
+
     /// Delete a tag
     pub fn delete_tag(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut conn = self.get_connection()?;
@@ -403,7 +539,6 @@ impl DbStorageManager {
         // Commit transaction
         tx.commit()?;
 
-        log::info!("Tag deleted: {}", id);
         Ok(())
     }
 
@@ -466,7 +601,12 @@ impl DbStorageManager {
         })?;
 
         for note_result in note_iter {
-            notes.push(note_result?);
+            let mut note = note_result?;
+            // Load attachments for this note
+            if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                log::error!("Error loading attachments for note {}: {}", note.id, err);
+            }
+            notes.push(note);
         }
 
         Ok(notes)
@@ -537,7 +677,12 @@ impl DbStorageManager {
         })?;
 
         for note_result in note_iter {
-            notes.push(note_result?);
+            let mut note = note_result?;
+            // Load attachments for this note
+            if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                log::error!("Error loading attachments for note {}: {}", note.id, err);
+            }
+            notes.push(note);
         }
 
         Ok(notes)
@@ -545,8 +690,6 @@ impl DbStorageManager {
 
     /// Get notes for a tag
     pub fn get_notes_for_tag(&self, tag_id: &str) -> Result<Vec<Note>, Box<dyn std::error::Error>> {
-        log::info!("DB: Getting notes for tag ID: {}", tag_id);
-
         let conn = self.get_connection()?;
         let mut notes = Vec::new();
 
@@ -556,19 +699,11 @@ impl DbStorageManager {
             params![tag_id],
             |row| row.get::<_, i64>(0)
         ) {
-            Ok(count) => {
-                let exists = count > 0;
-                log::info!("DB: Tag ID {} exists: {}", tag_id, exists);
-                exists
-            },
-            Err(err) => {
-                log::error!("DB: Error checking if tag exists: {}", err);
-                false
-            }
+            Ok(count) => count > 0,
+            Err(_) => false
         };
 
         if !tag_exists {
-            log::warn!("DB: Tag ID {} does not exist", tag_id);
             return Ok(Vec::new());
         }
 
@@ -578,18 +713,11 @@ impl DbStorageManager {
             params![tag_id],
             |row| row.get(0)
         ) {
-            Ok(count) => {
-                log::info!("DB: Found {} note-tag associations for tag ID {}", count, tag_id);
-                count
-            },
-            Err(err) => {
-                log::error!("DB: Error checking note-tag associations: {}", err);
-                0
-            }
+            Ok(count) => count,
+            Err(_) => 0
         };
 
         if association_count == 0 {
-            log::warn!("DB: No notes associated with tag ID {}", tag_id);
             return Ok(Vec::new());
         }
 
@@ -600,8 +728,6 @@ impl DbStorageManager {
              WHERE nt.tag_id = ?
              ORDER BY n.updated_at DESC"
         )?;
-
-        log::info!("DB: Executing query for notes with tag ID {}", tag_id);
 
         let note_iter = stmt.query_map(params![tag_id], |row| {
             let id: String = row.get(0)?;
@@ -648,7 +774,11 @@ impl DbStorageManager {
 
         for note_result in note_iter {
             match note_result {
-                Ok(note) => {
+                Ok(mut note) => {
+                    // Load attachments for this note
+                    if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                        log::error!("DB: Error loading attachments for note {}: {}", note.id, err);
+                    }
                     notes.push(note);
                 },
                 Err(err) => {
@@ -670,6 +800,36 @@ impl DbStorageManager {
 
         // Check database version
         self.check_version(&conn)?;
+
+        Ok(())
+    }
+
+    /// Load attachments for a note
+    fn load_attachments_for_note(note: &mut Note, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let mut stmt = conn.prepare("SELECT id, name, file_path, file_type, created_at FROM attachments WHERE note_id = ?")?;
+        let attachment_iter = stmt.query_map(params![note.id], |row| {
+            let id: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let file_path: String = row.get(2)?;
+            let file_type: String = row.get(3)?;
+            let created_at_str: String = row.get(4)?;
+
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| SqlError::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?
+                .with_timezone(&Utc);
+
+            Ok(crate::note::Attachment {
+                id,
+                name,
+                file_path,
+                file_type,
+                created_at,
+            })
+        })?;
+
+        for attachment in attachment_iter {
+            note.attachments.push(attachment?);
+        }
 
         Ok(())
     }
@@ -734,8 +894,25 @@ impl DbStorageManager {
             [],
         )?;
 
+        // Create attachments table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS attachments (
+                id TEXT PRIMARY KEY,
+                note_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
         // Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON", [])?;
+
+        // Create indexes for better performance
+        self.create_indexes(conn)?;
 
         Ok(())
     }
@@ -785,6 +962,77 @@ impl DbStorageManager {
         // Implement database migrations here when needed
         // For now, we don't need any migrations
 
+        Ok(())
+    }
+
+    /// Create database indexes for better performance
+    fn create_indexes(&self, conn: &Connection) -> SqlResult<()> {
+        // Index on notes.notebook_id for faster notebook queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_notebook_id ON notes(notebook_id)",
+            [],
+        )?;
+
+        // Index on notes.updated_at for faster sorting
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at)",
+            [],
+        )?;
+
+        // Index on note_tags.note_id for faster tag queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_tags_note_id ON note_tags(note_id)",
+            [],
+        )?;
+
+        // Index on note_tags.tag_id for faster tag-based searches
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_tags_tag_id ON note_tags(tag_id)",
+            [],
+        )?;
+
+        // Index on attachments.note_id for faster attachment queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_attachments_note_id ON attachments(note_id)",
+            [],
+        )?;
+
+        // Full-text search index on notes content and title
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+                id UNINDEXED,
+                title,
+                content,
+                content='notes',
+                content_rowid='rowid'
+            )",
+            [],
+        )?;
+
+        // Trigger to keep FTS table in sync
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_insert AFTER INSERT ON notes BEGIN
+                INSERT INTO notes_fts(rowid, id, title, content) VALUES (new.rowid, new.id, new.title, new.content);
+            END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_delete AFTER DELETE ON notes BEGIN
+                DELETE FROM notes_fts WHERE rowid = old.rowid;
+            END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
+                DELETE FROM notes_fts WHERE rowid = old.rowid;
+                INSERT INTO notes_fts(rowid, id, title, content) VALUES (new.rowid, new.id, new.title, new.content);
+            END",
+            [],
+        )?;
+
+        log::info!("Database indexes created successfully");
         Ok(())
     }
 }

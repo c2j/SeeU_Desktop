@@ -9,6 +9,7 @@ pub enum SettingsCategory {
     General,
     Search,
     Terminal,
+    Notes,
     ITools,
     AIAssistant,
     Advanced,
@@ -21,6 +22,7 @@ impl SettingsCategory {
             SettingsCategory::General => "🔧 常规设置",
             SettingsCategory::Search => "🔍 搜索设置",
             SettingsCategory::Terminal => "💻 终端设置",
+            SettingsCategory::Notes => "📝 笔记设置",
             SettingsCategory::ITools => "🛠️ iTools设置",
             SettingsCategory::AIAssistant => "🤖 AI助手设置",
             SettingsCategory::Advanced => "⚙️ 高级设置",
@@ -33,6 +35,7 @@ impl SettingsCategory {
             SettingsCategory::General,
             SettingsCategory::Search,
             SettingsCategory::Terminal,
+            SettingsCategory::Notes,
             SettingsCategory::ITools,
             SettingsCategory::AIAssistant,
             SettingsCategory::Advanced,
@@ -44,6 +47,7 @@ impl SettingsCategory {
 #[derive(Debug, Default)]
 pub struct SettingsState {
     pub current_category: SettingsCategory,
+    pub show_reset_appearance_dialog: bool,
 }
 
 impl Default for SettingsCategory {
@@ -99,6 +103,7 @@ fn render_settings_content_by_category(ui: &mut egui::Ui, app: &mut SeeUApp, cur
         SettingsCategory::General => render_general_settings(ui, app),
         SettingsCategory::Search => render_search_settings(ui, app),
         SettingsCategory::Terminal => render_terminal_settings(ui, app),
+        SettingsCategory::Notes => render_notes_settings(ui, app),
         SettingsCategory::ITools => render_itools_settings(ui, app),
         SettingsCategory::AIAssistant => render_ai_assistant_settings(ui, app),
         SettingsCategory::Advanced => render_advanced_settings(ui, app),
@@ -107,7 +112,16 @@ fn render_settings_content_by_category(ui: &mut egui::Ui, app: &mut SeeUApp, cur
 
 /// Render appearance settings
 fn render_appearance_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
-    ui.heading("🎨 外观设置");
+    // Header with title and reset button
+    ui.horizontal(|ui| {
+        ui.heading("🎨 外观设置");
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("🔄 恢复默认").on_hover_text("将所有外观设置恢复为默认值").clicked() {
+                app.settings_state.show_reset_appearance_dialog = true;
+            }
+        });
+    });
     ui.add_space(10.0);
 
     // Color Theme section
@@ -139,38 +153,170 @@ fn render_appearance_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
     ui.add_space(15.0);
 
-    // Font settings (placeholder for future implementation)
+    // Font settings
     ui.group(|ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("字体设置").strong());
             ui.add_space(5.0);
-            ui.label("字体大小和样式设置将在未来版本中提供");
+
+            let mut font_size = app.app_settings.font_size;
+            let mut font_family = app.app_settings.font_family.clone();
+
+            // Font size setting
+            ui.horizontal(|ui| {
+                ui.label("字体大小:");
+                if ui.add(egui::Slider::new(&mut font_size, 8.0..=32.0).suffix("px")).changed() {
+                    app.set_font_size(ui.ctx(), font_size);
+                }
+            });
+
+            ui.add_space(5.0);
+
+            // Font family setting
+            ui.horizontal(|ui| {
+                ui.label("字体族:");
+                egui::ComboBox::from_id_source("font_family")
+                    .selected_text(&font_family)
+                    .show_ui(ui, |ui| {
+                        let font_options = vec![
+                            ("Default", "默认字体"),
+                            ("Source Han Sans", "思源黑体"),
+                            ("WQY MicroHei", "文泉驿微米黑"),
+                            ("Monospace", "等宽字体"),
+                        ];
+
+                        for (value, display) in font_options {
+                            if ui.selectable_value(&mut font_family, value.to_string(), display).changed() {
+                                app.set_font_family(ui.ctx(), font_family.clone());
+                            }
+                        }
+                    });
+            });
+
+            ui.add_space(5.0);
+            ui.label(egui::RichText::new("提示：字体设置会影响整个应用程序的文字显示").weak());
         });
     });
 
     ui.add_space(15.0);
 
-    // UI Scale settings (placeholder for future implementation)
+    // UI Scale settings
     ui.group(|ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("界面缩放").strong());
             ui.add_space(5.0);
-            ui.label("界面缩放设置将在未来版本中提供");
+
+            let current_ui_scale = app.app_settings.ui_scale;
+            let mut ui_scale = current_ui_scale;
+
+            ui.horizontal(|ui| {
+                ui.label("缩放比例:");
+                if ui.add(egui::Slider::new(&mut ui_scale, 0.5..=3.0).step_by(0.1).suffix("x")).changed() {
+                    app.set_ui_scale(ui.ctx(), ui_scale);
+                }
+            });
+
+            ui.add_space(5.0);
+
+            // Scale presets
+            ui.horizontal(|ui| {
+                ui.label("快速设置:");
+
+                // Define scale options with their values and labels
+                let scale_options = [
+                    (0.5, "50%"),
+                    (0.75, "75%"),
+                    (1.0, "100%"),
+                    (1.25, "125%"),
+                    (1.5, "150%"),
+                    (2.0, "200%"),
+                ];
+
+                for (scale_value, label) in scale_options {
+                    let is_current = (current_ui_scale - scale_value).abs() < 0.01; // Float comparison with tolerance
+
+                    // Use selectable_label for better visual feedback
+                    if ui.selectable_label(is_current, label).clicked() && !is_current {
+                        app.set_ui_scale(ui.ctx(), scale_value);
+                    }
+                }
+            });
+
+            ui.add_space(5.0);
+
+            // Show current scale value and debug info
+            ui.horizontal(|ui| {
+                ui.label("当前缩放:");
+                ui.label(egui::RichText::new(format!("{:.0}%", current_ui_scale * 100.0)).strong());
+            });
+
+            // Debug information
+            ui.horizontal(|ui| {
+                ui.label("调试信息:");
+                let actual_pixels_per_point = ui.ctx().pixels_per_point();
+                ui.label(egui::RichText::new(format!("实际 pixels_per_point: {:.2}", actual_pixels_per_point)).weak());
+            });
+
+            ui.add_space(5.0);
+            ui.label(egui::RichText::new("提示：界面缩放会影响整个应用程序的大小，适合不同分辨率的显示器").weak());
         });
     });
+
+    // Reset appearance confirmation dialog
+    if app.settings_state.show_reset_appearance_dialog {
+        egui::Window::new("确认恢复默认设置")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ui.ctx(), |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(10.0);
+
+                    ui.label("⚠️ 确认要将所有外观设置恢复为默认值吗？");
+                    ui.add_space(5.0);
+
+                    ui.label(egui::RichText::new("这将重置以下设置：").weak());
+                    ui.label(egui::RichText::new("• 主题：恢复为 Dark Modern").weak());
+                    ui.label(egui::RichText::new("• 字体大小：恢复为 14px").weak());
+                    ui.label(egui::RichText::new("• 字体族：恢复为默认字体").weak());
+                    ui.label(egui::RichText::new("• 界面缩放：恢复为 100%").weak());
+
+                    ui.add_space(15.0);
+
+                    ui.horizontal(|ui| {
+                        if ui.button("✅ 确认恢复").clicked() {
+                            app.reset_appearance_to_default(ui.ctx());
+                            app.settings_state.show_reset_appearance_dialog = false;
+                        }
+
+                        if ui.button("❌ 取消").clicked() {
+                            app.settings_state.show_reset_appearance_dialog = false;
+                        }
+                    });
+
+                    ui.add_space(5.0);
+                });
+            });
+    }
 }
 
 /// Render general settings
-fn render_general_settings(ui: &mut egui::Ui, _app: &mut SeeUApp) {
+fn render_general_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
     ui.heading("🔧 常规设置");
     ui.add_space(10.0);
+
+    let mut settings_changed = false;
 
     ui.group(|ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("启动设置").strong());
             ui.add_space(5.0);
-            ui.checkbox(&mut false, "开机自动启动");
-            ui.checkbox(&mut true, "启动时恢复上次会话");
+            if ui.checkbox(&mut app.app_settings.auto_startup, "开机自动启动").changed() {
+                settings_changed = true;
+            }
+            if ui.checkbox(&mut app.app_settings.restore_session, "启动时恢复上次会话").changed() {
+                settings_changed = true;
+            }
         });
     });
 
@@ -180,15 +326,28 @@ fn render_general_settings(ui: &mut egui::Ui, _app: &mut SeeUApp) {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("数据设置").strong());
             ui.add_space(5.0);
-            ui.checkbox(&mut true, "自动保存");
-            ui.checkbox(&mut false, "定期备份数据");
+            if ui.checkbox(&mut app.app_settings.auto_save, "自动保存").changed() {
+                settings_changed = true;
+            }
+            if ui.checkbox(&mut app.app_settings.periodic_backup, "定期备份数据").changed() {
+                settings_changed = true;
+            }
         });
     });
+
+    // Auto-save settings when changed
+    if settings_changed {
+        if let Err(err) = app.save_app_settings() {
+            log::error!("Failed to save app settings: {}", err);
+        } else {
+            log::info!("General settings saved successfully");
+        }
+    }
 }
 
 /// Render search settings
 fn render_search_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
-    // Check for completed indexing operations to update UI
+    // Check for completed indexing operations to update UI (now non-blocking)
     app.isearch_state.check_reindex_results();
 
     ui.heading("🔍 搜索设置");
@@ -203,7 +362,7 @@ fn render_search_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
             ui.label(egui::RichText::new("索引目录管理").strong());
             ui.add_space(5.0);
 
-            // Add directory button
+            // Directory management buttons
             ui.horizontal(|ui| {
                 if ui.button("+ 添加目录").clicked() {
                     app.isearch_state.open_directory_dialog();
@@ -216,6 +375,11 @@ fn render_search_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                     }
                 } else {
                     ui.add_enabled(false, egui::Button::new("- 移除目录"));
+                }
+
+                // Update all indexes button
+                if ui.button("🔄 重新索引全部").on_hover_text("重新索引所有目录，应用最新功能改进").clicked() {
+                    app.isearch_state.reindex_all_directories();
                 }
             });
 
@@ -289,27 +453,10 @@ fn render_search_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
             ui.add_space(8.0);
 
-            // Directory management buttons
+            // Directory status info
             ui.horizontal(|ui| {
-                // Remove directory button
-                if ui.button("➖ 移除目录").clicked() {
-                    if let Some(selected) = app.isearch_state.selected_directory {
-                        if selected < app.isearch_state.indexed_directories.len() {
-                            let removed_dir = app.isearch_state.indexed_directories.remove(selected);
-                            app.isearch_state.save_indexed_directories();
-                            app.isearch_state.selected_directory = None;
-                            log::info!("Removed directory from index: {}", removed_dir.path);
-                        }
-                    }
-                }
-
-                // Update all indexes button
-                if ui.button("🔄 更新全部索引").on_hover_text("重新索引所有目录").clicked() {
-                    app.isearch_state.update_all_indexes();
-                }
-
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new("选择目录后可移除或更新").weak());
+                    ui.label(egui::RichText::new("选择目录后可移除或重新索引").weak());
                 });
             });
         });
@@ -372,6 +519,15 @@ fn render_search_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
             if ui.checkbox(&mut app.isearch_state.enable_file_monitoring, "实时文件监控").changed() {
                 options_changed = true;
             }
+            if ui.checkbox(&mut app.isearch_state.search_on_typing, "输入时触发搜索").on_hover_text("启用后每次输入都会触发搜索，禁用后需按回车键触发").changed() {
+                options_changed = true;
+            }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(10.0);
+
+
 
             // Auto-save search options when changed
             if options_changed {
@@ -379,6 +535,78 @@ fn render_search_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
             }
         });
     });
+
+    // Directory input dialog (替代文件对话框)
+    if app.isearch_state.show_directory_input_dialog {
+        egui::Window::new("添加索引目录")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(400.0)
+            .show(ui.ctx(), |ui| {
+                ui.vertical(|ui| {
+                    ui.label("请输入要索引的目录路径：");
+                    ui.add_space(5.0);
+
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut app.isearch_state.directory_input)
+                            .hint_text("例如：/home/user/Documents")
+                            .desired_width(ui.available_width())
+                    );
+
+                    // 自动聚焦输入框
+                    if app.isearch_state.show_directory_input_dialog {
+                        response.request_focus();
+                    }
+
+                    ui.add_space(10.0);
+
+                    // 常用目录快捷按钮
+                    ui.label("常用目录：");
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(home_dir) = dirs::home_dir() {
+                            if ui.small_button("🏠 主目录").clicked() {
+                                app.isearch_state.directory_input = home_dir.to_string_lossy().to_string();
+                            }
+                        }
+
+                        if let Some(documents_dir) = dirs::document_dir() {
+                            if ui.small_button("📄 文档").clicked() {
+                                app.isearch_state.directory_input = documents_dir.to_string_lossy().to_string();
+                            }
+                        }
+
+                        if let Some(downloads_dir) = dirs::download_dir() {
+                            if ui.small_button("📥 下载").clicked() {
+                                app.isearch_state.directory_input = downloads_dir.to_string_lossy().to_string();
+                            }
+                        }
+
+                        if let Some(desktop_dir) = dirs::desktop_dir() {
+                            if ui.small_button("🖥 桌面").clicked() {
+                                app.isearch_state.directory_input = desktop_dir.to_string_lossy().to_string();
+                            }
+                        }
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(5.0);
+
+                    // 按钮
+                    ui.horizontal(|ui| {
+                        if ui.button("添加").clicked() ||
+                           (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                            app.isearch_state.add_directory_from_input();
+                        }
+
+                        if ui.button("取消").clicked() {
+                            app.isearch_state.show_directory_input_dialog = false;
+                            app.isearch_state.directory_input.clear();
+                        }
+                    });
+                });
+            });
+    }
 }
 
 /// Render terminal settings
@@ -771,6 +999,8 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
     ui.heading("🤖 AI助手设置");
     ui.add_space(10.0);
 
+    let mut settings_changed = false;
+
     // Get AI assistant settings from the app
     {
         let ai_state = &mut app.ai_assist_state;
@@ -781,25 +1011,24 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 ui.add_space(5.0);
 
                 ui.horizontal(|ui| {
-                    ui.label("API URL:");
-                    ui.text_edit_singleline(&mut ai_state.ai_settings.api_url);
+                    ui.label("Base URL:");
+                    if ui.text_edit_singleline(&mut ai_state.ai_settings.base_url).changed() {
+                        settings_changed = true;
+                    }
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("API Key:");
-                    ui.text_edit_singleline(&mut ai_state.ai_settings.api_key);
+                    if ui.text_edit_singleline(&mut ai_state.ai_settings.api_key).changed() {
+                        settings_changed = true;
+                    }
                 });
 
                 ui.horizontal(|ui| {
-                    ui.label("模型:");
-                    egui::ComboBox::from_id_source("ai_model_selector")
-                        .selected_text(&ai_state.ai_settings.model)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut ai_state.ai_settings.model, "qwen3:4b".to_string(), "Qwen 3 (4B)");
-                            ui.selectable_value(&mut ai_state.ai_settings.model, "llama3:8b".to_string(), "Llama 3 (8B)");
-                            ui.selectable_value(&mut ai_state.ai_settings.model, "gpt-3.5-turbo".to_string(), "GPT-3.5");
-                            ui.selectable_value(&mut ai_state.ai_settings.model, "gpt-4".to_string(), "GPT-4");
-                        });
+                    ui.label("模型名称:");
+                    if ui.text_edit_singleline(&mut ai_state.ai_settings.model).changed() {
+                        settings_changed = true;
+                    }
                 });
             });
         });
@@ -814,19 +1043,25 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
                 ui.horizontal(|ui| {
                     ui.label("Temperature:");
-                    ui.add(egui::Slider::new(&mut ai_state.ai_settings.temperature, 0.0..=2.0)
+                    if ui.add(egui::Slider::new(&mut ai_state.ai_settings.temperature, 0.0..=2.0)
                         .step_by(0.1)
-                        .text("创造性"));
+                        .text("创造性")).changed() {
+                        settings_changed = true;
+                    }
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Max Tokens:");
-                    ui.add(egui::Slider::new(&mut ai_state.ai_settings.max_tokens, 100..=8000)
+                    if ui.add(egui::Slider::new(&mut ai_state.ai_settings.max_tokens, 100..=8000)
                         .step_by(100.0)
-                        .text("最大长度"));
+                        .text("最大长度")).changed() {
+                        settings_changed = true;
+                    }
                 });
 
-                ui.checkbox(&mut ai_state.ai_settings.streaming, "启用流式输出");
+                if ui.checkbox(&mut ai_state.ai_settings.streaming, "启用流式输出").changed() {
+                    settings_changed = true;
+                }
             });
         });
 
@@ -850,6 +1085,132 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
             });
         });
     }
+
+    // Auto-save AI settings when changed
+    if settings_changed {
+        if let Err(err) = aiAssist::save_settings(&app.ai_assist_state) {
+            log::error!("Failed to save AI assistant settings: {}", err);
+        } else {
+            log::info!("AI助手设置已更新并保存");
+        }
+    }
+}
+
+/// Render notes settings
+fn render_notes_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
+    ui.heading("📝 笔记设置");
+    ui.add_space(10.0);
+
+    // 数据管理设置
+    ui.group(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("数据管理").strong());
+            ui.add_space(5.0);
+
+            // 思源笔记导入
+            ui.horizontal(|ui| {
+                if ui.button("📥 从思源笔记导入").clicked() {
+                    app.inote_state.siyuan_import.show_dialog = true;
+                }
+                ui.label(egui::RichText::new("导入思源笔记的数据").weak());
+            });
+
+            ui.add_space(5.0);
+
+            // 显示导入状态
+            if app.inote_state.siyuan_import.import_in_progress {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("正在导入...");
+                });
+            } else if app.inote_state.siyuan_import.import_completed {
+                if let Some(stats) = &app.inote_state.siyuan_import.import_stats {
+                    ui.label(egui::RichText::new(format!(
+                        "✅ 导入完成: {} 个笔记本, {} 个笔记",
+                        stats.notebooks_count,
+                        stats.notes_count
+                    )).color(egui::Color32::from_rgb(0, 150, 0)));
+                }
+            }
+
+            if let Some(error) = &app.inote_state.siyuan_import.import_error {
+                ui.label(egui::RichText::new(format!("❌ {}", error))
+                    .color(egui::Color32::from_rgb(200, 0, 0)));
+            }
+        });
+    });
+
+    ui.add_space(15.0);
+
+    // 显示设置
+    ui.group(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("显示设置").strong());
+            ui.add_space(5.0);
+
+            let mut settings_changed = false;
+
+            if ui.checkbox(&mut app.inote_state.settings_default_collapse_notebooks, "默认折叠笔记本").changed() {
+                settings_changed = true;
+                // 立即应用设置：折叠所有笔记本
+                if app.inote_state.settings_default_collapse_notebooks {
+                    for notebook in &mut app.inote_state.notebooks {
+                        notebook.expanded = false;
+                    }
+                }
+            }
+
+            if ui.checkbox(&mut app.inote_state.settings_enable_markdown_preview, "启用Markdown预览").changed() {
+                settings_changed = true;
+            }
+
+            if ui.checkbox(&mut app.inote_state.settings_show_note_stats, "显示笔记统计信息").changed() {
+                settings_changed = true;
+            }
+
+            if settings_changed {
+                // Save note settings
+                if let Err(err) = inote::save_settings(&app.inote_state) {
+                    log::error!("Failed to save note settings: {}", err);
+                } else {
+                    log::info!("笔记显示设置已更新并保存");
+                }
+            }
+        });
+    });
+
+    ui.add_space(15.0);
+
+    // 编辑器设置
+    ui.group(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("编辑器设置").strong());
+            ui.add_space(5.0);
+
+            let mut editor_settings_changed = false;
+
+            if ui.checkbox(&mut app.inote_state.settings_auto_save, "自动保存").changed() {
+                editor_settings_changed = true;
+            }
+
+            if ui.checkbox(&mut app.inote_state.settings_syntax_highlight, "语法高亮").changed() {
+                editor_settings_changed = true;
+            }
+
+            if ui.checkbox(&mut app.inote_state.settings_show_line_numbers, "显示行号").changed() {
+                editor_settings_changed = true;
+            }
+
+            if editor_settings_changed {
+                // Save note settings
+                if let Err(err) = inote::save_settings(&app.inote_state) {
+                    log::error!("Failed to save note editor settings: {}", err);
+                } else {
+                    log::info!("笔记编辑器设置已更新并保存");
+                }
+            }
+        });
+    });
 }
 
 /// Render advanced settings

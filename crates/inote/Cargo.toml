@@ -17,6 +17,13 @@ dirs = "5.0.1"
 pulldown-cmark = "0.9.3"
 walkdir = "2.4.0"
 rand = "0.8.5"
+regex = "1.10.2"
+
+# For clipboard support
+arboard = "3.2.1"
+
+# For HTML to Markdown conversion
+html2md = "0.2.14"
 
 # SQLite dependencies
 rusqlite = { version = "0.29.0", features = ["bundled", "chrono"] }

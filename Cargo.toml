@@ -22,6 +22,7 @@ chrono = { version = "0.4.31", features = ["serde"] }
 # Serialization
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0.107"
+toml = "0.8.8"
 
 # Utilities
 uuid = { version = "1.4.1", features = ["v4", "serde"] }
@@ -38,6 +39,12 @@ sysinfo = "0.29.10"
 
 # For markdown rendering
 pulldown-cmark = "0.9.3"
+
+# For clipboard support
+arboard = "3.2.1"
+
+# For HTML to Markdown conversion
+html2md = "0.2.14"
 
 # For file watching
 notify = "6.1.1"

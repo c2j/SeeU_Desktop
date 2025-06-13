@@ -56,21 +56,53 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                 if state.show_history_dropdown {
                     egui::Frame::NONE
                         .fill(ui.style().visuals.window_fill)
+                        .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
                         .show(ui, |ui| {
-                            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                                 let mut selected_idx = None;
+                                let mut delete_idx = None;
 
                                 for (idx, session) in state.chat_sessions.iter().enumerate() {
                                     let is_active = idx == state.active_session_idx;
-                                    if ui.selectable_label(is_active, &session.name).clicked() {
-                                        selected_idx = Some(idx);
-                                    }
+
+                                    ui.horizontal(|ui| {
+                                        // Session name (clickable)
+                                        let session_response = ui.selectable_label(is_active, &session.name);
+                                        if session_response.clicked() {
+                                            selected_idx = Some(idx);
+                                        }
+
+                                        // Show session creation time on hover
+                                        if session_response.hovered() {
+                                            session_response.on_hover_text(format!(
+                                                "创建时间: {}\n消息数量: {}",
+                                                session.created_at.format("%Y-%m-%d %H:%M"),
+                                                session.messages.len()
+                                            ));
+                                        }
+
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            // Delete button (only show if more than one session)
+                                            if state.chat_sessions.len() > 1 {
+                                                if ui.small_button("🗑").clicked() {
+                                                    delete_idx = Some(idx);
+                                                }
+                                            }
+                                        });
+                                    });
+
+                                    ui.separator();
                                 }
 
                                 // Handle session selection outside the loop to avoid borrowing issues
                                 if let Some(idx) = selected_idx {
                                     state.switch_session(idx);
                                     state.show_history_dropdown = false;
+                                }
+
+                                // Handle session deletion
+                                if let Some(idx) = delete_idx {
+                                    state.delete_session(idx);
                                 }
                             });
                         });
@@ -218,21 +250,51 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                             .interactive(!state.is_sending)
                     );
 
+                    // 获取光标位置并更新指令菜单
+                    let cursor_pos = if response.has_focus() {
+                        // 尝试获取光标在屏幕上的位置
+                        Some(response.rect.left_bottom())
+                    } else {
+                        None
+                    };
+
+                    // 更新指令菜单状态
+                    state.update_command_menu(cursor_pos);
+
                     // 处理键盘输入
                     let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let alt_pressed = ui.input(|i| i.modifiers.alt);
+                    let up_pressed = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+                    let down_pressed = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+                    let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
-                    // Alt+回车表示换行，单独的回车表示发送
-                    if !state.is_sending && enter_pressed {
+                    // 首先检查是否有指令菜单需要处理键盘输入
+                    let mut menu_handled = false;
+                    if state.command_menu.is_visible && response.has_focus() {
+                        if up_pressed {
+                            menu_handled = state.handle_command_menu_input(egui::Key::ArrowUp);
+                        } else if down_pressed {
+                            menu_handled = state.handle_command_menu_input(egui::Key::ArrowDown);
+                        } else if enter_pressed && !alt_pressed {
+                            menu_handled = state.handle_command_menu_input(egui::Key::Enter);
+                        } else if escape_pressed {
+                            menu_handled = state.handle_command_menu_input(egui::Key::Escape);
+                        }
+                    }
+
+                    // 如果菜单没有处理输入，则按正常逻辑处理
+                    if !menu_handled && !state.is_sending && enter_pressed && response.has_focus() {
                         if alt_pressed {
                             // Alt+回车：添加换行符
                             state.chat_input.push('\n');
                         } else {
-                            // 单独的回车：发送消息
-                            if let Some(cmd) = state.send_message() {
-                                // Return the slash command to be handled by the parent
-                                if let Some(callback) = &mut state.slash_command_callback {
-                                    callback(cmd);
+                            // 单独的回车：发送消息（只有在菜单不可见时）
+                            if !state.command_menu.is_visible {
+                                if let Some(cmd) = state.send_message() {
+                                    // Return the slash command to be handled by the parent
+                                    if let Some(callback) = &mut state.slash_command_callback {
+                                        callback(cmd);
+                                    }
                                 }
                             }
                         }
@@ -241,17 +303,14 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                 // 底部工具栏
                 ui.horizontal(|ui| {
-                    // 模型选择下拉框
-                    egui::ComboBox::from_id_salt("model_selector")
-                        .selected_text(&state.ai_settings.model)
-                        .width(100.0)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut state.ai_settings.model, "qwen3:4b".to_string(), "Qwen 3 (4B)");
-                            ui.selectable_value(&mut state.ai_settings.model, "llama3:8b".to_string(), "Llama 3 (8B)");
-                            ui.selectable_value(&mut state.ai_settings.model, "gpt-3.5-turbo".to_string(), "GPT-3.5");
-                        });
+                    // 模型名称显示
+                    let display_text = if state.ai_settings.model.len() > 15 {
+                        format!("{}...", &state.ai_settings.model[..12])
+                    } else {
+                        state.ai_settings.model.clone()
+                    };
 
-                    ui.label("模型▼");
+                    ui.label(format!("模型: {}", display_text));
 
                     // 附件按钮
                     if ui.button("📎").clicked() {
@@ -298,6 +357,11 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
         render_ai_settings(ui.ctx(), state);
     }
 
+    // 显示智能指令菜单
+    if state.command_menu.is_visible {
+        render_smart_command_menu(ui.ctx(), state);
+    }
+
     // 显示@命令提示框
     if state.show_at_commands {
         render_at_commands(ui.ctx(), state);
@@ -315,7 +379,7 @@ fn render_ai_settings(ctx: &egui::Context, state: &mut AIAssistState) {
 
     // 获取屏幕中心位置
     let screen_rect = ctx.screen_rect();
-    let window_size = egui::vec2(350.0, 300.0);
+    let window_size = egui::vec2(400.0, 350.0);
 
     // 计算窗口位置 - 放在屏幕右上角附近
     let window_pos = egui::pos2(
@@ -333,25 +397,28 @@ fn render_ai_settings(ctx: &egui::Context, state: &mut AIAssistState) {
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("API URL:");
-                ui.text_edit_singleline(&mut state.ai_settings.api_url);
+                ui.label("Base URL:");
+                ui.text_edit_singleline(&mut state.ai_settings.base_url);
             });
+            ui.label("提示: 通常以 /v1 结尾，如 http://localhost:11434/v1");
+
+            ui.add_space(10.0);
 
             ui.horizontal(|ui| {
                 ui.label("API Key:");
                 ui.text_edit_singleline(&mut state.ai_settings.api_key);
             });
+            ui.label("提示: 本地服务可以留空");
+
+            ui.add_space(10.0);
 
             ui.horizontal(|ui| {
-                ui.label("模型:");
-                egui::ComboBox::from_id_salt("model_select")
-                    .selected_text(&state.ai_settings.model)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.ai_settings.model, "qwen3:4b".to_string(), "Qwen 3 (4B)");
-                        ui.selectable_value(&mut state.ai_settings.model, "llama3:8b".to_string(), "Llama 3 (8B)");
-                        ui.selectable_value(&mut state.ai_settings.model, "gpt-3.5-turbo".to_string(), "GPT-3.5 Turbo");
-                    });
+                ui.label("模型名称:");
+                ui.text_edit_singleline(&mut state.ai_settings.model);
             });
+            ui.label("提示: 如 gpt-3.5-turbo, qwen2.5:7b 等");
+
+            ui.separator();
 
             ui.horizontal(|ui| {
                 ui.label("温度:");
@@ -383,6 +450,83 @@ fn render_ai_settings(ctx: &egui::Context, state: &mut AIAssistState) {
     }
 }
 
+/// 渲染智能指令菜单
+fn render_smart_command_menu(ctx: &egui::Context, state: &mut AIAssistState) {
+    use crate::state::{CommandMenuType};
+
+    if !state.command_menu.is_visible {
+        return;
+    }
+
+    let commands = match state.command_menu.menu_type {
+        CommandMenuType::AtCommands => vec![
+            ("@search", "引用最近搜索的第一条结果详细内容"),
+            ("@date", "插入当前日期"),
+            ("@time", "插入当前时间"),
+            ("@user", "引用当前用户"),
+        ],
+        CommandMenuType::SlashCommands => vec![
+            ("/search", "执行搜索"),
+            ("/clear", "清空当前会话"),
+            ("/help", "显示帮助信息"),
+            ("/new", "创建新会话"),
+        ],
+        CommandMenuType::None => return,
+    };
+
+    // 计算菜单位置
+    let menu_pos = if let Some(cursor_pos) = state.command_menu.cursor_position {
+        egui::pos2(cursor_pos.x, cursor_pos.y + 20.0) // 在光标下方显示
+    } else {
+        // 回退到屏幕中央
+        let screen_rect = ctx.screen_rect();
+        egui::pos2(screen_rect.center().x - 150.0, screen_rect.center().y)
+    };
+
+    let menu_size = egui::vec2(300.0, (commands.len() as f32 * 25.0 + 40.0).min(200.0));
+
+    egui::Window::new("指令菜单")
+        .title_bar(false)
+        .resizable(false)
+        .fixed_size(menu_size)
+        .current_pos(menu_pos)
+        .frame(egui::Frame::popup(&ctx.style()))
+        .show(ctx, |ui| {
+            ui.vertical(|ui| {
+                for (i, (command, description)) in commands.iter().enumerate() {
+                    let is_selected = i == state.command_menu.selected_index;
+
+                    // 使用不同的样式来突出显示选中项
+                    let response = if is_selected {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{} - {}", command, description))
+                                    .background_color(egui::Color32::from_rgb(100, 150, 255))
+                                    .color(egui::Color32::WHITE)
+                            )
+                            .sense(egui::Sense::click())
+                        )
+                    } else {
+                        ui.add(
+                            egui::Label::new(format!("{} - {}", command, description))
+                                .sense(egui::Sense::click())
+                        )
+                    };
+
+                    if response.clicked() {
+                        state.command_menu.selected_index = i;
+                        state.apply_selected_command();
+                    }
+
+                    // 如果是选中项，确保它在视图中可见
+                    if is_selected {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                    }
+                }
+            });
+        });
+}
+
 /// 渲染@命令提示框
 fn render_at_commands(ctx: &egui::Context, state: &mut AIAssistState) {
     let mut open = true;
@@ -406,7 +550,7 @@ fn render_at_commands(ctx: &egui::Context, state: &mut AIAssistState) {
             ui.heading("支持的@命令");
             ui.separator();
 
-            ui.label("@search - 引用最近的搜索结果");
+            ui.label("@search - 引用最近搜索的第一条结果详细内容");
             ui.label("@date - 插入当前日期");
             ui.label("@time - 插入当前时间");
             ui.label("@user - 引用当前用户");
@@ -500,7 +644,7 @@ fn render_slash_commands(ctx: &egui::Context, state: &mut AIAssistState) {
 }
 
 /// 渲染消息内容，简单处理<think>标签
-fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, is_streaming: bool) {
+fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, _is_streaming: bool) {
     // 设置最大宽度
     ui.set_max_width(max_width);
 

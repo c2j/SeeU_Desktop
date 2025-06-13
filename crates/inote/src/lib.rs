@@ -3,6 +3,7 @@ pub mod note;
 pub mod tag;
 pub mod ui;
 pub mod storage;
+pub mod clipboard;
 pub mod db_storage;
 pub mod migration;
 pub mod db_state;
@@ -133,17 +134,14 @@ impl INoteState {
 
     /// Create a new notebook
     pub fn create_notebook(&mut self, name: String, description: String) {
-        log::info!("Creating new notebook: {}", name);
         let notebook = Notebook::new(name, description);
 
         // Save to storage
         if let Ok(storage) = self.storage.lock() {
             match storage.save_notebook(&notebook) {
                 Ok(_) => {
-                    log::info!("Notebook saved successfully: {}", notebook.id);
                     // Add to list
                     self.notebooks.push(notebook);
-                    log::info!("Notebook added to list, total notebooks: {}", self.notebooks.len());
                 },
                 Err(err) => {
                     log::error!("Failed to save notebook: {}", err);
@@ -160,12 +158,22 @@ impl INoteState {
             return;
         }
 
+        // Get notebook ID
+        let notebook_id = self.notebooks[index].id.clone();
+
         // Get note IDs to delete
         let note_ids: Vec<String> = self.notebooks[index].note_ids.clone();
 
         // Delete all notes in the notebook
         for note_id in &note_ids {
             self.delete_note(note_id);
+        }
+
+        // Delete from storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.delete_notebook(&notebook_id) {
+                log::error!("Failed to delete notebook from storage: {}", err);
+            }
         }
 
         // Remove from list
@@ -249,6 +257,13 @@ impl INoteState {
             }
         }
 
+        // Delete from storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.delete_note(note_id) {
+                log::error!("Failed to delete note from storage: {}", err);
+            }
+        }
+
         // Remove from notes map
         self.notes.remove(note_id);
 
@@ -287,6 +302,13 @@ impl INoteState {
                 if let Err(err) = storage.save_note(note) {
                     log::error!("Failed to save note: {}", err);
                 }
+            }
+        }
+
+        // Delete from storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.delete_tag(tag_id) {
+                log::error!("Failed to delete tag from storage: {}", err);
             }
         }
 
@@ -352,7 +374,6 @@ impl INoteState {
             return;
         }
 
-        log::info!("Searching notes for: {}", self.search_query);
         let query = self.search_query.to_lowercase();
 
         // Find matching notes
@@ -364,8 +385,6 @@ impl INoteState {
             })
             .map(|(id, _)| id.clone())
             .collect();
-
-        log::info!("Found {} matching notes", matching_notes.len());
 
         // Update search results
         self.search_results = matching_notes;
@@ -415,6 +434,11 @@ impl INoteState {
 
 /// Render the iNote module
 pub fn render_inote(ui: &mut egui::Ui, state: &mut INoteState) {
+    render_inote_with_sidebar_info(ui, state, false);
+}
+
+/// Render the main iNote interface with sidebar information
+pub fn render_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut INoteState, right_sidebar_open: bool) {
     // Initialize state if needed
     if state.notebooks.is_empty() && state.notes.is_empty() && state.tags.is_empty() {
         state.initialize();
@@ -428,158 +452,15 @@ pub fn render_inote(ui: &mut egui::Ui, state: &mut INoteState) {
 
 /// Render the iNote module with SQLite storage
 pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
-    // Initialize state if needed
-    if state.notebooks.is_empty() && state.notes.is_empty() && state.tags.is_empty() {
-        state.initialize();
-    }
+    render_db_inote_with_sidebar_info(ui, state, false);
+}
 
-    // Create a default notebook if none exists
-    if state.notebooks.is_empty() {
-        state.create_notebook("默认笔记本".to_string(), "默认笔记本".to_string());
-    }
+/// Render the iNote module with SQLite storage and sidebar information
+pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteState, right_sidebar_open: bool) {
+    // Ensure data is loaded when needed (lazy loading)
+    state.ensure_data_loaded();
 
-    // Process dialogs
-    if state.show_create_notebook {
-        // Create a dialog window
-        let mut created = false;
-        let mut closed = false;
 
-        egui::Window::new("创建新笔记本")
-            .collapsible(false)
-            .resizable(false)
-            .fixed_size([300.0, 150.0])
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .open(&mut state.show_create_notebook)
-            .show(ui.ctx(), |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        ui.label("名称:");
-                        ui.add(egui::TextEdit::singleline(&mut state.new_notebook_name)
-                            .desired_width(200.0)
-                            .hint_text("输入笔记本名称"));
-                    });
-
-                    ui.add_space(5.0);
-
-                    ui.horizontal(|ui| {
-                        ui.label("描述:");
-                        ui.add(egui::TextEdit::singleline(&mut state.new_notebook_description)
-                            .desired_width(200.0)
-                            .hint_text("输入笔记本描述"));
-                    });
-
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("创建").clicked() && !state.new_notebook_name.is_empty() {
-                                created = true;
-                                closed = true;
-                                log::info!("Create button clicked");
-                            }
-
-                            if ui.button("取消").clicked() {
-                                closed = true;
-                                log::info!("Cancel button clicked");
-                            }
-                        });
-                    });
-                });
-            });
-
-        // Create notebook if button was clicked
-        if created {
-            log::info!("Creating notebook: {}", state.new_notebook_name);
-            state.create_notebook(
-                state.new_notebook_name.clone(),
-                state.new_notebook_description.clone()
-            );
-
-            // Reset values
-            state.new_notebook_name.clear();
-            state.new_notebook_description.clear();
-        }
-
-        if closed {
-            state.show_create_notebook = false;
-        }
-    }
-
-    if state.show_create_tag {
-        // Create a dialog window
-        let mut created = false;
-        let mut closed = false;
-
-        egui::Window::new("创建新标签")
-            .collapsible(false)
-            .resizable(false)
-            .fixed_size([300.0, 150.0])
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .open(&mut state.show_create_tag)
-            .show(ui.ctx(), |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        ui.label("名称:");
-                        ui.add(egui::TextEdit::singleline(&mut state.new_tag_name)
-                            .desired_width(200.0)
-                            .hint_text("输入标签名称"));
-                    });
-
-                    ui.add_space(5.0);
-
-                    ui.horizontal(|ui| {
-                        ui.label("颜色:");
-                        let mut color = hex_to_color32(&state.new_tag_color);
-                        if ui.color_edit_button_srgba(&mut color).changed() {
-                            state.new_tag_color = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
-                        }
-
-                        ui.label(state.new_tag_color.clone());
-                    });
-
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("创建").clicked() && !state.new_tag_name.is_empty() {
-                                created = true;
-                                closed = true;
-                                log::info!("Create tag button clicked");
-                            }
-
-                            if ui.button("取消").clicked() {
-                                closed = true;
-                                log::info!("Cancel tag button clicked");
-                            }
-                        });
-                    });
-                });
-            });
-
-        // Create tag if button was clicked
-        if created {
-            log::info!("Creating tag: {}", state.new_tag_name);
-            state.create_tag(
-                state.new_tag_name.clone(),
-                state.new_tag_color.clone()
-            );
-
-            // Reset values
-            state.new_tag_name.clear();
-        }
-
-        if closed {
-            state.show_create_tag = false;
-        }
-    }
 
     // 检查是否处于全窗口最大化模式
     if state.editor_maximized && state.current_note.is_some() {
@@ -627,7 +508,6 @@ pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 if ui.button("搜索").clicked() ||
                    (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                     if !state.search_query.is_empty() {
-                        log::info!("Searching notes: {}", state.search_query);
                         state.search_notes();
                     }
                 }
@@ -653,11 +533,18 @@ pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
             ui.separator();
 
             // Main content with tree view
-            egui::SidePanel::left("tree_panel")
+            let mut side_panel = egui::SidePanel::left("tree_panel")
                 .resizable(true)
                 .default_width(250.0)
-                .max_width(400.0) // 设置最大宽度，防止被内容撑得过宽
-                .show_inside(ui, |ui| {
+                .max_width(400.0); // 设置最大宽度，防止被内容撑得过宽
+
+            // 在Linux下减少间距以解决100px间隔问题
+            #[cfg(target_os = "linux")]
+            {
+                side_panel = side_panel.frame(egui::Frame::none().inner_margin(egui::Margin::same(0)));
+            }
+
+            side_panel.show_inside(ui, |ui| {
                     // 设置固定宽度布局，防止内容自动撑开
                     ui.set_width(ui.available_width());
 
@@ -677,49 +564,75 @@ pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
                     }
                 });
 
-            egui::CentralPanel::default().show_inside(ui, |ui| {
-                // 检查是否正在搜索
-                if state.is_searching {
-                    // 如果选中了搜索结果中的笔记，显示笔记编辑器
-                    if let Some(note_id) = &state.current_note {
-                        crate::db_ui::render_note_editor(ui, state);
-                    } else {
-                        // 否则显示搜索结果的提示
-                        ui.centered_and_justified(|ui| {
-                            ui.heading("请从左侧选择一个搜索结果");
-                        });
-                    }
-                } else if let Some(note_id) = &state.current_note {
-                    // 直接显示笔记编辑器
-                    crate::db_ui::render_note_editor(ui, state);
-                } else if state.current_notebook.is_some() {
-                    // 显示笔记本信息
-                    if let Some(notebook_idx) = state.current_notebook {
-                        if notebook_idx < state.notebooks.len() {
-                            let notebook = &state.notebooks[notebook_idx];
-                            ui.heading(&notebook.name);
-                            ui.label(&notebook.description);
-                            ui.separator();
-                            ui.label(format!("包含 {} 个笔记", notebook.note_ids.len()));
+            // 根据右侧边栏状态调整中央面板
+            if right_sidebar_open {
+                // 当右侧边栏打开时，使用受限的中央面板
+                let available_rect = ui.available_rect_before_wrap();
+                let content_width = available_rect.width() - 320.0; // 为右侧边栏预留320px空间
 
-                            if ui.button("+ 创建新笔记").clicked() {
-                                let note_id = state.create_note("新笔记".to_string(), "".to_string());
-                                if let Some(id) = note_id {
-                                    state.select_note(&id);
-                                }
-                            }
-                        }
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(content_width.max(200.0), available_rect.height()),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        render_note_content_area(ui, state);
                     }
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("选择或创建一个笔记本");
-                    });
-                }
-            });
+                );
+            } else {
+                // 正常情况下使用完整的中央面板
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    render_note_content_area(ui, state);
+                });
+            }
         });
     }
 
-    // Process dialogs
+    // 处理对话框
+    process_dialogs(ui, state);
+}
+
+/// 渲染笔记内容区域（提取的公共逻辑）
+fn render_note_content_area(ui: &mut egui::Ui, state: &mut DbINoteState) {
+    // 检查是否正在搜索
+    if state.is_searching {
+        // 如果选中了搜索结果中的笔记，显示笔记编辑器
+        if let Some(_note_id) = &state.current_note {
+            crate::db_ui::render_note_editor(ui, state);
+        } else {
+            // 否则显示搜索结果的提示
+            ui.centered_and_justified(|ui| {
+                ui.heading("请从左侧选择一个搜索结果");
+            });
+        }
+    } else if let Some(_note_id) = &state.current_note {
+        // 直接显示笔记编辑器
+        crate::db_ui::render_note_editor(ui, state);
+    } else if state.current_notebook.is_some() {
+        // 显示笔记本信息
+        if let Some(notebook_idx) = state.current_notebook {
+            if notebook_idx < state.notebooks.len() {
+                let notebook = &state.notebooks[notebook_idx];
+                ui.heading(&notebook.name);
+                ui.label(&notebook.description);
+                ui.separator();
+                ui.label(format!("包含 {} 个笔记", notebook.note_ids.len()));
+
+                if ui.button("+ 创建新笔记").clicked() {
+                    let note_id = state.create_note("新笔记".to_string(), "".to_string());
+                    if let Some(id) = note_id {
+                        state.select_note(&id);
+                    }
+                }
+            }
+        }
+    } else {
+        ui.centered_and_justified(|ui| {
+            ui.label("选择或创建一个笔记本");
+        });
+    }
+}
+
+/// 处理对话框的函数
+fn process_dialogs(ui: &mut egui::Ui, state: &mut DbINoteState) {
     if state.show_create_notebook {
         // Create a dialog window
         let mut created = false;
@@ -859,6 +772,84 @@ pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
         if closed {
             state.show_create_tag = false;
+        }
+    }
+
+    // 显示删除确认对话框
+    if state.show_delete_confirmation {
+        if let Some(confirmation) = &state.delete_confirmation {
+            let mut confirmed = false;
+            let mut cancelled = false;
+
+            let title = match confirmation.confirmation_type {
+                crate::db_state::DeleteConfirmationType::Notebook => "确认删除笔记本",
+                crate::db_state::DeleteConfirmationType::Note => "确认删除笔记",
+                crate::db_state::DeleteConfirmationType::Tag => "确认删除标签",
+            };
+
+            let message = match confirmation.confirmation_type {
+                crate::db_state::DeleteConfirmationType::Notebook => {
+                    format!("您确定要删除笔记本 \"{}\" 吗？\n\n⚠️ 警告：这将同时删除笔记本中的所有笔记！\n此操作无法撤销。", confirmation.target_name)
+                },
+                crate::db_state::DeleteConfirmationType::Note => {
+                    format!("您确定要删除笔记 \"{}\" 吗？\n\n此操作无法撤销。", confirmation.target_name)
+                },
+                crate::db_state::DeleteConfirmationType::Tag => {
+                    format!("您确定要删除标签 \"{}\" 吗？\n\n此操作将从所有笔记中移除该标签。", confirmation.target_name)
+                },
+            };
+
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size([400.0, 200.0])
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .open(&mut state.show_delete_confirmation)
+                .show(ui.ctx(), |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(10.0);
+
+                        // 显示警告图标和消息
+                        ui.horizontal(|ui| {
+                            ui.label("⚠️");
+                            ui.vertical(|ui| {
+                                for line in message.lines() {
+                                    ui.label(line);
+                                }
+                            });
+                        });
+
+                        ui.add_space(20.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+
+                        ui.horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                // 删除按钮 - 红色
+                                let delete_button = ui.add(
+                                    egui::Button::new("🗑 确认删除")
+                                        .fill(egui::Color32::from_rgb(220, 53, 69))
+                                );
+                                if delete_button.clicked() {
+                                    confirmed = true;
+                                }
+
+                                ui.add_space(10.0);
+
+                                // 取消按钮
+                                if ui.button("取消").clicked() {
+                                    cancelled = true;
+                                }
+                            });
+                        });
+                    });
+                });
+
+            if confirmed {
+                state.confirm_deletion();
+            } else if cancelled {
+                state.cancel_deletion();
+            }
         }
     }
 
@@ -923,4 +914,67 @@ fn hex_to_color32(hex: &str) -> egui::Color32 {
 
     // Default color if parsing fails
     egui::Color32::BLUE
+}
+
+/// Save note module settings
+pub fn save_settings(state: &DbINoteState) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs;
+    use serde_json;
+
+    let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let config_dir = base_path.join("seeu_desktop");
+    let config_path = config_dir.join("inote_settings.json");
+
+    fs::create_dir_all(&config_dir)?;
+
+    let settings = serde_json::json!({
+        "settings_default_collapse_notebooks": state.settings_default_collapse_notebooks,
+        "settings_enable_markdown_preview": state.settings_enable_markdown_preview,
+        "settings_show_note_stats": state.settings_show_note_stats,
+        "settings_auto_save": state.settings_auto_save,
+        "settings_syntax_highlight": state.settings_syntax_highlight,
+        "settings_show_line_numbers": state.settings_show_line_numbers
+    });
+
+    let json = serde_json::to_string_pretty(&settings)?;
+    fs::write(config_path, json)?;
+
+    log::info!("Note settings saved successfully");
+    Ok(())
+}
+
+/// Load note module settings
+pub fn load_settings(state: &mut DbINoteState) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs;
+    use serde_json;
+
+    let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let config_path = base_path.join("seeu_desktop").join("inote_settings.json");
+
+    if let Ok(content) = fs::read_to_string(config_path) {
+        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(value) = settings.get("settings_default_collapse_notebooks").and_then(|v| v.as_bool()) {
+                state.settings_default_collapse_notebooks = value;
+            }
+            if let Some(value) = settings.get("settings_enable_markdown_preview").and_then(|v| v.as_bool()) {
+                state.settings_enable_markdown_preview = value;
+            }
+            if let Some(value) = settings.get("settings_show_note_stats").and_then(|v| v.as_bool()) {
+                state.settings_show_note_stats = value;
+            }
+            if let Some(value) = settings.get("settings_auto_save").and_then(|v| v.as_bool()) {
+                state.settings_auto_save = value;
+            }
+            if let Some(value) = settings.get("settings_syntax_highlight").and_then(|v| v.as_bool()) {
+                state.settings_syntax_highlight = value;
+            }
+            if let Some(value) = settings.get("settings_show_line_numbers").and_then(|v| v.as_bool()) {
+                state.settings_show_line_numbers = value;
+            }
+
+            log::info!("Note settings loaded successfully");
+        }
+    }
+
+    Ok(())
 }

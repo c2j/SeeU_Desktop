@@ -18,11 +18,59 @@ pub struct StateUpdate {
     pub error: Option<String>,
 }
 
+// 移除模型加载状态结构
+
 /// Type for slash command callback
 pub type SlashCommandCallback = Box<dyn FnMut(SlashCommand) + Send + 'static>;
 
 /// Type for insert to note callback
 pub type InsertToNoteCallback = Box<dyn FnMut(String) + Send + 'static>;
+
+/// Command menu state for smart command suggestions
+#[derive(Debug, Clone)]
+pub struct CommandMenuState {
+    pub is_visible: bool,
+    pub menu_type: CommandMenuType,
+    pub selected_index: usize,
+    pub cursor_position: Option<egui::Pos2>,
+    pub trigger_position: usize, // Position in text where @ or / was typed
+}
+
+/// Type of command menu
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommandMenuType {
+    None,
+    AtCommands,
+    SlashCommands,
+}
+
+/// Available @ commands
+#[derive(Debug, Clone)]
+pub struct AtCommand {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub insert_text: &'static str,
+}
+
+/// Available slash commands
+#[derive(Debug, Clone)]
+pub struct SlashCommandInfo {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub insert_text: &'static str,
+}
+
+impl Default for CommandMenuState {
+    fn default() -> Self {
+        Self {
+            is_visible: false,
+            menu_type: CommandMenuType::None,
+            selected_index: 0,
+            cursor_position: None,
+            trigger_position: 0,
+        }
+    }
+}
 
 /// AI assistant state
 pub struct AIAssistState {
@@ -49,6 +97,9 @@ pub struct AIAssistState {
     // 控制@指令和Slash指令的提示框显示
     pub show_at_commands: bool,
     pub show_slash_commands: bool,
+
+    // 智能指令菜单状态
+    pub command_menu: CommandMenuState,
 
     // 存储最近的搜索查询和结果，用于 @search 引用
     pub last_search_query: Option<String>,
@@ -93,6 +144,7 @@ impl Default for AIAssistState {
             can_insert_to_note: false,
             show_at_commands: false,
             show_slash_commands: false,
+            command_menu: CommandMenuState::default(),
             last_search_query: None,
             last_search_results: None,
         }
@@ -100,6 +152,7 @@ impl Default for AIAssistState {
 }
 
 impl AIAssistState {
+
     /// Send a message to the AI assistant
     pub fn send_message(&mut self) -> Option<SlashCommand> {
         if self.chat_input.trim().is_empty() || self.is_sending {
@@ -114,42 +167,75 @@ impl AIAssistState {
             None
         };
 
-        // If it's a slash command that should be handled externally, return it
+        // Handle slash commands
         if let Some(cmd) = &slash_command {
-            if matches!(cmd, SlashCommand::Search(_)) {
-                // Create a user message showing the command
-                let user_message = ChatMessage {
-                    id: Uuid::new_v4(),
-                    role: MessageRole::User,
-                    content: self.chat_input.clone(),
-                    timestamp: Utc::now(),
-                    attachments: vec![],
-                };
+            match cmd {
+                SlashCommand::Search(_) => {
+                    // Create a user message showing the command
+                    let user_message = ChatMessage {
+                        id: Uuid::new_v4(),
+                        role: MessageRole::User,
+                        content: self.chat_input.clone(),
+                        timestamp: Utc::now(),
+                        attachments: vec![],
+                    };
 
-                // Add the message to the current session
-                if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
-                    // 检查是否是该会话的第一条用户消息
-                    let is_first_user_message = session.messages.iter()
-                        .filter(|msg| msg.role == MessageRole::User)
-                        .count() == 0;
+                    // Add the message to the current session
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        // 检查是否是该会话的第一条用户消息
+                        let is_first_user_message = session.messages.iter()
+                            .filter(|msg| msg.role == MessageRole::User)
+                            .count() == 0;
 
-                    // 如果是第一条用户消息，更新会话名称为消息摘要
-                    if is_first_user_message {
-                        // 获取消息摘要（最多12个字符）
-                        let summary = Self::get_message_summary(&user_message.content, 12);
-                        session.name = summary;
+                        // 如果是第一条用户消息，更新会话名称为消息摘要
+                        if is_first_user_message {
+                            // 获取消息摘要（最多12个字符）
+                            let summary = Self::get_message_summary(&user_message.content, 12);
+                            session.name = summary;
+                        }
+
+                        session.messages.push(user_message.clone());
                     }
 
-                    session.messages.push(user_message.clone());
+                    // Add the message to the current chat
+                    self.chat_messages.push(user_message);
+
+                    // Clear the input
+                    self.chat_input.clear();
+
+                    return slash_command;
+                },
+                SlashCommand::Clear => {
+                    self.clear_current_session();
+                    self.chat_input.clear();
+                    return None;
+                },
+                SlashCommand::New => {
+                    self.create_new_session();
+                    self.chat_input.clear();
+                    return None;
+                },
+                SlashCommand::Help => {
+                    // Add a help message to the current chat
+                    let help_message = ChatMessage {
+                        id: Uuid::new_v4(),
+                        role: MessageRole::System,
+                        content: "可用的斜杠命令:\n/search [查询] - 执行搜索\n/clear - 清空当前会话\n/new - 创建新会话\n/help - 显示此帮助信息".to_string(),
+                        timestamp: Utc::now(),
+                        attachments: vec![],
+                    };
+
+                    self.chat_messages.push(help_message.clone());
+
+                    // Add to current session
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        session.messages.push(help_message);
+                    }
+
+                    self.chat_input.clear();
+                    self.auto_save_sessions();
+                    return None;
                 }
-
-                // Add the message to the current chat
-                self.chat_messages.push(user_message);
-
-                // Clear the input
-                self.chat_input.clear();
-
-                return slash_command;
             }
         }
 
@@ -185,6 +271,9 @@ impl AIAssistState {
         // Clear the input
         self.chat_input.clear();
 
+        // Auto-save sessions after adding a message
+        self.auto_save_sessions();
+
         // Mark as sending
         self.is_sending = true;
 
@@ -210,6 +299,9 @@ impl AIAssistState {
                     Some(SlashCommand::Search(String::new()))
                 }
             },
+            "/clear" => Some(SlashCommand::Clear),
+            "/new" => Some(SlashCommand::New),
+            "/help" => Some(SlashCommand::Help),
             _ => None
         }
     }
@@ -352,9 +444,12 @@ impl AIAssistState {
             let query = self.last_search_query.as_ref().unwrap();
             let results = self.last_search_results.as_ref().unwrap();
 
-            // 替换 @search 为实际的搜索结果
-            let replacement = format!("@search (查询: \"{}\"):\n{}", query, results);
+            // 替换 @search 为实际的搜索结果（第一条结果的详细内容）
+            let replacement = format!("@search (查询: \"{}\" 的第一条结果):\n{}", query, results);
             content.replace("@search", &replacement)
+        } else if content.contains("@search") {
+            // 如果没有搜索结果，提示用户先进行搜索
+            content.replace("@search", "@search (请先使用 /search 命令进行搜索)")
         } else {
             content.to_string()
         }
@@ -392,6 +487,9 @@ impl AIAssistState {
         self.streaming_message_id = None;
         self.streaming_content.clear();
         self.current_request_id = None;
+
+        // Auto-save sessions after completing a response
+        self.auto_save_sessions();
     }
 
     /// Check for updates from async tasks
@@ -448,6 +546,9 @@ impl AIAssistState {
         self.chat_sessions.push(new_session);
         self.active_session_idx = self.chat_sessions.len() - 1;
         self.chat_messages = self.chat_sessions[self.active_session_idx].messages.clone();
+
+        // Auto-save sessions after creating a new session
+        self.auto_save_sessions();
     }
 
     /// Switch to a different chat session
@@ -455,6 +556,9 @@ impl AIAssistState {
         if idx < self.chat_sessions.len() {
             self.active_session_idx = idx;
             self.chat_messages = self.chat_sessions[idx].messages.clone();
+
+            // Auto-save sessions after switching
+            self.auto_save_sessions();
         }
     }
 
@@ -483,7 +587,11 @@ impl AIAssistState {
         let system_message = ChatMessage {
             id: Uuid::new_v4(),
             role: MessageRole::System,
-            content: format!("搜索结果: 找到 {} 个匹配 \"{}\" 的结果。可以使用 @search 引用这些结果。", result_count, query),
+            content: if result_count > 0 {
+                format!("搜索完成: 找到 {} 个匹配 \"{}\" 的结果。使用 @search 可以引用第一条搜索结果的详细内容。", result_count, query)
+            } else {
+                format!("搜索完成: 未找到匹配 \"{}\" 的结果。", query)
+            },
             timestamp: Utc::now(),
             attachments: vec![],
         };
@@ -507,6 +615,84 @@ impl AIAssistState {
         self.can_insert_to_note = can_insert;
     }
 
+    /// Save current chat sessions to persistent storage
+    pub fn save_sessions(&self) -> Result<(), Box<dyn std::error::Error>> {
+        crate::save_chat_sessions(self)
+    }
+
+    /// Auto-save sessions after important operations
+    pub fn auto_save_sessions(&self) {
+        if let Err(err) = self.save_sessions() {
+            log::error!("Failed to auto-save chat sessions: {}", err);
+        }
+    }
+
+    /// Delete a chat session
+    pub fn delete_session(&mut self, idx: usize) {
+        if idx < self.chat_sessions.len() && self.chat_sessions.len() > 1 {
+            self.chat_sessions.remove(idx);
+
+            // Adjust active session index
+            if self.active_session_idx >= self.chat_sessions.len() {
+                self.active_session_idx = self.chat_sessions.len() - 1;
+            } else if self.active_session_idx > idx {
+                self.active_session_idx -= 1;
+            }
+
+            // Update current chat messages
+            if let Some(active_session) = self.chat_sessions.get(self.active_session_idx) {
+                self.chat_messages = active_session.messages.clone();
+            }
+
+            // Auto-save after deletion
+            self.auto_save_sessions();
+        }
+    }
+
+    /// Rename a chat session
+    pub fn rename_session(&mut self, idx: usize, new_name: String) {
+        if idx < self.chat_sessions.len() {
+            self.chat_sessions[idx].name = new_name;
+
+            // Auto-save after renaming
+            self.auto_save_sessions();
+        }
+    }
+
+    /// Clear current chat session (keep only the initial assistant message)
+    pub fn clear_current_session(&mut self) {
+        if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+            // Keep only the initial assistant message
+            let initial_message = ChatMessage {
+                id: Uuid::new_v4(),
+                role: MessageRole::Assistant,
+                content: "你好！我是SeeU智能助手，有什么我可以帮助你的吗？".to_string(),
+                timestamp: Utc::now(),
+                attachments: vec![],
+            };
+
+            session.messages = vec![initial_message.clone()];
+            self.chat_messages = vec![initial_message];
+
+            // Auto-save after clearing
+            self.auto_save_sessions();
+        }
+    }
+
+    /// Get session count
+    pub fn get_session_count(&self) -> usize {
+        self.chat_sessions.len()
+    }
+
+    /// Get current session name
+    pub fn get_current_session_name(&self) -> String {
+        if let Some(session) = self.chat_sessions.get(self.active_session_idx) {
+            session.name.clone()
+        } else {
+            "未知会话".to_string()
+        }
+    }
+
     /// 获取消息摘要，截取指定长度的字符
     fn get_message_summary(message: &str, max_length: usize) -> String {
         let trimmed = message.trim();
@@ -524,6 +710,155 @@ impl AIAssistState {
         } else {
             summary
         }
+    }
+
+    /// 检查输入变化并更新指令菜单状态
+    pub fn update_command_menu(&mut self, cursor_pos: Option<egui::Pos2>) {
+        let input = &self.chat_input;
+
+        // 检查是否应该显示指令菜单
+        if let Some(trigger_pos) = self.find_command_trigger(input) {
+            let trigger_char = input.chars().nth(trigger_pos).unwrap_or(' ');
+
+            // 只有在菜单不可见或者触发位置改变时才更新
+            if !self.command_menu.is_visible || self.command_menu.trigger_position != trigger_pos {
+                self.command_menu.is_visible = true;
+                self.command_menu.trigger_position = trigger_pos;
+                self.command_menu.cursor_position = cursor_pos;
+                self.command_menu.selected_index = 0;
+
+                match trigger_char {
+                    '@' => self.command_menu.menu_type = CommandMenuType::AtCommands,
+                    '/' => self.command_menu.menu_type = CommandMenuType::SlashCommands,
+                    _ => self.command_menu.menu_type = CommandMenuType::None,
+                }
+            } else {
+                // 只更新光标位置
+                self.command_menu.cursor_position = cursor_pos;
+            }
+        } else {
+            self.command_menu.is_visible = false;
+            self.command_menu.menu_type = CommandMenuType::None;
+        }
+    }
+
+    /// 查找指令触发位置（@ 或 / 在单词开头）
+    fn find_command_trigger(&self, input: &str) -> Option<usize> {
+        let chars: Vec<char> = input.chars().collect();
+
+        // 从后往前查找最近的 @ 或 /
+        for (i, &ch) in chars.iter().enumerate().rev() {
+            if ch == '@' || ch == '/' {
+                // 检查这个字符是否在单词开头（前面是空格或开头）
+                let is_word_start = i == 0 || chars[i - 1].is_whitespace();
+
+                if is_word_start {
+                    // 检查后面的字符（如果有的话）
+                    let after_chars = &chars[i + 1..];
+
+                    // 如果后面没有字符，或者后面只有字母、数字、下划线，且长度合理
+                    if after_chars.is_empty() ||
+                       (after_chars.iter().all(|&c| c.is_alphanumeric() || c == '_') && after_chars.len() <= 10) {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// 处理指令菜单的键盘输入
+    pub fn handle_command_menu_input(&mut self, key: egui::Key) -> bool {
+        if !self.command_menu.is_visible {
+            return false;
+        }
+
+        match key {
+            egui::Key::ArrowUp => {
+                let max_items = self.get_command_menu_items().len();
+                if max_items > 0 {
+                    self.command_menu.selected_index =
+                        if self.command_menu.selected_index == 0 {
+                            max_items - 1
+                        } else {
+                            self.command_menu.selected_index - 1
+                        };
+                }
+                true
+            },
+            egui::Key::ArrowDown => {
+                let max_items = self.get_command_menu_items().len();
+                if max_items > 0 {
+                    self.command_menu.selected_index =
+                        (self.command_menu.selected_index + 1) % max_items;
+                }
+                true
+            },
+            egui::Key::Enter => {
+                self.apply_selected_command();
+                true
+            },
+            egui::Key::Escape => {
+                self.command_menu.is_visible = false;
+                true
+            },
+            _ => false
+        }
+    }
+
+    /// 获取当前菜单的指令项目
+    fn get_command_menu_items(&self) -> Vec<String> {
+        match self.command_menu.menu_type {
+            CommandMenuType::AtCommands => {
+                vec![
+                    "@search".to_string(),
+                    "@date".to_string(),
+                    "@time".to_string(),
+                    "@user".to_string(),
+                ]
+            },
+            CommandMenuType::SlashCommands => {
+                vec![
+                    "/search".to_string(),
+                    "/clear".to_string(),
+                    "/help".to_string(),
+                    "/new".to_string(),
+                ]
+            },
+            CommandMenuType::None => vec![],
+        }
+    }
+
+    /// 应用选中的指令
+    pub fn apply_selected_command(&mut self) {
+        let items = self.get_command_menu_items();
+        if self.command_menu.selected_index < items.len() {
+            let selected_command = &items[self.command_menu.selected_index];
+
+            // 替换触发字符和后续文本
+            let mut chars: Vec<char> = self.chat_input.chars().collect();
+            let trigger_pos = self.command_menu.trigger_position;
+
+            // 找到要替换的范围（从触发位置到下一个空格或结尾）
+            let mut end_pos = trigger_pos + 1;
+            while end_pos < chars.len() && !chars[end_pos].is_whitespace() {
+                end_pos += 1;
+            }
+
+            // 替换文本
+            chars.splice(trigger_pos..end_pos, selected_command.chars());
+            self.chat_input = chars.into_iter().collect();
+
+            // 对于slash命令，添加空格（除了不需要参数的命令）
+            if selected_command.starts_with('/') && selected_command != "/clear" && selected_command != "/help" && selected_command != "/new" {
+                self.chat_input.push(' ');
+            }
+        }
+
+        // 隐藏菜单
+        self.command_menu.is_visible = false;
+        self.command_menu.menu_type = CommandMenuType::None;
     }
 }
 
@@ -575,12 +910,17 @@ pub enum AttachmentType {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SlashCommand {
     Search(String),
+    Clear,
+    New,
+    Help,
 }
+
+// 移除ProviderType，统一使用OpenAI compatible格式
 
 /// AI settings
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AISettings {
-    pub api_url: String,
+    pub base_url: String,
     pub api_key: String,
     pub model: String,
     pub temperature: f32,
@@ -588,13 +928,36 @@ pub struct AISettings {
     pub streaming: bool,
 }
 
+impl AISettings {
+    /// Get the chat endpoint URL (OpenAI compatible)
+    pub fn get_chat_url(&self) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        // 如果base_url已经以/v1结尾，直接添加/chat/completions
+        // 否则先添加/v1再添加/chat/completions
+        if base.ends_with("/v1") {
+            format!("{}/chat/completions", base)
+        } else {
+            format!("{}/v1/chat/completions", base)
+        }
+    }
+
+    /// Get the models endpoint URL (OpenAI compatible)
+    pub fn get_models_url(&self) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        if base.ends_with("/v1") {
+            format!("{}/models", base)
+        } else {
+            format!("{}/v1/models", base)
+        }
+    }
+}
+
 impl Default for AISettings {
     fn default() -> Self {
         Self {
-            // Ollama API 端点
-            api_url: "http://localhost:11434/api/chat".to_string(),
-            api_key: "EMPTY".to_string(),
-            model: "qwen3:4b".to_string(),
+            base_url: "http://localhost:11434/v1".to_string(),
+            api_key: "".to_string(),
+            model: "qwen2.5:7b".to_string(),
             temperature: 0.7,
             max_tokens: 2000,
             streaming: true,

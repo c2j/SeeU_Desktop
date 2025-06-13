@@ -130,8 +130,11 @@ impl AuditLogger {
     
     /// Log an audit event
     pub fn log_event(&mut self, event: AuditEvent) {
-        log::info!("Audit event: {:?} - {} - {:?}", 
-                  event.event_type, event.action, event.result);
+        // Only log high-risk events to reduce noise
+        if matches!(event.risk_level, RiskLevel::High | RiskLevel::Critical) {
+            log::warn!("High-risk audit event: {:?} - {} - {:?}",
+                      event.event_type, event.action, event.result);
+        }
         
         // Add to memory log
         self.memory_log.push_back(event.clone());
@@ -359,7 +362,7 @@ impl AuditLogger {
     /// Load recent events from file
     fn load_recent_events(&mut self) {
         // TODO: Implement loading recent events from audit log file
-        log::debug!("Loading recent audit events from file");
+        // Removed debug log to reduce noise
     }
     
     /// Check for security violations in the event

@@ -14,7 +14,7 @@ pub struct Config {
 /// AI settings
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AiSettings {
-    pub api_url: String,
+    pub base_url: String,
     pub api_key: String,
     pub model: String,
 }
@@ -31,9 +31,9 @@ impl Default for Config {
         Self {
             theme: "dark".to_string(),
             ai_settings: AiSettings {
-                api_url: "http://localhost:11434/v1".to_string(),
-                api_key: "EMPTY".to_string(),
-                model: "qwen3:4b".to_string(),
+                base_url: "http://localhost:11434/v1".to_string(),
+                api_key: "".to_string(),
+                model: "qwen2.5:7b".to_string(),
             },
             window_size: WindowSize {
                 width: 1280.0,

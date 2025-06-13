@@ -2,6 +2,7 @@ pub mod indexer;
 pub mod schema;
 pub mod ui;
 pub mod watcher;
+pub mod file_types;
 pub mod utils;
 
 use eframe::egui;
@@ -11,9 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Receiver, Sender};
 use std::path::Path;
 use std::fs;
-use std::thread;
-use std::time::Duration;
 use std::io::Write;
+use std::collections::HashMap;
 // use rfd::FileDialog; // 移除 rfd 依赖以避免 async-recursion
 use indexer::Indexer;
 use watcher::FileWatcher;
@@ -56,6 +56,7 @@ pub struct ISearchState {
     pub enable_file_type_filter: bool,
     pub search_hidden_files: bool,
     pub enable_file_monitoring: bool,
+    pub search_on_typing: bool,  // 是否在输入时触发搜索
 
     // Search result sorting
     pub sort_by: SortBy,
@@ -64,6 +65,15 @@ pub struct ISearchState {
     // Directory input (替代文件对话框)
     pub directory_input: String,
     pub show_directory_input_dialog: bool,
+
+    // Search optimization
+    search_cache: HashMap<String, (Vec<SearchResult>, SearchStats)>,
+    last_search_query: String,
+    search_result_receiver: Option<Receiver<SearchResponse>>,
+
+    // File type filter UI
+    pub show_file_type_filter: bool,
+    pub selected_file_types: Vec<String>,
 }
 
 /// Search result
@@ -112,6 +122,23 @@ pub struct SearchStats {
     pub total_matches: usize,  // Total matches before deduplication
     pub search_time_ms: u64,
     pub query_time: DateTime<Utc>,
+}
+
+/// Search request for background processing
+#[derive(Debug, Clone)]
+pub struct SearchRequest {
+    pub query: String,
+    pub file_type_filter: Option<String>,
+    pub filename_filter: Option<String>,
+}
+
+/// Search response from background processing
+#[derive(Debug, Clone)]
+pub struct SearchResponse {
+    pub query: String,
+    pub results: Vec<SearchResult>,
+    pub stats: SearchStats,
+    pub has_more_results: bool,
 }
 
 /// Sort criteria for search results
@@ -176,10 +203,13 @@ impl Default for ISearchState {
         // Create indexer
         let indexer = Arc::new(Mutex::new(Indexer::new()));
 
-        // Initialize indexer
-        if let Ok(indexer_lock) = indexer.lock() {
-            let _ = indexer_lock.initialize_index();
-        }
+        // Initialize indexer asynchronously to avoid blocking startup
+        let indexer_clone = indexer.clone();
+        std::thread::spawn(move || {
+            if let Ok(indexer_lock) = indexer_clone.lock() {
+                let _ = indexer_lock.initialize_index(); // Ignore errors during startup
+            }
+        });
 
         // Create file watcher
         let file_watcher = Arc::new(Mutex::new(FileWatcher::new(indexer.clone())));
@@ -187,6 +217,7 @@ impl Default for ISearchState {
         // Create communication channels for background operations
         let (stats_sender, stats_receiver) = std::sync::mpsc::channel();
         let (deletion_sender, deletion_receiver) = std::sync::mpsc::channel();
+        let (_search_sender, search_result_receiver) = std::sync::mpsc::channel();
 
         Self {
             search_query: String::new(),
@@ -217,15 +248,26 @@ impl Default for ISearchState {
             enable_file_type_filter: true,
             search_hidden_files: false,
             enable_file_monitoring: true,
+            search_on_typing: false,  // 默认按回车触发搜索
             sort_by: SortBy::default(),
             sort_order: SortOrder::default(),
             directory_input: String::new(),
             show_directory_input_dialog: false,
+            search_cache: HashMap::new(),
+            last_search_query: String::new(),
+            search_result_receiver: Some(search_result_receiver),
+            show_file_type_filter: false,
+            selected_file_types: Vec::new(),
         }
     }
 }
 
 impl ISearchState {
+    /// Get indexer reference for external use
+    pub fn get_indexer(&self) -> Arc<Mutex<Indexer>> {
+        self.indexer.clone()
+    }
+
     /// Initialize the state
     pub fn initialize(&mut self) {
         // Load indexed directories from disk
@@ -234,16 +276,21 @@ impl ISearchState {
         // Load search options from disk
         self.load_search_options();
 
-        // Start watching all directories
-        for directory in &self.indexed_directories {
-            if let Ok(mut watcher) = self.file_watcher.lock() {
-                let _ = watcher.watch_directory(directory);
+        // Start watching directories asynchronously to avoid blocking startup
+        let directories = self.indexed_directories.clone();
+        let file_watcher = self.file_watcher.clone();
+
+        std::thread::spawn(move || {
+            for directory in &directories {
+                if let Ok(mut watcher) = file_watcher.lock() {
+                    let _ = watcher.watch_directory(directory); // Ignore errors during startup
+                }
             }
-        }
+        });
     }
 
-    /// Load indexed directories from disk
-    fn load_indexed_directories(&mut self) {
+    /// Load indexed directories from disk (public method for external use)
+    pub fn load_indexed_directories(&mut self) {
         let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         let config_path = base_path.join("seeu_desktop").join("isearch").join("directories.json");
 
@@ -254,43 +301,63 @@ impl ISearchState {
         }
     }
 
-    /// Save indexed directories to disk
+    /// Save indexed directories to disk (async to avoid UI blocking)
     pub fn save_indexed_directories(&self) {
-        let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        let config_dir = base_path.join("seeu_desktop").join("isearch");
-        let config_path = config_dir.join("directories.json");
+        let directories = self.indexed_directories.clone();
 
-        fs::create_dir_all(&config_dir).ok();
+        // Perform file I/O in background thread to avoid blocking UI
+        std::thread::spawn(move || {
+            let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            let config_dir = base_path.join("seeu_desktop").join("isearch");
+            let config_path = config_dir.join("directories.json");
 
-        if let Ok(json) = serde_json::to_string_pretty(&self.indexed_directories) {
-            let _ = fs::write(config_path, json);
-        }
+            if let Err(e) = std::fs::create_dir_all(&config_dir) {
+                log::warn!("Failed to create config directory: {}", e);
+                return;
+            }
+
+            if let Ok(json) = serde_json::to_string_pretty(&directories) {
+                if let Err(e) = std::fs::write(config_path, json) {
+                    log::warn!("Failed to save indexed directories: {}", e);
+                }
+            }
+        });
     }
 
-    /// Save search options to disk
+    /// Save search options to disk (async to avoid UI blocking)
     pub fn save_search_options(&self) {
-        let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        let config_dir = base_path.join("seeu_desktop").join("isearch");
-        let config_path = config_dir.join("search_options.json");
-
-        fs::create_dir_all(&config_dir).ok();
-
+        // Clone the options to avoid borrowing issues in the background thread
         let options = serde_json::json!({
             "enable_content_preview": self.enable_content_preview,
             "enable_file_type_filter": self.enable_file_type_filter,
             "search_hidden_files": self.search_hidden_files,
             "enable_file_monitoring": self.enable_file_monitoring,
+            "search_on_typing": self.search_on_typing,
             "sort_by": self.sort_by,
             "sort_order": self.sort_order,
         });
 
-        if let Ok(json) = serde_json::to_string_pretty(&options) {
-            let _ = fs::write(config_path, json);
-        }
+        // Perform file I/O in background thread to avoid blocking UI
+        std::thread::spawn(move || {
+            let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            let config_dir = base_path.join("seeu_desktop").join("isearch");
+            let config_path = config_dir.join("search_options.json");
+
+            if let Err(e) = std::fs::create_dir_all(&config_dir) {
+                log::warn!("Failed to create config directory: {}", e);
+                return;
+            }
+
+            if let Ok(json) = serde_json::to_string_pretty(&options) {
+                if let Err(e) = std::fs::write(config_path, json) {
+                    log::warn!("Failed to save search options: {}", e);
+                }
+            }
+        });
     }
 
-    /// Load search options from disk
-    fn load_search_options(&mut self) {
+    /// Load search options from disk (public method for external use)
+    pub fn load_search_options(&mut self) {
         let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         let config_path = base_path.join("seeu_desktop").join("isearch").join("search_options.json");
 
@@ -307,6 +374,9 @@ impl ISearchState {
                 }
                 if let Some(enable_file_monitoring) = options.get("enable_file_monitoring").and_then(|v| v.as_bool()) {
                     self.enable_file_monitoring = enable_file_monitoring;
+                }
+                if let Some(search_on_typing) = options.get("search_on_typing").and_then(|v| v.as_bool()) {
+                    self.search_on_typing = search_on_typing;
                 }
                 if let Some(sort_by) = options.get("sort_by") {
                     if let Ok(sort_by_enum) = serde_json::from_value::<SortBy>(sort_by.clone()) {
@@ -332,7 +402,7 @@ impl ISearchState {
 
         // Check if directory is already indexed
         if self.indexed_directories.iter().any(|dir| dir.path == path) {
-            log::info!("Directory already indexed: {}", path);
+            // Directory already indexed, skip silently
             return;
         }
 
@@ -363,16 +433,17 @@ impl ISearchState {
         let directory_clone = directory.clone();
         let stats_sender = self.stats_sender.clone();
 
+        // Get search hidden files setting
+        let include_hidden = self.search_hidden_files;
+
         // Spawn background thread for indexing
         std::thread::spawn(move || {
             log::info!("Starting background indexing for directory: {}", directory_clone.path);
 
             if let Ok(indexer_lock) = indexer.lock() {
-                match indexer_lock.index_directory(&directory_clone) {
+                match indexer_lock.index_directory_with_options(&directory_clone, include_hidden) {
                     Ok(stats) => {
-                        log::info!("Successfully indexed directory '{}': {} files, {:.1} MB",
-                                 directory_clone.path, stats.total_files,
-                                 stats.total_size_bytes as f64 / (1024.0 * 1024.0));
+                        // Directory indexed successfully, send results silently
 
                         // Send results back to main thread
                         if let Some(sender) = &stats_sender {
@@ -463,6 +534,10 @@ impl ISearchState {
             }
         });
 
+        // Clear search cache since index content has changed
+        self.search_cache.clear();
+        log::info!("Cleared search cache after directory removal");
+
         // Update index stats immediately (will be more accurate after background deletion completes)
         self.update_index_stats();
     }
@@ -482,32 +557,120 @@ impl ISearchState {
         log::info!("Index statistics reset after directory removal");
     }
 
-    /// Search for files
+    /// Reindex all directories (useful after code changes)
+    pub fn reindex_all_directories(&mut self) {
+        log::info!("Starting reindex of all directories");
+
+        // Clone the directories list to avoid borrowing issues
+        let directories = self.indexed_directories.clone();
+
+        if directories.is_empty() {
+            log::info!("No directories to reindex");
+            return;
+        }
+
+        // Clear search cache since we're rebuilding the index
+        self.search_cache.clear();
+        log::info!("Cleared search cache before reindexing");
+
+        // Set indexing state
+        self.is_indexing = true;
+
+        // Clone necessary data for background thread
+        let indexer = self.indexer.clone();
+        let stats_sender = self.stats_sender.clone();
+        let include_hidden = self.search_hidden_files;
+
+        // Start indexing in background thread
+        std::thread::spawn(move || {
+            // First, completely rebuild the index (delete and recreate with new schema)
+            if let Ok(indexer_lock) = indexer.lock() {
+                if let Err(e) = indexer_lock.rebuild_index() {
+                    log::error!("Failed to rebuild index before reindexing: {}", e);
+                    return;
+                }
+            }
+
+            for directory in directories {
+                log::info!("Reindexing directory: {}", directory.path);
+
+                if let Ok(indexer_lock) = indexer.lock() {
+                    match indexer_lock.index_directory_with_options(&directory, include_hidden) {
+                        Ok(stats) => {
+                            log::info!("Successfully reindexed directory '{}': {} files, {} bytes",
+                                     directory.path, stats.total_files, stats.total_size_bytes);
+
+                            // Send result through channel
+                            if let Some(sender) = &stats_sender {
+                                let result = DirectoryIndexResult {
+                                    directory_path: directory.path.clone(),
+                                    stats,
+                                };
+                                let _ = sender.send(result);
+                            }
+                        },
+                        Err(e) => {
+                            log::error!("Failed to reindex directory '{}': {}", directory.path, e);
+                        }
+                    }
+                }
+            }
+
+            log::info!("Completed reindexing all directories");
+        });
+    }
+
+    /// Search for files with caching and async processing
     pub fn search(&mut self) {
         if self.search_query.trim().is_empty() {
             self.search_results.clear();
             return;
         }
 
-        self.is_searching = true;
+        let query = self.search_query.trim().to_string();
 
-        // Record start time for search statistics
-        let start_time = std::time::Instant::now();
+        // Check cache first
+        if let Some((cached_results, cached_stats)) = self.search_cache.get(&query) {
+            log::debug!("Using cached search results for query: {}", query);
+            self.search_results = cached_results.clone();
+            self.search_stats = cached_stats.clone();
+            self.has_more_results = cached_results.len() >= 100;
+            self.sort_results();
+            return;
+        }
+
+        // If same query as last time and still searching, don't start new search
+        if self.is_searching && self.last_search_query == query {
+            return;
+        }
+
+        self.is_searching = true;
+        self.last_search_query = query.clone();
 
         // Parse advanced search query
-        let (parsed_query, file_type_filter, filename_filter) = self.parse_advanced_query(&self.search_query);
+        let (parsed_query, file_type_filter, filename_filter) = self.parse_advanced_query(&query);
+
+        // For now, let's do synchronous search but with optimizations
+        let start_time = std::time::Instant::now();
 
         // Perform search
-        let raw_results = {
+        let mut raw_results = {
             let indexer_lock = self.indexer.lock().unwrap();
             indexer_lock.search_advanced(&parsed_query, file_type_filter.as_deref(), filename_filter.as_deref()).unwrap_or_default()
         };
+
+        // Apply file type filter from UI if enabled and selected
+        if self.enable_file_type_filter && !self.selected_file_types.is_empty() {
+            raw_results.retain(|result| {
+                self.selected_file_types.contains(&result.file_type.to_lowercase())
+            });
+        }
 
         // Store the total number of matches before deduplication
         let total_matches = raw_results.len();
 
         // Deduplicate results by file path, keeping only the highest-ranked match
-        let mut path_to_best_result: std::collections::HashMap<String, SearchResult> = std::collections::HashMap::new();
+        let mut path_to_best_result: HashMap<String, SearchResult> = HashMap::new();
 
         for result in raw_results {
             // Check if we already have a result for this path
@@ -523,15 +686,10 @@ impl ISearchState {
         }
 
         // Convert the map values to a vector
-        let mut deduplicated_results: Vec<SearchResult> = path_to_best_result.into_values().collect();
+        let deduplicated_results: Vec<SearchResult> = path_to_best_result.into_values().collect();
 
         // Calculate search time
         let search_time = start_time.elapsed();
-
-        // Small delay to show the spinner (only if search was very fast)
-        if search_time.as_millis() < 300 {
-            thread::sleep(Duration::from_millis(300) - search_time);
-        }
 
         // Check if there are more results than the limit (100)
         self.has_more_results = deduplicated_results.len() >= 100;
@@ -546,10 +704,21 @@ impl ISearchState {
         // Update search statistics
         self.search_stats = SearchStats {
             total_results: final_results.len(),
-            total_matches: total_matches,  // Total matches before deduplication
+            total_matches,
             search_time_ms: search_time.as_millis() as u64,
             query_time: Utc::now(),
         };
+
+        // Cache the results (limit cache size to prevent memory issues)
+        if self.search_cache.len() >= 50 {
+            // Remove oldest entries (simple FIFO, could be improved with LRU)
+            let keys_to_remove: Vec<String> = self.search_cache.keys().take(10).cloned().collect();
+            for key in keys_to_remove {
+                self.search_cache.remove(&key);
+            }
+        }
+
+        self.search_cache.insert(query, (final_results.clone(), self.search_stats.clone()));
 
         // Update state with results
         self.search_results = final_results;
@@ -558,6 +727,11 @@ impl ISearchState {
         self.sort_results();
 
         self.is_searching = false;
+    }
+
+    /// Process search results from background thread (placeholder for future async implementation)
+    pub fn process_search_results(&mut self) {
+        // Currently using synchronous search, this method is reserved for future async implementation
     }
 
     /// Parse advanced search query
@@ -896,10 +1070,13 @@ impl ISearchState {
         let indexer = self.indexer.clone();
         let stats_sender = self.stats_sender.clone();
 
+        // Get search hidden files setting
+        let include_hidden = self.search_hidden_files;
+
         // Start indexing in background thread
         std::thread::spawn(move || {
             if let Ok(indexer_lock) = indexer.lock() {
-                match indexer_lock.index_directory(&directory_clone) {
+                match indexer_lock.index_directory_with_options(&directory_clone, include_hidden) {
                     Ok(stats) => {
                         log::info!("Manual index update completed for directory '{}': {} files, {:.1} MB",
                                   directory_clone.path, stats.total_files,
@@ -952,11 +1129,14 @@ impl ISearchState {
         let indexer = self.indexer.clone();
         let stats_sender = self.stats_sender.clone();
 
+        // Get search hidden files setting
+        let include_hidden = self.search_hidden_files;
+
         // Start indexing in background thread
         std::thread::spawn(move || {
             for directory in directories {
                 if let Ok(indexer_lock) = indexer.lock() {
-                    match indexer_lock.index_directory(&directory) {
+                    match indexer_lock.index_directory_with_options(&directory, include_hidden) {
                         Ok(stats) => {
                             log::info!("Manual index update completed for directory '{}': {} files, {:.1} MB",
                                       directory.path, stats.total_files,
@@ -995,6 +1175,11 @@ impl ISearchState {
 
     /// Process file watcher events
     pub fn process_watcher_events(&mut self) {
+        // Only process file watcher events if file monitoring is enabled
+        if !self.enable_file_monitoring {
+            return;
+        }
+
         if let Ok(mut watcher) = self.file_watcher.lock() {
             // 只检测事件，不立即执行索引
             let directories_to_reindex = watcher.check_events();
@@ -1005,6 +1190,7 @@ impl ISearchState {
                 let indexer = self.indexer.clone();
                 let directories = directories_to_reindex.clone();
                 let stats_sender = self.stats_sender.clone();
+                let include_hidden = self.search_hidden_files;
 
                 // 在后台线程中执行索引
                 std::thread::spawn(move || {
@@ -1017,7 +1203,7 @@ impl ISearchState {
                         };
 
                         if let Ok(indexer_lock) = indexer.lock() {
-                            if let Ok(stats) = indexer_lock.index_directory(&directory) {
+                            if let Ok(stats) = indexer_lock.index_directory_with_options(&directory, include_hidden) {
                                 // 通过通道发送结果
                                 if let Some(sender) = &stats_sender {
                                     let result = DirectoryIndexResult {
@@ -1083,6 +1269,11 @@ impl ISearchState {
 
 /// Render the iSearch module
 pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
+    render_isearch_with_sidebar_info(ui, state, false);
+}
+
+/// Render the iSearch module with right sidebar awareness
+pub fn render_isearch_with_sidebar_info(ui: &mut egui::Ui, state: &mut ISearchState, right_sidebar_open: bool) {
     // Process directory dialog
     state.process_directory_dialog();
 
@@ -1091,6 +1282,9 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
 
     // Check for completed indexing operations (important for updating UI)
     state.check_reindex_results();
+
+    // Process search results from background thread
+    state.process_search_results();
 
     // Use available_rect to get the actual available space
     let available_rect = ui.available_rect_before_wrap();
@@ -1121,9 +1315,21 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
                         .id(search_id)
                 );
 
-                if ui.button("搜索").clicked() ||
-                   (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                // Trigger search based on user settings
+                let should_search = ui.button("搜索").clicked() ||
+                   (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) ||
+                   (state.search_on_typing && response.changed() && !state.search_query.trim().is_empty());
+
+                if should_search {
                     state.search();
+                }
+
+                // File type filter button (only show if enabled)
+                if state.enable_file_type_filter {
+                    let filter_text = if state.show_file_type_filter { "🔽" } else { "🔼" };
+                    if ui.button(format!("📁{}", filter_text)).on_hover_text("文件类型筛选").clicked() {
+                        state.show_file_type_filter = !state.show_file_type_filter;
+                    }
                 }
 
                 let help_button = ui.button("?").on_hover_text("点击查看高级搜索语法帮助");
@@ -1150,6 +1356,48 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
                     });
             }
         });
+
+        // File type filter panel
+        if state.show_file_type_filter && state.enable_file_type_filter {
+            ui.add_space(5.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("文件类型:");
+
+                let file_types = vec![
+                    ("文档", vec!["pdf", "doc", "docx", "txt", "md", "rtf"]),
+                    ("表格", vec!["xls", "xlsx", "csv", "ods"]),
+                    ("演示", vec!["ppt", "pptx", "odp"]),
+                    ("代码", vec!["rs", "py", "js", "ts", "java", "cpp", "c", "h", "go", "php"]),
+                    ("图片", vec!["jpg", "jpeg", "png", "gif", "bmp", "svg", "webp"]),
+                    ("音频", vec!["mp3", "wav", "flac", "aac", "ogg"]),
+                    ("视频", vec!["mp4", "avi", "mkv", "mov", "wmv", "flv"]),
+                    ("压缩", vec!["zip", "rar", "7z", "tar", "gz", "bz2"]),
+                ];
+
+                for (category, extensions) in file_types {
+                    let is_selected = extensions.iter().any(|ext| state.selected_file_types.contains(&ext.to_string()));
+                    let mut selected = is_selected;
+
+                    if ui.checkbox(&mut selected, category).changed() {
+                        if selected {
+                            // Add all extensions in this category
+                            for ext in extensions {
+                                if !state.selected_file_types.contains(&ext.to_string()) {
+                                    state.selected_file_types.push(ext.to_string());
+                                }
+                            }
+                        } else {
+                            // Remove all extensions in this category
+                            state.selected_file_types.retain(|ext| !extensions.contains(&ext.as_str()));
+                        }
+                    }
+                }
+
+                if ui.button("清除").clicked() {
+                    state.selected_file_types.clear();
+                }
+            });
+        }
 
         ui.separator();
 
@@ -1244,9 +1492,9 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
 
                         ui.separator();
 
-                        // Update all indexes button
-                        if ui.button("🔄 更新全部索引").on_hover_text("重新索引所有目录").clicked() {
-                            state.update_all_indexes();
+                        // Reindex all directories button
+                        if ui.button("🔄 重新索引全部").on_hover_text("重新索引所有目录，应用最新功能改进").clicked() {
+                            state.reindex_all_directories();
                         }
 
                         ui.add_space(5.0);
@@ -1255,7 +1503,31 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
                 });
         }
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        // 根据右侧边栏状态调整中央面板
+        if right_sidebar_open {
+            // 当右侧边栏打开时，使用受限的布局
+            let available_rect = ui.available_rect_before_wrap();
+            let content_width = available_rect.width() - 320.0; // 为右侧边栏预留320px空间
+
+            ui.allocate_ui_with_layout(
+                egui::Vec2::new(content_width.max(200.0), available_rect.height()),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    render_search_results_content(ui, state);
+                }
+            );
+        } else {
+            // 正常情况下使用完整的中央面板
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                render_search_results_content(ui, state);
+            });
+        }
+        }
+    );
+}
+
+/// Render the search results content area
+fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
             // Add a scroll area for the entire central panel content to prevent overflow
             let central_height = ui.available_height();
             egui::ScrollArea::vertical()
@@ -1463,9 +1735,30 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
                                         };
                                         ui.label(icon);
 
-                                        // File name with truncation and copy button
+                                        // File name with highlighting and copy button
                                         let truncated_filename = utils::truncate_with_ellipsis(&result.filename, 40);
-                                        ui.heading(truncated_filename);
+
+                                        // Check if filename contains search terms for highlighting
+                                        if !state.search_query.trim().is_empty() {
+                                            let search_terms = utils::extract_search_terms(&state.search_query);
+                                            let filename_lower = truncated_filename.to_lowercase();
+                                            let has_match = search_terms.iter().any(|term| filename_lower.contains(&term.to_lowercase()));
+
+                                            if has_match && !search_terms.is_empty() {
+                                                // Create highlighted filename with heading style
+                                                let mut highlighted_job = utils::create_highlighted_rich_text(&truncated_filename, &search_terms);
+                                                // Apply heading style to the entire job
+                                                for section in &mut highlighted_job.sections {
+                                                    section.format.font_id = egui::FontId::new(18.0, egui::FontFamily::Proportional);
+                                                }
+                                                ui.add(egui::Label::new(highlighted_job));
+                                            } else {
+                                                ui.heading(truncated_filename);
+                                            }
+                                        } else {
+                                            ui.heading(truncated_filename);
+                                        }
+
                                         if ui.small_button("📋").on_hover_text("复制文件名").clicked() {
                                             state.copy_filename(result);
                                         }
@@ -1490,12 +1783,50 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
                                     });
 
                                     // Content preview with truncation (only if enabled)
-                                    if state.enable_content_preview && !result.content_preview.is_empty() {
+                                    if state.enable_content_preview {
                                         ui.add_space(4.0);
-                                        // We'll still use wrap(true) but truncate to a reasonable length first
-                                        // to prevent extremely long lines from causing layout issues
-                                        let truncated_preview = utils::truncate_with_ellipsis(&result.content_preview, 300);
-                                        ui.add(egui::Label::new(truncated_preview).wrap());
+                                        if result.content_preview.is_empty() {
+                                            ui.label(egui::RichText::new(format!("📝 [内容预览为空] - 文件类型: {}", result.file_type)).weak().italics());
+                                        } else if result.content_preview.contains("无法预览内容") {
+                                            // Special handling for non-previewable files
+                                            let icon = match result.file_type.as_str() {
+                                                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "ico" | "tiff" => "🖼",
+                                                "mp4" | "avi" | "mkv" | "mov" | "wmv" | "flv" | "webm" | "m4v" => "🎬",
+                                                "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "🎵",
+                                                "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" => "📦",
+                                                "exe" | "msi" | "dmg" | "pkg" | "deb" | "rpm" => "⚙️",
+                                                _ => "📄",
+                                            };
+                                            ui.label(egui::RichText::new(format!("{} {}", icon, result.content_preview)).weak().italics());
+                                        } else {
+                                            // Regular content preview for previewable files with highlighting
+                                            let truncated_preview = utils::truncate_with_ellipsis(&result.content_preview, 300);
+
+                                            // Create highlighted rich text if we have search terms
+                                            if !state.search_query.trim().is_empty() {
+                                                let search_terms = utils::extract_search_terms(&state.search_query);
+                                                if !search_terms.is_empty() {
+                                                    // Create rich text with highlighting
+                                                    let highlighted_job = utils::create_highlighted_rich_text(&truncated_preview, &search_terms);
+
+                                                    ui.horizontal(|ui| {
+                                                        ui.label("📝");
+                                                        ui.add(egui::Label::new(highlighted_job).wrap());
+                                                        ui.label(format!("({}字符)", result.content_preview.chars().count()));
+                                                    });
+                                                } else {
+                                                    // Fallback to normal display
+                                                    ui.add(egui::Label::new(format!("📝 {} ({}字符)", truncated_preview, result.content_preview.chars().count())).wrap());
+                                                }
+                                            } else {
+                                                // No search terms, display normally
+                                                ui.add(egui::Label::new(format!("📝 {} ({}字符)", truncated_preview, result.content_preview.chars().count())).wrap());
+                                            }
+                                        }
+                                    } else {
+                                        // Debug: Show when content preview is disabled
+                                        ui.add_space(4.0);
+                                        ui.label(egui::RichText::new("📝 [内容预览已禁用]").weak().italics());
                                     }
 
                                     // Action buttons
@@ -1607,9 +1938,6 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
                 });
             }
                 });
-        });
-        }
-    );
 
     // Show file properties dialog if requested
     if state.show_properties_dialog {
@@ -1731,6 +2059,7 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
                     });
                 });
         }
+    }
 
     // Directory input dialog (替代文件对话框)
     if state.show_directory_input_dialog {
@@ -1802,6 +2131,5 @@ pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
                     });
                 });
             });
-    }
     }
 }

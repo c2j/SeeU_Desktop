@@ -26,7 +26,7 @@ impl Notebook {
             created_at: now,
             updated_at: now,
             note_ids: Vec::new(),
-            expanded: true, // 默认展开
+            expanded: false, // 默认折叠，节省加载时间
         }
     }
 
