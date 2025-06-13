@@ -28,6 +28,9 @@ pub fn render_main_interface(ui: &mut egui::Ui, state: &mut IToolsState) {
                 IToolsView::InstalledPlugins => {
                     crate::ui::plugins::render_installed_plugins(ui, state);
                 }
+                IToolsView::McpSettings => {
+                    render_mcp_settings(ui, state);
+                }
             }
         });
 }
@@ -110,6 +113,14 @@ fn render_view_tabs(ui: &mut egui::Ui, state: &mut IToolsState) {
             "🔧 已安装插件"
         ).clicked() {
             state.ui_state.current_view = IToolsView::InstalledPlugins;
+        }
+
+        // MCP Settings
+        if ui.selectable_label(
+            state.ui_state.current_view == IToolsView::McpSettings,
+            "⚙️ MCP设置"
+        ).clicked() {
+            state.ui_state.current_view = IToolsView::McpSettings;
         }
 
         // Show role-specific tabs
@@ -216,3 +227,25 @@ pub fn render_success_message(ui: &mut egui::Ui, message: &str) {
 pub fn render_warning_message(ui: &mut egui::Ui, warning: &str) {
     ui.colored_label(egui::Color32::from_rgb(255, 200, 100), format!("⚠ {}", warning));
 }
+
+/// Render MCP settings view
+fn render_mcp_settings(ui: &mut egui::Ui, state: &mut IToolsState) {
+    // Check if we have MCP settings UI
+    if state.mcp_settings_ui.is_none() {
+        ui.vertical_centered(|ui| {
+            ui.label("MCP设置界面未初始化");
+            if ui.button("重新初始化").clicked() {
+                state.initialize_mcp_settings_ui();
+            }
+        });
+        return;
+    }
+
+    // Use our complete MCP settings UI
+    if let Some(mcp_settings_ui) = &mut state.mcp_settings_ui {
+        let ctx = ui.ctx().clone();
+        mcp_settings_ui.render(&ctx, ui);
+    }
+}
+
+

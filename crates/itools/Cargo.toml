@@ -13,6 +13,7 @@ egui_extras = "0.31.1"
 
 # Async runtime
 tokio = { version = "1.32.0", features = ["full"] }
+tokio-util = "0.7"
 
 # Serialization for MCP protocol
 serde = { version = "1.0.188", features = ["derive"] }
@@ -39,7 +40,10 @@ oso = "0.27"
 # WASM runtime for plugin sandboxing
 wasmtime = "13.0"
 
-# JSON-RPC for MCP protocol
+# MCP Protocol SDK
+rmcp = { version = "0.1", features = ["client", "transport-child-process"] }
+
+# JSON-RPC for MCP protocol (legacy)
 jsonrpc-core = "18.0"
 jsonrpc-derive = "18.0"
 
@@ -50,9 +54,20 @@ thiserror = "1.0"
 # File system utilities
 dirs = "5.0.1"
 
+# File dialogs
+rfd = "0.14"
+
 # Compression for plugin packages
 flate2 = "1.0"
 tar = "0.4"
 
 # Logging for examples
 env_logger = "0.10"
+
+[[example]]
+name = "mcp_demo"
+path = "examples/mcp_demo.rs"
+
+[[example]]
+name = "mcp_settings_demo"
+path = "examples/mcp_settings_demo.rs"

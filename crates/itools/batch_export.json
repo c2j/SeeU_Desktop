@@ -1,0 +1,81 @@
+[
+  {
+    "name": "Demo Everything Server",
+    "description": "A demo MCP server with all capabilities",
+    "transport": {
+      "type": "command",
+      "command": "echo",
+      "args": [
+        "MCP server simulation"
+      ],
+      "env": {}
+    },
+    "enabled": true,
+    "auto_start": false,
+    "directory": "Demo",
+    "metadata": {}
+  },
+  {
+    "name": "Demo File Server",
+    "description": "A demo file system MCP server",
+    "transport": {
+      "type": "command",
+      "command": "ls",
+      "args": [
+        "-la"
+      ],
+      "env": {}
+    },
+    "enabled": false,
+    "auto_start": false,
+    "directory": "Demo",
+    "metadata": {}
+  },
+  {
+    "name": "Everything Server",
+    "description": "MCP server with everything capabilities",
+    "transport": {
+      "type": "command",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-everything"
+      ],
+      "env": {}
+    },
+    "enabled": false,
+    "auto_start": false,
+    "directory": "Examples",
+    "metadata": {}
+  },
+  {
+    "name": "File System Server",
+    "description": "MCP server for file system operations",
+    "transport": {
+      "type": "command",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem"
+      ],
+      "env": {}
+    },
+    "enabled": false,
+    "auto_start": false,
+    "directory": "Examples",
+    "metadata": {}
+  },
+  {
+    "name": "Demo TCP Server",
+    "description": "A demo TCP MCP server",
+    "transport": {
+      "type": "tcp",
+      "host": "localhost",
+      "port": 8080
+    },
+    "enabled": false,
+    "auto_start": false,
+    "directory": "Remote",
+    "metadata": {}
+  }
+]

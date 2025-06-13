@@ -1,0 +1,104 @@
+{
+  "standard_mcp_examples": {
+    "filesystem_server": {
+      "mcpServers": {
+        "filesystem": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            "/Users/username/Desktop",
+            "/Users/username/Downloads"
+          ]
+        }
+      }
+    },
+    "brave_search_server": {
+      "mcpServers": {
+        "brave-search": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+          "env": {
+            "BRAVE_API_KEY": "your-api-key-here"
+          }
+        }
+      }
+    },
+    "sqlite_server": {
+      "mcpServers": {
+        "sqlite": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-sqlite",
+            "/path/to/database.db"
+          ]
+        }
+      }
+    },
+    "git_server": {
+      "mcpServers": {
+        "git": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-git",
+            "/path/to/git/repo"
+          ]
+        }
+      }
+    },
+    "everything_server": {
+      "mcpServers": {
+        "everything": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-everything"]
+        }
+      }
+    }
+  },
+  "internal_format_examples": {
+    "filesystem_server": {
+      "name": "文件系统服务器",
+      "description": "提供文件系统访问功能的 MCP 服务器",
+      "directory": "文件系统",
+      "transport": {
+        "Command": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/username/Desktop"],
+          "env": {}
+        }
+      },
+      "enabled": false,
+      "auto_start": false,
+      "metadata": {}
+    },
+    "tcp_server": {
+      "name": "TCP 服务器",
+      "description": "通过 TCP 连接的 MCP 服务器",
+      "directory": "网络",
+      "transport": {
+        "Tcp": {
+          "host": "localhost",
+          "port": 8080
+        }
+      },
+      "enabled": false,
+      "auto_start": false,
+      "metadata": {}
+    },
+    "websocket_server": {
+      "name": "WebSocket 服务器",
+      "description": "通过 WebSocket 连接的 MCP 服务器",
+      "directory": "网络",
+      "transport": {
+        "WebSocket": {
+          "url": "ws://localhost:8080/mcp"
+        }
+      },
+      "enabled": false,
+      "auto_start": false,
+      "metadata": {}
+    }
+  }
+}

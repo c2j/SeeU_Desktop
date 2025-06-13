@@ -1,7 +1,21 @@
 pub mod client;
 pub mod protocol;
 pub mod transport;
+pub mod rmcp_client;
+pub mod real_rmcp_client;
+pub mod server_manager;
+pub mod protocol_handler;
+pub mod server_templates;
+pub mod performance_monitor;
+pub mod batch_operations;
 
 pub use client::McpClient;
 pub use protocol::{McpMessage, McpRequest, McpResponse, McpNotification};
 pub use transport::{McpTransport, TransportType};
+pub use rmcp_client::RmcpClient;
+pub use real_rmcp_client::RealRmcpClient;
+pub use server_manager::{McpServerManager, McpServerConfig, McpServerInfo};
+pub use protocol_handler::{McpProtocolHandler, ProtocolState, ClientInfo};
+pub use server_templates::{ServerTemplate, ServerTemplateManager, TemplateCategory};
+pub use performance_monitor::{PerformanceMonitor, ServerMetrics, PerformanceEvent, HealthStatus};
+pub use batch_operations::{BatchOperationsManager, BatchOperation, BatchOperationResult, BatchOperationEvent};

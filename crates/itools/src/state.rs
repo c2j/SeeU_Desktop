@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 
 use crate::roles::{Role, UserRole};
 use crate::plugins::{Plugin, PluginStatus, PluginManager};
-use crate::mcp::McpClient;
+use crate::mcp::{McpClient, McpServerManager};
+use crate::ui::mcp_settings::McpSettingsUi;
 
 /// Main state for the iTools module
 #[derive(Debug)]
@@ -18,6 +19,12 @@ pub struct IToolsState {
 
     /// MCP client for protocol communication
     pub mcp_client: McpClient,
+
+    /// MCP server manager
+    pub mcp_server_manager: Option<McpServerManager>,
+
+    /// MCP settings UI
+    pub mcp_settings_ui: Option<McpSettingsUi>,
 
     /// UI state
     pub ui_state: UiState,
@@ -55,6 +62,7 @@ pub enum IToolsView {
     Dashboard,
     PluginMarket,
     InstalledPlugins,
+    McpSettings,
 }
 
 /// Plugin market filters
@@ -113,6 +121,8 @@ impl IToolsState {
             current_role: UserRole::BusinessUser, // Default role
             plugin_manager: PluginManager::new(),
             mcp_client: McpClient::new(),
+            mcp_server_manager: None,
+            mcp_settings_ui: None,
             ui_state: UiState::default(),
             security_context: SecurityContext {
                 session_id,
@@ -134,6 +144,62 @@ impl IToolsState {
 
         // Initialize MCP client
         self.mcp_client.initialize();
+
+        // Initialize MCP server manager
+        self.initialize_mcp_server_manager();
+
+        // Initialize MCP settings UI
+        self.initialize_mcp_settings_ui();
+    }
+
+    /// Initialize MCP server manager
+    pub fn initialize_mcp_server_manager(&mut self) {
+        // Get config directory
+        if let Some(config_dir) = dirs::config_dir() {
+            let mcp_config_path = config_dir.join("seeu_desktop").join("mcp_servers.json");
+
+            // Create directory if it doesn't exist
+            if let Some(parent) = mcp_config_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            let mut manager = McpServerManager::new(mcp_config_path);
+
+            // Initialize synchronously for now
+            if let Err(e) = manager.initialize_sync() {
+                log::warn!("Failed to initialize MCP server manager: {}", e);
+                return;
+            }
+
+            self.mcp_server_manager = Some(manager);
+
+            log::info!("MCP server manager initialized");
+        } else {
+            log::warn!("Could not determine config directory for MCP server manager");
+        }
+    }
+
+    /// Initialize MCP settings UI
+    pub fn initialize_mcp_settings_ui(&mut self) {
+        // Get config directory
+        if let Some(config_dir) = dirs::config_dir() {
+            let mcp_config_path = config_dir.join("seeu_desktop").join("mcp_servers.json");
+
+            // Create directory if it doesn't exist
+            if let Some(parent) = mcp_config_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            let mcp_settings_ui = McpSettingsUi::new(mcp_config_path);
+
+            // Initialize asynchronously if possible, otherwise skip for now
+            // The UI will initialize itself when first rendered
+            self.mcp_settings_ui = Some(mcp_settings_ui);
+
+            log::info!("MCP settings UI initialized");
+        } else {
+            log::warn!("Could not determine config directory for MCP settings UI");
+        }
     }
 
     /// Update background tasks
