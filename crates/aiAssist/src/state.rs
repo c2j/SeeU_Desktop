@@ -171,10 +171,10 @@ impl AIAssistState {
         if let Some(cmd) = &slash_command {
             match cmd {
                 SlashCommand::Search(_) => {
-                    // Create a user message showing the command
+                    // Create a slash command message showing the command
                     let user_message = ChatMessage {
                         id: Uuid::new_v4(),
-                        role: MessageRole::User,
+                        role: MessageRole::SlashCommand,
                         content: self.chat_input.clone(),
                         timestamp: Utc::now(),
                         attachments: vec![],
@@ -206,16 +206,64 @@ impl AIAssistState {
                     return slash_command;
                 },
                 SlashCommand::Clear => {
+                    // Create a slash command message showing the command
+                    let clear_message = ChatMessage {
+                        id: Uuid::new_v4(),
+                        role: MessageRole::SlashCommand,
+                        content: self.chat_input.clone(),
+                        timestamp: Utc::now(),
+                        attachments: vec![],
+                    };
+
+                    self.chat_messages.push(clear_message.clone());
+
+                    // Add to current session
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        session.messages.push(clear_message);
+                    }
+
                     self.clear_current_session();
                     self.chat_input.clear();
                     return None;
                 },
                 SlashCommand::New => {
+                    // Create a slash command message showing the command
+                    let new_message = ChatMessage {
+                        id: Uuid::new_v4(),
+                        role: MessageRole::SlashCommand,
+                        content: self.chat_input.clone(),
+                        timestamp: Utc::now(),
+                        attachments: vec![],
+                    };
+
+                    self.chat_messages.push(new_message.clone());
+
+                    // Add to current session
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        session.messages.push(new_message);
+                    }
+
                     self.create_new_session();
                     self.chat_input.clear();
                     return None;
                 },
                 SlashCommand::Help => {
+                    // Create a slash command message showing the command
+                    let command_message = ChatMessage {
+                        id: Uuid::new_v4(),
+                        role: MessageRole::SlashCommand,
+                        content: self.chat_input.clone(),
+                        timestamp: Utc::now(),
+                        attachments: vec![],
+                    };
+
+                    self.chat_messages.push(command_message.clone());
+
+                    // Add to current session
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        session.messages.push(command_message);
+                    }
+
                     // Add a help message to the current chat
                     let help_message = ChatMessage {
                         id: Uuid::new_v4(),
@@ -423,7 +471,9 @@ impl AIAssistState {
         let session = &self.chat_sessions[self.active_session_idx];
 
         // Convert to the format expected by the API, processing @search references
+        // 过滤掉Slash指令消息，因为它们不应该发送给LLM
         session.messages.iter()
+            .filter(|msg| msg.role != MessageRole::SlashCommand)
             .map(|msg| {
                 let content = if msg.role == MessageRole::User {
                     // 处理用户消息中的 @search 引用
@@ -748,11 +798,23 @@ impl AIAssistState {
 
         // 从后往前查找最近的 @ 或 /
         for (i, &ch) in chars.iter().enumerate().rev() {
-            if ch == '@' || ch == '/' {
-                // 检查这个字符是否在单词开头（前面是空格或开头）
+            if ch == '@' {
+                // @ 指令可以出现在任何位置（前面是空格或开头）
                 let is_word_start = i == 0 || chars[i - 1].is_whitespace();
 
                 if is_word_start {
+                    // 检查后面的字符（如果有的话）
+                    let after_chars = &chars[i + 1..];
+
+                    // 如果后面没有字符，或者后面只有字母、数字、下划线，且长度合理
+                    if after_chars.is_empty() ||
+                       (after_chars.iter().all(|&c| c.is_alphanumeric() || c == '_') && after_chars.len() <= 10) {
+                        return Some(i);
+                    }
+                }
+            } else if ch == '/' {
+                // / 指令只能出现在输入框的第一个字符
+                if i == 0 {
                     // 检查后面的字符（如果有的话）
                     let after_chars = &chars[i + 1..];
 
@@ -795,8 +857,8 @@ impl AIAssistState {
                 }
                 true
             },
-            egui::Key::Enter => {
-                self.apply_selected_command();
+            egui::Key::Enter | egui::Key::Tab => {
+                self.apply_selected_command_to_input();
                 true
             },
             egui::Key::Escape => {
@@ -830,8 +892,8 @@ impl AIAssistState {
         }
     }
 
-    /// 应用选中的指令
-    pub fn apply_selected_command(&mut self) {
+    /// 将选中的指令插入到输入框（不执行）
+    pub fn apply_selected_command_to_input(&mut self) {
         let items = self.get_command_menu_items();
         if self.command_menu.selected_index < items.len() {
             let selected_command = &items[self.command_menu.selected_index];
@@ -850,15 +912,16 @@ impl AIAssistState {
             chars.splice(trigger_pos..end_pos, selected_command.chars());
             self.chat_input = chars.into_iter().collect();
 
-            // 对于slash命令，添加空格（除了不需要参数的命令）
+            // 对于需要参数的slash命令，添加空格
             if selected_command.starts_with('/') && selected_command != "/clear" && selected_command != "/help" && selected_command != "/new" {
                 self.chat_input.push(' ');
             }
         }
 
-        // 隐藏菜单
+        // 隐藏菜单，但保持输入框焦点
         self.command_menu.is_visible = false;
         self.command_menu.menu_type = CommandMenuType::None;
+        self.should_focus_chat = true; // 确保输入框保持焦点
     }
 }
 
@@ -878,6 +941,7 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+    SlashCommand, // 新增：用于标识Slash指令消息
 }
 
 /// Chat session

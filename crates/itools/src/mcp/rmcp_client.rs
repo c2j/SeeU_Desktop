@@ -1,25 +1,171 @@
 use std::collections::HashMap;
-use std::process::{Stdio, Child};
+use std::process::Child;
 use uuid::Uuid;
 use serde_json::Value;
 use anyhow::Result;
-use tokio::sync::mpsc;
-use tokio::process::Command as TokioCommand;
+use tokio::sync::{mpsc, oneshot};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, AsyncReadExt, BufReader};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-// Future rmcp integration (currently disabled due to API complexity)
-// use rmcp::{
-//     RoleClient, ClientHandler, ServiceExt,
-//     model::{
-//         ClientInfo, ServerInfo, Tool as RmcpTool,
-//         Resource as RmcpResource, Prompt as RmcpPrompt
-//     },
-//     transport::TokioChildProcess,
-//     ServiceError as McpError
-// };
+// Real rmcp integration for MCP protocol
+use rmcp::{
+    ServiceExt,
+    transport::TokioChildProcess,
+    model::{CallToolRequestParam, ReadResourceRequestParam, GetPromptRequestParam},
+    service::RunningService,
+    RoleClient,
+};
+use serde_json::json;
 
 use super::server_manager::{McpServerConfig, McpServerInfo, TransportConfig};
-use super::protocol_handler::{McpProtocolHandler, ProtocolEvent, ProtocolState, ClientInfo};
+use super::protocol_handler::{McpProtocolHandler, ProtocolState, ClientInfo as ProtocolClientInfo};
+
+/// MCP Client implementation using rmcp
+#[derive(Debug)]
+struct McpClient {
+    service: RunningService<RoleClient, ()>,
+}
+
+impl McpClient {
+    /// Create a new MCP client with rmcp service
+    async fn new(command: &str, args: &[String]) -> Result<Self> {
+        log::info!("Creating MCP client for command: {} {:?}", command, args);
+
+        // Create the command for the MCP server
+        let mut cmd = tokio::process::Command::new(command);
+        for arg in args {
+            cmd.arg(arg);
+        }
+
+        // Create transport using TokioChildProcess
+        let transport = TokioChildProcess::new(&mut cmd)?;
+
+        // Create the service using rmcp
+        let service = ().serve(transport).await
+            .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
+
+        Ok(McpClient {
+            service,
+        })
+    }
+
+    /// List tools using rmcp service
+    async fn list_tools(&self) -> Result<Value> {
+        log::debug!("Listing tools using rmcp service");
+        let tools = self.service.list_all_tools().await
+            .map_err(|e| anyhow::anyhow!("Failed to list tools: {}", e))?;
+
+        log::debug!("Raw tools response from rmcp: {:?}", tools);
+
+        // rmcp returns a Vec<Tool> directly, convert to our expected JSON format
+        let tools_json: Vec<Value> = tools.iter().map(|tool| {
+            json!({
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.input_schema
+            })
+        }).collect();
+
+        log::debug!("Converted {} tools to JSON format", tools_json.len());
+
+        Ok(json!({ "tools": tools_json }))
+    }
+
+    /// List resources using rmcp service
+    async fn list_resources(&self) -> Result<Value> {
+        log::debug!("Listing resources using rmcp service");
+        let resources = self.service.list_all_resources().await
+            .map_err(|e| anyhow::anyhow!("Failed to list resources: {}", e))?;
+
+        log::debug!("Raw resources response from rmcp: {:?}", resources);
+
+        // rmcp returns a Vec<Resource> directly, convert to our expected JSON format
+        let resources_json: Vec<Value> = resources.iter().map(|resource| {
+            json!({
+                "uri": resource.uri,
+                "name": resource.name,
+                "description": resource.description,
+                "mimeType": resource.mime_type
+            })
+        }).collect();
+
+        log::debug!("Converted {} resources to JSON format", resources_json.len());
+
+        Ok(json!({ "resources": resources_json }))
+    }
+
+    /// List prompts using rmcp service
+    async fn list_prompts(&self) -> Result<Value> {
+        log::debug!("Listing prompts using rmcp service");
+        let prompts = self.service.list_all_prompts().await
+            .map_err(|e| anyhow::anyhow!("Failed to list prompts: {}", e))?;
+
+        log::debug!("Raw prompts response from rmcp: {:?}", prompts);
+
+        // rmcp returns a Vec<Prompt> directly, convert to our expected JSON format
+        let prompts_json: Vec<Value> = prompts.iter().map(|prompt| {
+            // For now, skip arguments processing until we understand the exact structure
+            json!({
+                "name": prompt.name,
+                "description": prompt.description,
+                "arguments": []  // TODO: Fix arguments processing
+            })
+        }).collect();
+
+        log::debug!("Converted {} prompts to JSON format", prompts_json.len());
+
+        Ok(json!({ "prompts": prompts_json }))
+    }
+
+    /// Call a tool using rmcp service
+    async fn call_tool(&self, name: &str, arguments: Option<Value>) -> Result<Value> {
+        log::debug!("Calling tool '{}' using rmcp service", name);
+
+        let arguments_map = arguments.and_then(|v| v.as_object().cloned());
+
+        let result = self.service.call_tool(CallToolRequestParam {
+            name: name.to_string().into(),
+            arguments: arguments_map,
+        }).await
+            .map_err(|e| anyhow::anyhow!("Failed to call tool '{}': {}", name, e))?;
+
+        // Convert rmcp result to JSON format
+        serde_json::to_value(&result)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize tool result: {}", e))
+    }
+
+    /// Read a resource using rmcp service
+    async fn read_resource(&self, uri: &str) -> Result<Value> {
+        log::debug!("Reading resource '{}' using rmcp service", uri);
+
+        let result = self.service.read_resource(ReadResourceRequestParam {
+            uri: uri.to_string(),
+        }).await
+            .map_err(|e| anyhow::anyhow!("Failed to read resource '{}': {}", uri, e))?;
+
+        // Convert rmcp result to JSON format
+        serde_json::to_value(&result)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize resource result: {}", e))
+    }
+
+    /// Get a prompt using rmcp service
+    async fn get_prompt(&self, name: &str, arguments: Option<Value>) -> Result<Value> {
+        log::debug!("Getting prompt '{}' using rmcp service", name);
+
+        let arguments_map = arguments.and_then(|v| v.as_object().cloned());
+
+        let result = self.service.get_prompt(GetPromptRequestParam {
+            name: name.to_string(),
+            arguments: arguments_map,
+        }).await
+            .map_err(|e| anyhow::anyhow!("Failed to get prompt '{}': {}", name, e))?;
+
+        // Convert rmcp result to JSON format
+        serde_json::to_value(&result)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize prompt result: {}", e))
+    }
+}
 
 /// RMCP client wrapper for MCP server communication
 #[derive(Debug)]
@@ -32,6 +178,9 @@ pub struct RmcpClient {
 
     /// Event sender for UI updates
     event_sender: Option<mpsc::UnboundedSender<McpEvent>>,
+
+    /// Pending requests waiting for responses
+    pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
 
     // Future: RMCP client instances (currently using protocol handler)
     // rmcp_clients: HashMap<Uuid, RoleClient>,
@@ -48,8 +197,8 @@ pub struct ServerConnection {
     pub process: Option<Child>,
     pub protocol_handler: Option<McpProtocolHandler>,
     pub message_sender: Option<mpsc::UnboundedSender<String>>,
-    // Future: rmcp client integration
-    // pub rmcp_client: Option<RoleClient>,
+    // Real rmcp client integration
+    pub rmcp_service: Option<McpClient>,
 }
 
 /// Connection status
@@ -127,6 +276,7 @@ impl RmcpClient {
             servers: HashMap::new(),
             server_configs: HashMap::new(),
             event_sender: None,
+            pending_requests: Arc::new(Mutex::new(HashMap::new())),
             // rmcp_clients: HashMap::new(),
         }
     }
@@ -150,8 +300,8 @@ impl RmcpClient {
             process: None,
             protocol_handler: None,
             message_sender: None,
-            // Future: rmcp client integration
-            // rmcp_client: None,
+            // Real rmcp client integration
+            rmcp_service: None,
         };
 
         self.servers.insert(server_id, connection);
@@ -165,7 +315,7 @@ impl RmcpClient {
                 self.disconnect_server(server_id)?;
             }
         }
-        
+
         self.servers.remove(&server_id);
         self.server_configs.remove(&server_id);
         Ok(())
@@ -211,53 +361,120 @@ impl RmcpClient {
            .stdout(std::process::Stdio::piped())
            .stderr(std::process::Stdio::piped());
 
-        match cmd.spawn() {
-            Ok(mut child) => {
-                log::info!("Started MCP server process: {} {:?}", command, args);
+        // Try to create rmcp client first
+        match self.create_rmcp_client(command, args).await {
+            Ok(mcp_client) => {
+                log::info!("Successfully created rmcp client for server: {} {:?}", command, args);
 
-                // Get stdin and stdout handles
-                let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("Failed to get stdin"))?;
-                let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("Failed to get stdout"))?;
-
-                // Create protocol handler
-                let mut protocol_handler = McpProtocolHandler::new(server_id);
-
-                // Setup message communication
-                let (message_sender, message_receiver) = mpsc::unbounded_channel::<String>();
-                let (event_sender, mut event_receiver) = mpsc::unbounded_channel();
-
-                protocol_handler.set_event_sender(event_sender);
-                protocol_handler.connect();
-
-                // Store connection info
+                // Store the rmcp client and mark as connected
                 if let Some(connection) = self.servers.get_mut(&server_id) {
-                    connection.status = ConnectionStatus::Connecting;
-                    connection.protocol_handler = Some(protocol_handler);
-                    connection.message_sender = Some(message_sender.clone());
+                    connection.rmcp_service = Some(mcp_client);
+                    connection.status = ConnectionStatus::Connected;
+                    log::info!("Stored rmcp service for server {} and marked as connected", server_id);
+                } else {
+                    log::error!("Failed to find connection for server {} when storing rmcp service", server_id);
+                    return Err(anyhow::anyhow!("Failed to find connection for server"));
                 }
 
-                // Start message handling tasks
-                self.start_message_tasks(server_id, stdin, stdout, message_receiver, message_sender.clone()).await?;
-
-                // Start protocol initialization
-                self.initialize_protocol(server_id).await?;
-
-                // Handle protocol events
-                tokio::spawn(async move {
-                    while let Some(event) = event_receiver.recv().await {
-                        log::debug!("Protocol event: {:?}", event);
-                        // Handle events (state changes, capabilities, etc.)
-                    }
-                });
+                // Query server capabilities using rmcp service
+                if let Err(e) = self.query_server_capabilities(server_id).await {
+                    log::warn!("Failed to query capabilities for server {}: {}", server_id, e);
+                    // Don't fail the connection just because capability query failed
+                }
 
                 Ok(())
             }
             Err(e) => {
-                let error = format!("Failed to start command: {}", e);
-                self.set_server_error(server_id, error.clone());
-                Err(anyhow::anyhow!(error))
+                log::warn!("Failed to create rmcp client: {}, falling back to manual process management", e);
+
+                // Fallback to manual process management
+                match cmd.spawn() {
+                    Ok(mut child) => {
+                        log::info!("Started MCP server process: {} {:?}", command, args);
+
+                        // Get stdin and stdout handles
+                        let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("Failed to get stdin"))?;
+                        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("Failed to get stdout"))?;
+
+                        // Create protocol handler as fallback
+                        let mut protocol_handler = McpProtocolHandler::new(server_id);
+
+                        // Setup message communication
+                        let (message_sender, message_receiver) = mpsc::unbounded_channel::<String>();
+                        let (event_sender, mut event_receiver) = mpsc::unbounded_channel();
+
+                        protocol_handler.set_event_sender(event_sender);
+                        protocol_handler.connect();
+
+                        // Store connection info
+                        if let Some(connection) = self.servers.get_mut(&server_id) {
+                            connection.protocol_handler = Some(protocol_handler);
+                            connection.message_sender = Some(message_sender.clone());
+                        }
+
+                        // Start message handling tasks
+                        self.start_message_tasks(server_id, stdin, stdout, message_receiver, message_sender.clone()).await?;
+
+                        // Start protocol initialization
+                        self.initialize_protocol(server_id).await?;
+
+                        // Update connection status to connected
+                        if let Some(connection) = self.servers.get_mut(&server_id) {
+                            connection.status = ConnectionStatus::Connected;
+                        }
+
+                        // Query server capabilities after successful connection
+                        if let Err(e) = self.query_server_capabilities(server_id).await {
+                            log::warn!("Failed to query capabilities for server {}: {}", server_id, e);
+                            // Don't fail the connection just because capability query failed
+                        }
+
+                        // Handle protocol events
+                        tokio::spawn(async move {
+                            while let Some(event) = event_receiver.recv().await {
+                                log::debug!("Protocol event: {:?}", event);
+                                // Handle events (state changes, capabilities, etc.)
+                            }
+                        });
+
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let error = format!("Failed to start command: {}", e);
+                        self.set_server_error(server_id, error.clone());
+                        Err(anyhow::anyhow!(error))
+                    }
+                }
             }
         }
+    }
+
+    /// Create rmcp client for MCP communication
+    async fn create_rmcp_client(&self, command: &str, args: &[String]) -> Result<McpClient> {
+        log::info!("Creating rmcp client for command: {} {:?}", command, args);
+
+        // Create the command for the MCP server
+        let mut cmd = tokio::process::Command::new(command);
+        for arg in args {
+            cmd.arg(arg);
+        }
+
+        // Configure stdio
+        cmd.stdin(std::process::Stdio::piped())
+           .stdout(std::process::Stdio::piped())
+           .stderr(std::process::Stdio::piped());
+
+        // Create transport using TokioChildProcess
+        let transport = TokioChildProcess::new(&mut cmd)
+            .map_err(|e| anyhow::anyhow!("Failed to create transport: {}", e))?;
+
+        // Create the service using rmcp
+        let service = ().serve(transport).await
+            .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
+
+        Ok(McpClient {
+            service,
+        })
     }
 
     /// Connect to a TCP server
@@ -282,63 +499,211 @@ impl RmcpClient {
         Ok(())
     }
 
-    /// Query server capabilities
+    /// Query server capabilities using MCP protocol
     async fn query_server_capabilities(&mut self, server_id: Uuid) -> Result<()> {
-        // TODO: Implement MCP protocol to query actual capabilities
-        // For now, create mock capabilities based on server type
-        let config = self.servers.get(&server_id)
-            .map(|conn| &conn.config)
+        log::info!("Querying capabilities for server: {}", server_id);
+
+        // Check if server is connected
+        let connection = self.servers.get(&server_id)
             .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
 
-        let capabilities = match config.name.as_str() {
-            "Everything Server" => ServerCapabilities {
-                tools: vec![
-                    ToolInfo {
-                        name: "read_file".to_string(),
-                        description: Some("Read file contents".to_string()),
-                        input_schema: None,
-                    },
-                    ToolInfo {
-                        name: "write_file".to_string(),
-                        description: Some("Write file contents".to_string()),
-                        input_schema: None,
-                    },
-                ],
-                resources: vec![
-                    ResourceInfo {
-                        uri: "file://".to_string(),
-                        name: "File System".to_string(),
-                        description: Some("Access to file system".to_string()),
-                        mime_type: Some("application/octet-stream".to_string()),
-                    }
-                ],
-                prompts: vec![
-                    PromptInfo {
-                        name: "code_review".to_string(),
-                        description: Some("Review code for issues".to_string()),
-                        arguments: vec![],
-                    }
-                ],
-            },
-            _ => ServerCapabilities {
-                tools: vec![
-                    ToolInfo {
-                        name: "example_tool".to_string(),
-                        description: Some("An example tool".to_string()),
-                        input_schema: None,
-                    }
-                ],
-                resources: vec![],
-                prompts: vec![],
+        if connection.status != ConnectionStatus::Connected {
+            return Err(anyhow::anyhow!("Server is not connected"));
+        }
+
+        // Get server config for logging
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+
+        // Check if we have rmcp service - if so, use it directly
+        if connection.rmcp_service.is_some() {
+            log::info!("Using rmcp service to extract capabilities for server: {}", config.name);
+
+            // Extract capabilities from rmcp service
+            let capabilities = self.extract_capabilities_from_rmcp_service(server_id).await?;
+
+            log::info!("Successfully extracted capabilities from rmcp service for server: {} - Tools: {}, Resources: {}, Prompts: {}",
+                       config.name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+            // Update connection with capabilities
+            if let Some(connection) = self.servers.get_mut(&server_id) {
+                connection.capabilities = Some(capabilities.clone());
             }
+
+            // Send event to UI
+            self.send_event(McpEvent::CapabilitiesUpdated(server_id, capabilities));
+            return Ok(());
+        }
+
+        // Fallback to manual JSON-RPC queries if no rmcp service
+        log::info!("No rmcp service available, falling back to manual queries for server: {}", config.name);
+
+        // Fallback to manual JSON-RPC queries if no rmcp service
+        log::info!("No rmcp service available, falling back to manual queries for server: {}", config.name);
+
+        let message_sender = connection.message_sender.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No message sender available"))?;
+
+        // First, query tools
+        let tools = self.query_server_tools(server_id, message_sender).await?;
+
+        // Then, query resources
+        let resources = self.query_server_resources(server_id, message_sender).await?;
+
+        // Finally, query prompts
+        let prompts = self.query_server_prompts(server_id, message_sender).await?;
+
+        // Log the counts before moving the data
+        log::info!("Successfully queried capabilities for server: {} - Tools: {}, Resources: {}, Prompts: {}",
+                   config.name, tools.len(), resources.len(), prompts.len());
+
+        // Create capabilities from the queried data
+        let capabilities = ServerCapabilities {
+            tools,
+            resources,
+            prompts,
         };
 
+        // Update connection with capabilities
         if let Some(connection) = self.servers.get_mut(&server_id) {
             connection.capabilities = Some(capabilities.clone());
         }
 
+        // Send event to UI
         self.send_event(McpEvent::CapabilitiesUpdated(server_id, capabilities));
         Ok(())
+    }
+
+    /// Extract capabilities from rmcp service initialization
+    async fn extract_capabilities_from_rmcp_service(&self, server_id: Uuid) -> Result<ServerCapabilities> {
+        log::info!("Extracting capabilities from rmcp service for server: {}", server_id);
+
+        // Get the connection with rmcp service
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        let rmcp_client = connection.rmcp_service.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No rmcp service available"))?;
+
+        // Use the real rmcp service to query actual capabilities
+        // Query tools using the real MCP protocol
+        let tools = match rmcp_client.list_tools().await {
+            Ok(response) => {
+                log::info!("Successfully queried tools from rmcp service");
+
+                // Parse the response to extract tools
+                if let Some(tools_array) = response.get("tools").and_then(|t| t.as_array()) {
+                    let tool_infos: Vec<ToolInfo> = tools_array.iter().filter_map(|tool| {
+                        let name = tool.get("name")?.as_str()?.to_string();
+                        let description = tool.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                        let input_schema = tool.get("inputSchema").cloned();
+
+                        Some(ToolInfo {
+                            name,
+                            description,
+                            input_schema,
+                        })
+                    }).collect();
+
+                    log::info!("Parsed {} tools from rmcp service response", tool_infos.len());
+                    tool_infos
+                } else {
+                    log::warn!("No tools array found in rmcp service response");
+                    Vec::new()
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to query tools from rmcp service: {}", e);
+                Vec::new()
+            }
+        };
+
+        // Query resources using the real MCP protocol
+        let resources = match rmcp_client.list_resources().await {
+            Ok(response) => {
+                log::info!("Successfully queried resources from rmcp service");
+
+                // Parse the response to extract resources
+                if let Some(resources_array) = response.get("resources").and_then(|r| r.as_array()) {
+                    let resource_infos: Vec<ResourceInfo> = resources_array.iter().filter_map(|resource| {
+                        let uri = resource.get("uri")?.as_str()?.to_string();
+                        let name = resource.get("name")?.as_str()?.to_string();
+                        let description = resource.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                        let mime_type = resource.get("mimeType").and_then(|m| m.as_str()).map(|s| s.to_string());
+
+                        Some(ResourceInfo {
+                            uri,
+                            name,
+                            description,
+                            mime_type,
+                        })
+                    }).collect();
+
+                    log::info!("Parsed {} resources from rmcp service response", resource_infos.len());
+                    resource_infos
+                } else {
+                    log::warn!("No resources array found in rmcp service response");
+                    Vec::new()
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to query resources from rmcp service: {}", e);
+                Vec::new()
+            }
+        };
+
+        // Query prompts using the real MCP protocol
+        let prompts = match rmcp_client.list_prompts().await {
+            Ok(response) => {
+                log::info!("Successfully queried prompts from rmcp service");
+
+                // Parse the response to extract prompts
+                if let Some(prompts_array) = response.get("prompts").and_then(|p| p.as_array()) {
+                    let prompt_infos: Vec<PromptInfo> = prompts_array.iter().filter_map(|prompt| {
+                        let name = prompt.get("name")?.as_str()?.to_string();
+                        let description = prompt.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                        let arguments = prompt.get("arguments").and_then(|a| a.as_array()).map(|args| {
+                            args.iter().filter_map(|arg| {
+                                let name = arg.get("name")?.as_str()?.to_string();
+                                let description = arg.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                                let required = arg.get("required").and_then(|r| r.as_bool()).unwrap_or(false);
+
+                                Some(PromptArgument {
+                                    name,
+                                    description,
+                                    required,
+                                })
+                            }).collect()
+                        }).unwrap_or_default();
+
+                        Some(PromptInfo {
+                            name,
+                            description,
+                            arguments,
+                        })
+                    }).collect();
+
+                    log::info!("Parsed {} prompts from rmcp service response", prompt_infos.len());
+                    prompt_infos
+                } else {
+                    log::warn!("No prompts array found in rmcp service response");
+                    Vec::new()
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to query prompts from rmcp service: {}", e);
+                Vec::new()
+            }
+        };
+
+        log::info!("Successfully extracted capabilities from rmcp service - Tools: {}, Resources: {}, Prompts: {}",
+                   tools.len(), resources.len(), prompts.len());
+
+        Ok(ServerCapabilities {
+            tools,
+            resources,
+            prompts,
+        })
     }
 
     /// Get server information
@@ -946,19 +1311,150 @@ impl RmcpClient {
     // Future: Enhanced MCP operations with rmcp integration
     // These methods will be implemented when rmcp integration is complete
 
-    /// Call a tool on a specific server (placeholder)
-    pub async fn call_tool(&self, _server_id: Uuid, _tool_name: &str, _arguments: Value) -> Result<Value> {
-        Err(anyhow::anyhow!("Tool calling not yet implemented - awaiting rmcp integration"))
+    /// Call a tool on a specific server
+    pub async fn call_tool(&self, server_id: Uuid, tool_name: &str, arguments: Value) -> Result<Value> {
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+
+        log::info!("Calling tool '{}' on server: {} ({})", tool_name, config.name, server_id);
+
+        // Check if server is connected
+        if !self.servers.contains_key(&server_id) {
+            return Err(anyhow::anyhow!("Server not connected"));
+        }
+
+        // Create call_tool request
+        let request = super::protocol::McpRequest::new(
+            serde_json::Value::Number(serde_json::Number::from(100)),
+            super::protocol::methods::CALL_TOOL.to_string(),
+            Some(serde_json::json!({
+                "name": tool_name,
+                "arguments": arguments
+            })),
+        );
+
+        // Use real rmcp client to call the tool
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            // Use real MCP protocol to call the tool
+            match rmcp_service.call_tool(tool_name, Some(arguments)).await {
+                Ok(response) => {
+                    log::info!("Tool '{}' executed successfully", tool_name);
+
+                    // Extract the content from the response
+                    if let Some(content) = response.get("content") {
+                        Ok(content.clone())
+                    } else {
+                        Ok(response)
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to call tool '{}': {}", tool_name, e);
+                    Err(anyhow::anyhow!("Tool call failed: {}", e))
+                }
+            }
+        } else {
+            Err(anyhow::anyhow!("Server not properly connected with rmcp"))
+        }
     }
 
-    /// Read a resource from a specific server (placeholder)
-    pub async fn read_resource(&self, _server_id: Uuid, _uri: &str) -> Result<Value> {
-        Err(anyhow::anyhow!("Resource reading not yet implemented - awaiting rmcp integration"))
+    /// Read a resource from a specific server
+    pub async fn read_resource(&self, server_id: Uuid, uri: &str) -> Result<Value> {
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+
+        log::info!("Reading resource '{}' from server: {} ({})", uri, config.name, server_id);
+
+        // Check if server is connected
+        if !self.servers.contains_key(&server_id) {
+            return Err(anyhow::anyhow!("Server not connected"));
+        }
+
+        // Create read_resource request
+        let request = super::protocol::McpRequest::new(
+            serde_json::Value::Number(serde_json::Number::from(101)),
+            super::protocol::methods::READ_RESOURCE.to_string(),
+            Some(serde_json::json!({
+                "uri": uri
+            })),
+        );
+
+        // Use real rmcp client to read the resource
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            // Use real MCP protocol to read the resource
+            match rmcp_service.read_resource(uri).await {
+                Ok(response) => {
+                    log::info!("Resource '{}' read successfully", uri);
+
+                    // Extract the content from the response
+                    if let Some(content) = response.get("contents") {
+                        Ok(content.clone())
+                    } else {
+                        Ok(response)
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to read resource '{}': {}", uri, e);
+                    Err(anyhow::anyhow!("Resource read failed: {}", e))
+                }
+            }
+        } else {
+            Err(anyhow::anyhow!("Server not properly connected with rmcp"))
+        }
     }
 
-    /// Get a prompt from a specific server (placeholder)
-    pub async fn get_prompt(&self, _server_id: Uuid, _prompt_name: &str, _arguments: Option<Value>) -> Result<Value> {
-        Err(anyhow::anyhow!("Prompt getting not yet implemented - awaiting rmcp integration"))
+    /// Get a prompt from a specific server
+    pub async fn get_prompt(&self, server_id: Uuid, prompt_name: &str, arguments: Option<Value>) -> Result<Value> {
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+
+        log::info!("Getting prompt '{}' from server: {} ({})", prompt_name, config.name, server_id);
+
+        // Check if server is connected
+        if !self.servers.contains_key(&server_id) {
+            return Err(anyhow::anyhow!("Server not connected"));
+        }
+
+        // Create get_prompt request
+        let request = super::protocol::McpRequest::new(
+            serde_json::Value::Number(serde_json::Number::from(102)),
+            super::protocol::methods::GET_PROMPT.to_string(),
+            Some(serde_json::json!({
+                "name": prompt_name,
+                "arguments": arguments
+            })),
+        );
+
+        // Use real rmcp client to get the prompt
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            // Use real MCP protocol to get the prompt
+            match rmcp_service.get_prompt(prompt_name, arguments).await {
+                Ok(response) => {
+                    log::info!("Prompt '{}' executed successfully", prompt_name);
+
+                    // Extract the content from the response
+                    if let Some(content) = response.get("messages") {
+                        Ok(content.clone())
+                    } else {
+                        Ok(response)
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to get prompt '{}': {}", prompt_name, e);
+                    Err(anyhow::anyhow!("Prompt execution failed: {}", e))
+                }
+            }
+        } else {
+            Err(anyhow::anyhow!("Server not properly connected with rmcp"))
+        }
     }
 
     /// Refresh server capabilities (placeholder)
@@ -1003,13 +1499,36 @@ impl RmcpClient {
         // Task to receive messages from server
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
+        let pending_requests_clone = self.pending_requests.clone();
 
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
                 if !line.trim().is_empty() {
                     log::debug!("Received from server {}: {}", server_id, line);
-                    // Parse and handle the message
-                    // In a real implementation, we'd parse JSON-RPC and handle it
+
+                    // Try to parse as JSON-RPC response
+                    if let Ok(response) = serde_json::from_str::<Value>(&line) {
+                        // Check if this is a response (has "id" field)
+                        if let Some(id) = response.get("id").and_then(|id| id.as_str()) {
+                            // Look for pending request with this ID
+                            let mut pending = pending_requests_clone.lock().await;
+                            if let Some(sender) = pending.remove(id) {
+                                // Send response to waiting request
+                                if let Some(result) = response.get("result") {
+                                    let _ = sender.send(result.clone());
+                                } else if let Some(error) = response.get("error") {
+                                    log::error!("MCP error response for request {}: {}", id, error);
+                                    let _ = sender.send(json!({"error": error}));
+                                } else {
+                                    let _ = sender.send(response);
+                                }
+                                continue;
+                            }
+                        }
+                    }
+
+                    // If not a response, send to message handler
+                    let _ = message_sender.send(line);
                 }
             }
         });
@@ -1023,7 +1542,7 @@ impl RmcpClient {
             .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
 
         if let Some(protocol_handler) = &mut connection.protocol_handler {
-            let client_info = ClientInfo::default();
+            let client_info = ProtocolClientInfo::default();
             let init_message = protocol_handler.initialize(client_info)?;
 
             // Send initialize message
@@ -1140,4 +1659,247 @@ impl Default for RmcpClient {
     fn default() -> Self {
         Self::new()
     }
+}
+
+impl RmcpClient {
+    /// Query server tools using real MCP protocol
+    async fn query_server_tools(&self, server_id: Uuid, _message_sender: &mpsc::UnboundedSender<String>) -> Result<Vec<ToolInfo>> {
+        log::info!("Querying tools for server: {}", server_id);
+
+        // Try to get the rmcp client for real MCP communication
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        // Check if we have rmcp service
+        if connection.rmcp_service.is_some() {
+            log::info!("Found rmcp service for server {}, sending tools/list request", server_id);
+
+            // Try to use real MCP protocol to list tools
+            match self.send_mcp_request(server_id, "tools/list", None).await {
+                Ok(response) => {
+                    log::info!("Successfully queried tools from server {}", server_id);
+
+                    // Parse the response to extract tools
+                    if let Some(tools_array) = response.get("tools").and_then(|t| t.as_array()) {
+                        let tool_infos: Vec<ToolInfo> = tools_array.iter().filter_map(|tool| {
+                            let name = tool.get("name")?.as_str()?.to_string();
+                            let description = tool.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                            let input_schema = tool.get("inputSchema").cloned();
+
+                            Some(ToolInfo {
+                                name,
+                                description,
+                                input_schema,
+                            })
+                        }).collect();
+
+                        log::info!("Parsed {} tools from server response", tool_infos.len());
+                        return Ok(tool_infos);
+                    } else {
+                        log::warn!("No 'tools' array found in server response");
+                        // Return empty list instead of error for now
+                        return Ok(Vec::new());
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to query tools from server {}: {}", server_id, e);
+                    // Return empty list instead of error for now
+                    return Ok(Vec::new());
+                }
+            }
+        } else {
+            log::warn!("No rmcp service available for server {}", server_id);
+        }
+
+        // If rmcp client is not available, return empty list for now
+        log::info!("Returning empty tools list for server {}", server_id);
+        Ok(Vec::new())
+    }
+
+    /// Query server resources using real MCP protocol
+    async fn query_server_resources(&self, server_id: Uuid, _message_sender: &mpsc::UnboundedSender<String>) -> Result<Vec<ResourceInfo>> {
+        log::debug!("Querying resources for server: {}", server_id);
+
+        // Try to get the rmcp client for real MCP communication
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            // Try to use real MCP protocol to list resources
+            match self.send_mcp_request(server_id, "resources/list", None).await {
+                Ok(response) => {
+                    log::info!("Successfully queried resources from server {}", server_id);
+
+                    // Parse the response to extract resources
+                    if let Some(resources_array) = response.get("resources").and_then(|r| r.as_array()) {
+                        let resource_infos: Vec<ResourceInfo> = resources_array.iter().filter_map(|resource| {
+                            let uri = resource.get("uri")?.as_str()?.to_string();
+                            let name = resource.get("name")?.as_str()?.to_string();
+                            let description = resource.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                            let mime_type = resource.get("mimeType").and_then(|m| m.as_str()).map(|s| s.to_string());
+
+                            Some(ResourceInfo {
+                                uri,
+                                name,
+                                description,
+                                mime_type,
+                            })
+                        }).collect();
+
+                        return Ok(resource_infos);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to query resources from server {}: {}", server_id, e);
+                }
+            }
+        }
+
+        // If rmcp client is not available, return empty list for now
+        log::info!("Returning empty resources list for server {}", server_id);
+        Ok(Vec::new())
+    }
+
+    /// Query server prompts using real MCP protocol
+    async fn query_server_prompts(&self, server_id: Uuid, _message_sender: &mpsc::UnboundedSender<String>) -> Result<Vec<PromptInfo>> {
+        log::debug!("Querying prompts for server: {}", server_id);
+
+        // Try to get the rmcp client for real MCP communication
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            // Try to use real MCP protocol to list prompts
+            match self.send_mcp_request(server_id, "prompts/list", None).await {
+                Ok(response) => {
+                    log::info!("Successfully queried prompts from server {}", server_id);
+
+                    // Parse the response to extract prompts
+                    if let Some(prompts_array) = response.get("prompts").and_then(|p| p.as_array()) {
+                        let prompt_infos: Vec<PromptInfo> = prompts_array.iter().filter_map(|prompt| {
+                            let name = prompt.get("name")?.as_str()?.to_string();
+                            let description = prompt.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+
+                            let arguments = prompt.get("arguments")
+                                .and_then(|args| args.as_array())
+                                .map(|args_array| {
+                                    args_array.iter().filter_map(|arg| {
+                                        let name = arg.get("name")?.as_str()?.to_string();
+                                        let description = arg.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                                        let required = arg.get("required").and_then(|r| r.as_bool()).unwrap_or(false);
+
+                                        Some(PromptArgument {
+                                            name,
+                                            description,
+                                            required,
+                                        })
+                                    }).collect()
+                                })
+                                .unwrap_or_default();
+
+                            Some(PromptInfo {
+                                name,
+                                description,
+                                arguments,
+                            })
+                        }).collect();
+
+                        return Ok(prompt_infos);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to query prompts from server {}: {}", server_id, e);
+                }
+            }
+        }
+
+        // If rmcp client is not available, return empty list for now
+        log::info!("Returning empty prompts list for server {}", server_id);
+        Ok(Vec::new())
+    }
+    /// Send a JSON-RPC request to an MCP server using the real MCP protocol
+    async fn send_mcp_request(&self, server_id: Uuid, method: &str, params: Option<Value>) -> Result<Value> {
+        log::debug!("Sending MCP request to server {}: {} with params: {:?}", server_id, method, params);
+
+        // Get the connection
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        // Check if we have rmcp service - use it directly
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            log::debug!("Using rmcp service to send request: {}", method);
+
+            // Try to downcast the service to the actual rmcp service type
+            // For now, we'll use a different approach since we can't easily downcast Box<dyn Any>
+            // We need to implement the actual rmcp service calls
+
+            // TODO: Implement actual rmcp service method calls
+            // For now, we need to implement the proper rmcp service integration
+            // The rmcp service should provide methods like list_tools(), list_resources(), list_prompts()
+
+            // Since we can't easily downcast Box<dyn Any>, we need to restructure this
+            // For now, return an error to indicate that rmcp service calls are not yet implemented
+            log::error!("RMCP service method calls not yet properly implemented for method: {}", method);
+            log::error!("This requires proper rmcp service API integration");
+
+            Err(anyhow::anyhow!("RMCP service method calls not yet implemented - need to use actual rmcp API for method: {}", method))
+        }
+        // Fallback to manual message sending if no rmcp service
+        else if let Some(message_sender) = &connection.message_sender {
+            // Create JSON-RPC request
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let request = json!({
+                "jsonrpc": "2.0",
+                "id": request_id.clone(),
+                "method": method,
+                "params": params
+            });
+
+            // Create a oneshot channel to receive the response
+            let (response_sender, response_receiver) = oneshot::channel();
+
+            // Store the pending request
+            {
+                let mut pending = self.pending_requests.lock().await;
+                pending.insert(request_id.clone(), response_sender);
+            }
+
+            // Send the request
+            let request_str = serde_json::to_string(&request)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize request: {}", e))?;
+
+            message_sender.send(request_str)
+                .map_err(|e| anyhow::anyhow!("Failed to send request: {}", e))?;
+
+            log::debug!("MCP request sent successfully, waiting for response...");
+
+            // Wait for the response with a timeout
+            let timeout_duration = tokio::time::Duration::from_secs(10);
+            match tokio::time::timeout(timeout_duration, response_receiver).await {
+                Ok(Ok(response)) => {
+                    log::debug!("Received MCP response for request {}: {:?}", request_id, response);
+                    Ok(response)
+                }
+                Ok(Err(_)) => {
+                    // Channel was closed without sending a response
+                    Err(anyhow::anyhow!("Response channel closed unexpectedly"))
+                }
+                Err(_) => {
+                    // Timeout occurred
+                    // Clean up the pending request
+                    let mut pending = self.pending_requests.lock().await;
+                    pending.remove(&request_id);
+                    Err(anyhow::anyhow!("Request timed out after {} seconds", timeout_duration.as_secs()))
+                }
+            }
+        } else {
+            Err(anyhow::anyhow!("No rmcp service or message sender available for server"))
+        }
+    }
+
+
+
+
+
+
 }

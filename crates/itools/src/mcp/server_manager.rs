@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
+use tokio::sync::mpsc;
 
-use super::rmcp_client::{RmcpClient, ConnectionStatus, ServerCapabilities};
+use super::rmcp_client::{RmcpClient, ConnectionStatus, ServerCapabilities, McpEvent};
 
 /// MCP Server Manager for managing server configurations and connections
 #[derive(Debug)]
@@ -90,9 +91,17 @@ impl McpServerManager {
 
     /// Initialize the server manager
     pub async fn initialize(&mut self) -> Result<()> {
+        // Clear existing data to avoid duplicates
+        self.server_directories.clear();
+
         self.load_configuration().await?;
         self.setup_default_directories();
         Ok(())
+    }
+
+    /// Set event sender for MCP events
+    pub fn set_event_sender(&mut self, sender: mpsc::UnboundedSender<McpEvent>) {
+        self.client.set_event_sender(sender);
     }
 
     /// Initialize the server manager synchronously (for use in non-async contexts)
@@ -301,7 +310,7 @@ impl McpServerManager {
 
     /// Get server directories for UI display
     pub fn get_server_directories(&self) -> Vec<ServerDirectory> {
-        self.server_directories
+        let mut directories: Vec<_> = self.server_directories
             .iter()
             .map(|(name, servers)| ServerDirectory {
                 name: name.clone(),
@@ -309,7 +318,12 @@ impl McpServerManager {
                 servers: servers.clone(),
                 expanded: false,
             })
-            .collect()
+            .collect();
+
+        // Sort directories by name for consistent ordering
+        directories.sort_by(|a, b| a.name.cmp(&b.name));
+
+        directories
     }
 
     /// Connect to a server
@@ -345,6 +359,21 @@ impl McpServerManager {
     /// Get total server count
     pub fn get_total_server_count(&self) -> usize {
         self.server_directories.values().map(|v| v.len()).sum()
+    }
+
+    /// Call a tool on a specific server
+    pub async fn call_tool(&mut self, server_id: Uuid, tool_name: &str, arguments: serde_json::Value) -> Result<serde_json::Value> {
+        self.client.call_tool(server_id, tool_name, arguments).await
+    }
+
+    /// Read a resource from a specific server
+    pub async fn read_resource(&mut self, server_id: Uuid, uri: &str) -> Result<serde_json::Value> {
+        self.client.read_resource(server_id, uri).await
+    }
+
+    /// Get a prompt from a specific server
+    pub async fn get_prompt(&mut self, server_id: Uuid, prompt_name: &str, arguments: Option<serde_json::Value>) -> Result<serde_json::Value> {
+        self.client.get_prompt(server_id, prompt_name, arguments).await
     }
 
     /// Import server configuration from file

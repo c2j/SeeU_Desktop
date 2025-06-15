@@ -111,7 +111,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                 ui.separator();
 
                 // 聊天消息区域
-                let chat_height = available_height - 150.0; // 减去标题栏、工具栏和输入框的高度
+                let chat_height = available_height - 120.0; // 减去标题栏、工具栏和输入框的高度
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .stick_to_bottom(true)
@@ -119,14 +119,39 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     .show(ui, |ui| {
                         for message in &state.chat_messages {
                             let is_user = message.role == MessageRole::User;
+                            let is_slash_command = message.role == MessageRole::SlashCommand;
+                            let is_system = message.role == MessageRole::System;
 
                             // 创建一个垂直布局，确保消息内容可以自动换行
                             ui.vertical(|ui| {
+                                // 获取当前主题的颜色
+                                let visuals = &ui.style().visuals;
+
                                 // 消息框的背景色
                                 let frame_fill = if is_user {
-                                    egui::Color32::from_rgba_premultiplied(240, 240, 255, 200)
+                                    if visuals.dark_mode {
+                                        egui::Color32::from_rgba_premultiplied(45, 85, 135, 200)  // 深蓝色背景（深色主题）
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(240, 240, 255, 200)  // 浅蓝色背景（浅色主题）
+                                    }
+                                } else if is_slash_command {
+                                    if visuals.dark_mode {
+                                        egui::Color32::from_rgba_premultiplied(85, 65, 45, 200)  // 深橙色背景（深色主题）
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(255, 245, 230, 200)  // 浅橙色背景（浅色主题）
+                                    }
+                                } else if is_system {
+                                    if visuals.dark_mode {
+                                        egui::Color32::from_rgba_premultiplied(65, 75, 65, 200)  // 深绿色背景（深色主题）
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(240, 255, 240, 200)  // 浅绿色背景（浅色主题）
+                                    }
                                 } else {
-                                    egui::Color32::from_rgba_premultiplied(240, 255, 240, 200)
+                                    if visuals.dark_mode {
+                                        egui::Color32::from_rgba_premultiplied(55, 55, 55, 200)  // 深灰色背景（深色主题）
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(240, 255, 240, 200)  // 浅灰色背景（浅色主题）
+                                    }
                                 };
 
                                 // 创建圆角方框
@@ -137,30 +162,59 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                     .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color));
 
                                 frame.show(ui, |ui| {
+                                    // 获取当前主题的文字颜色
+                                    let visuals = &ui.style().visuals;
+                                    let text_color = if visuals.dark_mode {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        egui::Color32::BLACK
+                                    };
+
                                     if is_user {
                                         // 用户消息右对齐
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                                            ui.label(egui::RichText::new("用户: ").strong());
+                                            ui.label(egui::RichText::new("用户: ").strong().color(text_color));
                                         });
 
                                         // 用户消息内容
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                                            // 使用 RichText 和 Label 设置自动换行，黑色文字
                                             let user_text = egui::RichText::new(&message.content)
                                                 .strong()
-                                                .color(egui::Color32::BLACK);
+                                                .color(text_color);
                                             ui.add(egui::Label::new(user_text).wrap());
+                                        });
+                                    } else if is_slash_command {
+                                        // Slash指令消息左对齐，使用特殊标识
+                                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                                            ui.label(egui::RichText::new("指令: ").strong().color(text_color));
+                                        });
+
+                                        // Slash指令内容
+                                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                                            let command_text = egui::RichText::new(&message.content)
+                                                .monospace()  // 使用等宽字体
+                                                .color(text_color);
+                                            ui.add(egui::Label::new(command_text).wrap());
+                                        });
+                                    } else if is_system {
+                                        // 系统消息居中对齐
+                                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                                            ui.label(egui::RichText::new("系统: ").strong().color(text_color));
+                                        });
+
+                                        // 系统消息内容
+                                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                                            let system_text = egui::RichText::new(&message.content)
+                                                .color(text_color);
+                                            ui.add(egui::Label::new(system_text).wrap());
                                         });
                                     } else {
                                         // 检查是否是正在流式输出的消息
                                         let is_streaming = state.streaming_message_id.map_or(false, |id| id == message.id);
 
                                         // AI消息左对齐
-                                        // ui.horizontal(|ui| {
-                                        //     ui.label(egui::RichText::new("AI: ").strong());
-                                        // });
                                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                                            ui.label(egui::RichText::new("SeeU AI: ").strong());
+                                            ui.label(egui::RichText::new("SeeU AI: ").strong().color(text_color));
                                         });
 
                                         // AI消息内容
@@ -173,14 +227,14 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                                 let text = &message.content;
 
                                                 // 处理消息内容
-                                                render_formatted_message(ui, text, available_width - 10.0, true);
+                                                render_formatted_message(ui, text, available_width - 10.0, true, text_color);
 
                                                 // 添加闪烁的光标
                                                 let cursor = if (ui.input(|i| i.time) * 2.0).sin() > 0.0 { "▋" } else { " " };
-                                                ui.label(egui::RichText::new(cursor).color(egui::Color32::BLACK));
+                                                ui.label(egui::RichText::new(cursor).color(text_color));
                                             } else {
                                                 // 处理消息内容
-                                                render_formatted_message(ui, &message.content, available_width - 10.0 , false);
+                                                render_formatted_message(ui, &message.content, available_width - 10.0, false, text_color);
                                             }
                                         });
                                     }
@@ -245,10 +299,15 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                             .hint_text("输入消息...")
                             .desired_width(available_width) // 使用全部可用宽度
                             .desired_rows(2)
-                            .lock_focus(state.should_focus_chat)
                             // 如果正在发送，禁用输入框
                             .interactive(!state.is_sending)
                     );
+
+                    // 如果需要聚焦，则请求焦点
+                    if state.should_focus_chat {
+                        response.request_focus();
+                        state.should_focus_chat = false;
+                    }
 
                     // 获取光标位置并更新指令菜单
                     let cursor_pos = if response.has_focus() {
@@ -261,35 +320,46 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     // 更新指令菜单状态
                     state.update_command_menu(cursor_pos);
 
-                    // 处理键盘输入
-                    let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let alt_pressed = ui.input(|i| i.modifiers.alt);
-                    let up_pressed = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
-                    let down_pressed = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
-                    let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
-
-                    // 首先检查是否有指令菜单需要处理键盘输入
+                    // 处理键盘输入 - 首先检查菜单是否需要处理
                     let mut menu_handled = false;
+
                     if state.command_menu.is_visible && response.has_focus() {
-                        if up_pressed {
-                            menu_handled = state.handle_command_menu_input(egui::Key::ArrowUp);
-                        } else if down_pressed {
-                            menu_handled = state.handle_command_menu_input(egui::Key::ArrowDown);
-                        } else if enter_pressed && !alt_pressed {
-                            menu_handled = state.handle_command_menu_input(egui::Key::Enter);
-                        } else if escape_pressed {
-                            menu_handled = state.handle_command_menu_input(egui::Key::Escape);
-                        }
+                        // 当菜单可见时，优先处理菜单相关的键盘事件
+                        ui.input_mut(|i| {
+                            if i.key_pressed(egui::Key::ArrowUp) {
+                                menu_handled = true;
+                                state.handle_command_menu_input(egui::Key::ArrowUp);
+                            } else if i.key_pressed(egui::Key::ArrowDown) {
+                                menu_handled = true;
+                                state.handle_command_menu_input(egui::Key::ArrowDown);
+                            } else if i.key_pressed(egui::Key::Enter) && !i.modifiers.alt {
+                                // 消费回车键事件，防止被正常发送逻辑处理
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+                                menu_handled = true;
+                                state.handle_command_menu_input(egui::Key::Enter);
+                            } else if i.key_pressed(egui::Key::Tab) {
+                                // 消费Tab键事件，防止焦点转移
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+                                menu_handled = true;
+                                state.handle_command_menu_input(egui::Key::Tab);
+                            } else if i.key_pressed(egui::Key::Escape) {
+                                menu_handled = true;
+                                state.handle_command_menu_input(egui::Key::Escape);
+                            }
+                        });
                     }
 
-                    // 如果菜单没有处理输入，则按正常逻辑处理
-                    if !menu_handled && !state.is_sending && enter_pressed && response.has_focus() {
-                        if alt_pressed {
-                            // Alt+回车：添加换行符
-                            state.chat_input.push('\n');
-                        } else {
-                            // 单独的回车：发送消息（只有在菜单不可见时）
-                            if !state.command_menu.is_visible {
+                    // 只有在菜单没有处理输入时，才处理正常的键盘输入
+                    if !menu_handled && response.has_focus() && !state.is_sending {
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let alt_pressed = ui.input(|i| i.modifiers.alt);
+
+                        if enter_pressed {
+                            if alt_pressed {
+                                // Alt+回车：添加换行符
+                                state.chat_input.push('\n');
+                            } else {
+                                // 单独的回车：发送消息
                                 if let Some(cmd) = state.send_message() {
                                     // Return the slash command to be handled by the parent
                                     if let Some(callback) = &mut state.slash_command_callback {
@@ -515,7 +585,7 @@ fn render_smart_command_menu(ctx: &egui::Context, state: &mut AIAssistState) {
 
                     if response.clicked() {
                         state.command_menu.selected_index = i;
-                        state.apply_selected_command();
+                        state.apply_selected_command_to_input();
                     }
 
                     // 如果是选中项，确保它在视图中可见
@@ -644,12 +714,12 @@ fn render_slash_commands(ctx: &egui::Context, state: &mut AIAssistState) {
 }
 
 /// 渲染消息内容，简单处理<think>标签
-fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, _is_streaming: bool) {
+fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, _is_streaming: bool, text_color: egui::Color32) {
     // 设置最大宽度
     ui.set_max_width(max_width);
 
     // 直接将所有内容作为普通文本处理
-    // 如果内容包含<think>标签，则将其中的文本显示为灰色，否则显示为黑色
+    // 如果内容包含<think>标签，则将其中的文本显示为灰色，否则使用传入的颜色
     if content.contains("<think>") {
         ui.add(egui::Label::new(
             egui::RichText::new(content)
@@ -658,7 +728,7 @@ fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, _i
     } else {
         ui.add(egui::Label::new(
             egui::RichText::new(content)
-                .color(egui::Color32::BLACK)
+                .color(text_color)
         ).wrap());
     }
 }

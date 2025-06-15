@@ -160,6 +160,7 @@ impl ApiService {
                     MessageRole::User => "user".to_string(),
                     MessageRole::Assistant => "assistant".to_string(),
                     MessageRole::System => "system".to_string(),
+                    MessageRole::SlashCommand => "user".to_string(), // Slash指令作为用户消息处理（虽然实际上不应该到达这里）
                 },
                 content: content.clone(),
             }
@@ -243,6 +244,7 @@ impl ApiService {
                     MessageRole::User => "user".to_string(),
                     MessageRole::Assistant => "assistant".to_string(),
                     MessageRole::System => "system".to_string(),
+                    MessageRole::SlashCommand => "user".to_string(), // Slash指令作为用户消息处理（虽然实际上不应该到达这里）
                 },
                 content: content.clone(),
             }

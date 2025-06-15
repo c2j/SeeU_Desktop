@@ -6,8 +6,8 @@ use tokio::sync::mpsc;
 
 use crate::mcp::{
     McpServerManager, McpServerConfig,
-    server_manager::{ServerDirectory, TransportConfig},
-    rmcp_client::{ConnectionStatus, McpEvent}
+    server_manager::TransportConfig,
+    rmcp_client::{McpEvent, ServerCapabilities}
 };
 
 /// MCP Settings UI component
@@ -30,6 +30,12 @@ pub struct McpSettingsUi {
     
     /// Directory expansion states
     directory_expanded: HashMap<String, bool>,
+
+    /// Track if this is the first render for auto-refresh
+    first_render: bool,
+
+    /// Server capabilities cache (server_id -> capabilities)
+    server_capabilities: HashMap<Uuid, ServerCapabilities>,
 }
 
 /// UI state for MCP settings
@@ -88,6 +94,62 @@ struct McpUiState {
 
     /// Use real rmcp client instead of mock
     use_real_rmcp: bool,
+
+    /// Tool testing dialog state
+    tool_test_dialog: Option<ToolTestDialog>,
+}
+
+/// Dialog for testing MCP server tools
+#[derive(Debug, Clone)]
+struct ToolTestDialog {
+    server_id: Uuid,
+    server_name: String,
+    capabilities: ServerCapabilities,
+    selected_category: TestCategory,
+    selected_tool_index: Option<usize>,
+    selected_resource_index: Option<usize>,
+    selected_prompt_index: Option<usize>,
+    parameter_inputs: HashMap<String, String>,
+    test_result: Option<ToolTestResult>,
+    is_testing: bool,
+    selected_result_tab: ResultTab,
+}
+
+/// Categories of testable items
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TestCategory {
+    Tools,
+    Resources,
+    Prompts,
+}
+
+/// Result display tabs
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ResultTab {
+    Summary,
+    Stdin,
+    Stdout,
+    FullResponse,
+    Errors,
+}
+
+/// Result of tool testing
+#[derive(Debug, Clone)]
+struct ToolTestResult {
+    success: bool,
+    output: String,
+    error: Option<String>,
+    duration: std::time::Duration,
+    /// STDIN content sent to the MCP server
+    stdin: Option<String>,
+    /// STDOUT content received from the MCP server
+    stdout: Option<String>,
+    /// STDERR content received from the MCP server
+    stderr: Option<String>,
+    /// Raw MCP request sent
+    mcp_request: Option<String>,
+    /// Raw MCP response received
+    mcp_response: Option<String>,
 }
 
 impl McpSettingsUi {
@@ -102,25 +164,58 @@ impl McpSettingsUi {
             selected_server: None,
             new_server_config: McpServerConfig::default(),
             directory_expanded: HashMap::new(),
+            first_render: true,
+            server_capabilities: HashMap::new(),
         }
     }
 
     /// Initialize the MCP settings UI
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
         self.server_manager.initialize().await?;
-        
+
         // Setup event channel
         let (sender, receiver) = mpsc::unbounded_channel();
         self.event_receiver = Some(receiver);
-        
-        // TODO: Set event sender in server manager
-        // self.server_manager.set_event_sender(sender);
-        
+
+        // Set event sender in server manager
+        self.server_manager.set_event_sender(sender);
+
+        Ok(())
+    }
+
+    /// Initialize the MCP settings UI synchronously
+    pub fn initialize_sync(&mut self) -> anyhow::Result<()> {
+        // Initialize server manager synchronously
+        self.server_manager.initialize_sync()?;
+
+        // Setup event channel
+        let (sender, receiver) = mpsc::unbounded_channel();
+        self.event_receiver = Some(receiver);
+
+        // Set event sender in server manager
+        self.server_manager.set_event_sender(sender);
+
+        log::info!("MCP settings UI initialized synchronously with event channel");
         Ok(())
     }
 
     /// Render the MCP settings UI
     pub fn render(&mut self, ctx: &Context, ui: &mut Ui) {
+        // Initialize if not already done
+        if self.event_receiver.is_none() {
+            log::info!("Initializing MCP settings UI on first render");
+            if let Err(e) = self.initialize_sync() {
+                log::error!("Failed to initialize MCP settings UI: {}", e);
+                ui.colored_label(egui::Color32::RED, format!("初始化失败: {}", e));
+                return;
+            }
+        }
+
+        // Auto-refresh on first render or when explicitly requested
+        if self.should_auto_refresh() {
+            self.refresh_server_list();
+        }
+
         // Process MCP events
         self.process_events();
 
@@ -193,6 +288,7 @@ impl McpSettingsUi {
         self.render_import_dialog(ctx);
         self.render_export_dialog(ctx);
         self.render_server_details_dialog(ctx);
+        self.render_tool_test_dialog(ctx);
     }
 
     /// Render server directories in a tree structure
@@ -201,14 +297,18 @@ impl McpSettingsUi {
 
         for directory in directories {
             let expanded = self.directory_expanded.get(&directory.name).copied().unwrap_or(false);
-            
+
             ui.horizontal(|ui| {
                 let expand_button = if expanded { "📂" } else { "📁" };
-                if ui.button(expand_button).clicked() {
+
+                // Make both icon and directory name clickable for expansion
+                let icon_response = ui.button(expand_button);
+                let name_response = ui.selectable_label(false, RichText::new(&directory.name).strong());
+
+                if icon_response.clicked() || name_response.clicked() {
                     self.directory_expanded.insert(directory.name.clone(), !expanded);
                 }
 
-                ui.label(RichText::new(&directory.name).strong());
                 ui.label(format!("({} servers)", directory.servers.len()));
             });
 
@@ -243,6 +343,23 @@ impl McpSettingsUi {
                     if let Some(desc) = &config.description {
                         ui.label(RichText::new(desc).small().color(Color32::GRAY));
                     }
+
+                    // Show transport type
+                    let transport_info = match &config.transport {
+                        TransportConfig::Command { command, args, .. } => {
+                            format!("📟 stdio: {} {}", command, args.join(" "))
+                        }
+                        TransportConfig::Tcp { host, port } => {
+                            format!("🌐 tcp: {}:{}", host, port)
+                        }
+                        TransportConfig::Unix { socket_path } => {
+                            format!("🔌 unix: {}", socket_path)
+                        }
+                        TransportConfig::WebSocket { url } => {
+                            format!("🌍 sse: {}", url)
+                        }
+                    };
+                    ui.label(RichText::new(transport_info).small().color(Color32::DARK_GRAY));
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -257,10 +374,10 @@ impl McpSettingsUi {
                         }
                     }
 
-                    if ui.small_button("🚀").on_hover_text("测试连接").clicked() {
-                        // Test server connection
+                    // Combined test button - prioritize tool testing, fallback to connection test
+                    if ui.small_button("🔧").on_hover_text("测试工具").clicked() {
                         if let Some(server_id) = self.find_server_id_by_config(config) {
-                            self.test_server_connection(server_id);
+                            self.test_server_tools(server_id, config);
                         }
                     }
 
@@ -393,6 +510,15 @@ impl McpSettingsUi {
                             }
                         }
                     });
+                }
+
+                // Show server capabilities if available (regardless of enabled status)
+                if let Some(capabilities) = self.server_capabilities.get(&server_id).cloned() {
+                    log::debug!("Rendering capabilities for server {}: {} tools, {} resources, {} prompts",
+                               server_id, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+                    self.render_server_capabilities(ui, &capabilities);
+                } else {
+                    log::debug!("No capabilities found for server {} in UI cache", server_id);
                 }
             }
         });
@@ -1044,8 +1170,13 @@ impl McpSettingsUi {
                         self.ui_state.error_message = Some(format!("服务器 {} 错误: {}", server_id, error));
                         self.ui_state.status_message = None;
                     }
-                    McpEvent::CapabilitiesUpdated(server_id, _capabilities) => {
+                    McpEvent::CapabilitiesUpdated(server_id, capabilities) => {
+                        // Store capabilities in UI cache
+                        log::info!("UI received capabilities for server {}: {} tools, {} resources, {} prompts",
+                                  server_id, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+                        self.server_capabilities.insert(server_id, capabilities);
                         self.ui_state.status_message = Some(format!("服务器 {} 能力已更新", server_id));
+                        log::info!("UI cached capabilities for server: {} (total cached: {})", server_id, self.server_capabilities.len());
                     }
                 }
             }
@@ -1064,6 +1195,7 @@ impl McpSettingsUi {
     fn toggle_server_connection(&mut self, server_id: Uuid, currently_enabled: bool) {
         let result = if currently_enabled {
             // Disconnect server
+            self.server_capabilities.remove(&server_id);
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.block_on(self.server_manager.disconnect_server(server_id))
                     .map_err(|e| e.to_string())
@@ -1077,8 +1209,8 @@ impl McpSettingsUi {
                 }
             }
         } else {
-            // Connect server
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // Connect server and fetch capabilities
+            let connect_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.block_on(self.server_manager.connect_server(server_id))
                     .map_err(|e| e.to_string())
             } else {
@@ -1089,7 +1221,14 @@ impl McpSettingsUi {
                     }
                     Err(e) => Err(format!("无法创建异步运行时: {}", e))
                 }
+            };
+
+            // If connection successful, try to fetch capabilities
+            if connect_result.is_ok() {
+                self.fetch_server_capabilities(server_id);
             }
+
+            connect_result
         };
 
         match result {
@@ -1097,7 +1236,7 @@ impl McpSettingsUi {
                 let message = if currently_enabled {
                     "服务器已断开连接"
                 } else {
-                    "服务器已连接"
+                    "服务器已连接，已获取能力信息"
                 };
                 self.ui_state.status_message = Some(message.to_string());
                 self.ui_state.error_message = None;
@@ -1174,8 +1313,21 @@ impl McpSettingsUi {
         }
     }
 
+    /// Check if auto-refresh should be performed
+    fn should_auto_refresh(&mut self) -> bool {
+        if self.first_render {
+            self.first_render = false;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Refresh server list
     fn refresh_server_list(&mut self) {
+        // Clear existing server capabilities to avoid stale data
+        self.server_capabilities.clear();
+
         let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.block_on(self.server_manager.initialize())
                 .map_err(|e| e.to_string())
@@ -1260,6 +1412,1238 @@ impl McpSettingsUi {
             }
         }
     }
+
+    /// Render server capabilities information
+    fn render_server_capabilities(&mut self, ui: &mut Ui, capabilities: &ServerCapabilities) {
+        ui.indent("capabilities", |ui| {
+            ui.separator();
+            ui.label(RichText::new("🔧 服务器能力").strong().color(Color32::BLUE));
+
+            // Tools
+            if !capabilities.tools.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label("🛠️ 工具:");
+                    ui.label(format!("{} 个", capabilities.tools.len()));
+                });
+
+                ui.indent("tools", |ui| {
+                    for tool in &capabilities.tools {
+                        ui.horizontal(|ui| {
+                            ui.label("  •");
+                            ui.label(&tool.name);
+                            if let Some(desc) = &tool.description {
+                                ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                            }
+                        });
+                    }
+                });
+            }
+
+            // Resources
+            if !capabilities.resources.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label("📁 资源:");
+                    ui.label(format!("{} 个", capabilities.resources.len()));
+                });
+
+                ui.indent("resources", |ui| {
+                    for resource in &capabilities.resources {
+                        ui.horizontal(|ui| {
+                            ui.label("  •");
+                            ui.label(&resource.name);
+                            if let Some(desc) = &resource.description {
+                                ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                            }
+                        });
+                    }
+                });
+            }
+
+            // Prompts
+            if !capabilities.prompts.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label("💬 提示:");
+                    ui.label(format!("{} 个", capabilities.prompts.len()));
+                });
+
+                ui.indent("prompts", |ui| {
+                    for prompt in &capabilities.prompts {
+                        ui.horizontal(|ui| {
+                            ui.label("  •");
+                            ui.label(&prompt.name);
+                            if let Some(desc) = &prompt.description {
+                                ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                            }
+                        });
+                    }
+                });
+            }
+
+            ui.separator();
+        });
+    }
+
+    /// Fetch server capabilities after successful connection
+    fn fetch_server_capabilities(&mut self, server_id: Uuid) {
+        // Capabilities are now fetched automatically by the MCP client
+        // and delivered via events. This method is kept for compatibility
+        // but the actual work is done in the event processing.
+        log::debug!("Capability fetching triggered for server: {} (handled via events)", server_id);
+    }
+
+    /// Test server tools - combined functionality that prioritizes tool testing
+    fn test_server_tools(&mut self, server_id: Uuid, config: &McpServerConfig) {
+        // Clear previous messages and outputs for this server
+        self.ui_state.server_status_messages.remove(&server_id);
+        self.ui_state.server_error_messages.remove(&server_id);
+        self.ui_state.server_test_outputs.remove(&server_id);
+
+        // Get server name for better logging
+        let server_name = config.name.clone();
+        log::info!("Testing tools for server: {} ({})", server_name, server_id);
+
+        // First, try to connect and get capabilities
+        let connect_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(self.server_manager.connect_server(server_id))
+                .map_err(|e| e.to_string())
+        } else {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    rt.block_on(self.server_manager.connect_server(server_id))
+                        .map_err(|e| e.to_string())
+                }
+                Err(e) => Err(format!("无法创建异步运行时: {}", e))
+            }
+        };
+
+        match connect_result {
+            Ok(_) => {
+                // Connection successful, try to fetch capabilities
+                self.fetch_server_capabilities(server_id);
+
+                // Check if we have capabilities now
+                if let Some(capabilities) = self.server_capabilities.get(&server_id).cloned() {
+                    // Open tool testing dialog
+                    let dialog = ToolTestDialog {
+                        server_id,
+                        server_name: config.name.clone(),
+                        capabilities,
+                        selected_category: TestCategory::Tools,
+                        selected_tool_index: None,
+                        selected_resource_index: None,
+                        selected_prompt_index: None,
+                        parameter_inputs: HashMap::new(),
+                        test_result: None,
+                        is_testing: false,
+                        selected_result_tab: ResultTab::Summary,
+                    };
+                    self.ui_state.tool_test_dialog = Some(dialog);
+
+                    self.ui_state.server_status_messages.insert(
+                        server_id,
+                        "连接成功，工具测试对话框已打开".to_string()
+                    );
+                } else {
+                    // Connected but no capabilities yet, show status
+                    self.ui_state.server_status_messages.insert(
+                        server_id,
+                        "连接成功，正在获取服务器能力信息...".to_string()
+                    );
+                }
+            }
+            Err(error) => {
+                // Connection failed, fall back to basic connection test
+                log::warn!("Connection failed for server '{}', falling back to connection test: {}", server_name, error);
+                self.test_server_connection(server_id);
+            }
+        }
+    }
+
+    /// Open tool testing dialog for a server
+    fn open_tool_test_dialog(&mut self, server_id: Uuid, config: &McpServerConfig) {
+        // Check if server has capabilities
+        if let Some(capabilities) = self.server_capabilities.get(&server_id).cloned() {
+            let dialog = ToolTestDialog {
+                server_id,
+                server_name: config.name.clone(),
+                capabilities,
+                selected_category: TestCategory::Tools,
+                selected_tool_index: None,
+                selected_resource_index: None,
+                selected_prompt_index: None,
+                parameter_inputs: HashMap::new(),
+                test_result: None,
+                is_testing: false,
+                selected_result_tab: ResultTab::Summary,
+            };
+            self.ui_state.tool_test_dialog = Some(dialog);
+        } else {
+            self.ui_state.error_message = Some("服务器能力信息不可用，请先连接服务器".to_string());
+        }
+    }
+
+    /// Render tool testing dialog
+    fn render_tool_test_dialog(&mut self, ctx: &Context) {
+        let mut should_close = false;
+        let mut should_execute_test = false;
+
+        if let Some(dialog) = &mut self.ui_state.tool_test_dialog {
+            let server_name = dialog.server_name.clone();
+
+            egui::Window::new(format!("测试工具 - {}", server_name))
+                .collapsible(false)
+                .resizable(true)
+                .default_width(600.0)
+                .default_height(500.0)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        // Category selection
+                        ui.horizontal(|ui| {
+                            ui.label("测试类别:");
+                            ui.radio_value(&mut dialog.selected_category, TestCategory::Tools, "🛠️ 工具");
+                            ui.radio_value(&mut dialog.selected_category, TestCategory::Resources, "📁 资源");
+                            ui.radio_value(&mut dialog.selected_category, TestCategory::Prompts, "💬 提示");
+                        });
+
+                        ui.separator();
+
+                        // Item selection based on category
+                        match dialog.selected_category {
+                            TestCategory::Tools => {
+                                Self::render_tool_selection_static(ui, dialog);
+                            }
+                            TestCategory::Resources => {
+                                Self::render_resource_selection_static(ui, dialog);
+                            }
+                            TestCategory::Prompts => {
+                                Self::render_prompt_selection_static(ui, dialog);
+                            }
+                        }
+
+                        ui.separator();
+
+                        // Parameter inputs
+                        Self::render_parameter_inputs_static(ui, dialog);
+
+                        ui.separator();
+
+                        // Test button and result
+                        ui.horizontal(|ui| {
+                            let can_test = Self::can_execute_test_static(dialog);
+
+                            if ui.add_enabled(can_test && !dialog.is_testing, egui::Button::new("🧪 执行测试")).clicked() {
+                                should_execute_test = true;
+                            }
+
+                            if dialog.is_testing {
+                                ui.spinner();
+                                ui.label("测试中...");
+                            }
+
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("关闭").clicked() {
+                                    should_close = true;
+                                }
+                            });
+                        });
+
+                        // Test result display
+                        if let Some(result) = dialog.test_result.clone() {
+                            ui.separator();
+                            Self::render_test_result_static(ui, &result, dialog);
+                        }
+                    });
+                });
+        }
+
+        // Execute test outside of the UI closure to avoid borrowing issues
+        if should_execute_test {
+            // Clone the dialog data we need for the test first
+            let test_data = if let Some(dialog) = &self.ui_state.tool_test_dialog {
+                Some((
+                    dialog.server_id,
+                    dialog.selected_category,
+                    dialog.selected_tool_index,
+                    dialog.selected_resource_index,
+                    dialog.selected_prompt_index,
+                    dialog.capabilities.clone(),
+                    dialog.parameter_inputs.clone(),
+                ))
+            } else {
+                None
+            };
+
+            if let Some((server_id, selected_category, selected_tool_index, selected_resource_index, selected_prompt_index, capabilities, parameter_inputs)) = test_data {
+                // Set testing state
+                if let Some(dialog) = &mut self.ui_state.tool_test_dialog {
+                    dialog.is_testing = true;
+                    dialog.test_result = None;
+                }
+
+                // Execute the test with cloned data
+                let result = self.execute_tool_test_with_data(
+                    server_id,
+                    selected_category,
+                    selected_tool_index,
+                    selected_resource_index,
+                    selected_prompt_index,
+                    &capabilities,
+                    &parameter_inputs
+                );
+
+                // Update the dialog with the result
+                if let Some(dialog) = &mut self.ui_state.tool_test_dialog {
+                    dialog.test_result = Some(result);
+                    dialog.is_testing = false;
+                }
+            }
+        }
+
+        if should_close {
+            self.ui_state.tool_test_dialog = None;
+        }
+    }
+
+    /// Render tool selection UI
+    fn render_tool_selection_static(ui: &mut Ui, dialog: &mut ToolTestDialog) {
+        ui.label("选择要测试的工具:");
+
+        if dialog.capabilities.tools.is_empty() {
+            ui.colored_label(Color32::GRAY, "该服务器没有可用的工具");
+            return;
+        }
+
+        egui::ComboBox::from_id_source("tool_selection")
+            .selected_text(
+                dialog.selected_tool_index
+                    .and_then(|i| dialog.capabilities.tools.get(i))
+                    .map(|tool| tool.name.as_str())
+                    .unwrap_or("选择工具...")
+            )
+            .show_ui(ui, |ui| {
+                for (index, tool) in dialog.capabilities.tools.iter().enumerate() {
+                    let selected = dialog.selected_tool_index == Some(index);
+                    if ui.selectable_label(selected, &tool.name).clicked() {
+                        dialog.selected_tool_index = Some(index);
+                        dialog.parameter_inputs.clear(); // Clear previous parameters
+                    }
+                }
+            });
+
+        // Show tool description
+        if let Some(index) = dialog.selected_tool_index {
+            if let Some(tool) = dialog.capabilities.tools.get(index) {
+                if let Some(desc) = &tool.description {
+                    ui.label(RichText::new(desc).small().color(Color32::GRAY));
+                }
+            }
+        }
+    }
+
+    /// Render resource selection UI
+    fn render_resource_selection_static(ui: &mut Ui, dialog: &mut ToolTestDialog) {
+        ui.label("选择要测试的资源:");
+
+        if dialog.capabilities.resources.is_empty() {
+            ui.colored_label(Color32::GRAY, "该服务器没有可用的资源");
+            return;
+        }
+
+        egui::ComboBox::from_id_source("resource_selection")
+            .selected_text(
+                dialog.selected_resource_index
+                    .and_then(|i| dialog.capabilities.resources.get(i))
+                    .map(|resource| resource.name.as_str())
+                    .unwrap_or("选择资源...")
+            )
+            .show_ui(ui, |ui| {
+                for (index, resource) in dialog.capabilities.resources.iter().enumerate() {
+                    let selected = dialog.selected_resource_index == Some(index);
+                    if ui.selectable_label(selected, &resource.name).clicked() {
+                        dialog.selected_resource_index = Some(index);
+                        dialog.parameter_inputs.clear();
+                    }
+                }
+            });
+
+        // Show resource description
+        if let Some(index) = dialog.selected_resource_index {
+            if let Some(resource) = dialog.capabilities.resources.get(index) {
+                if let Some(desc) = &resource.description {
+                    ui.label(RichText::new(desc).small().color(Color32::GRAY));
+                }
+                ui.label(RichText::new(format!("URI: {}", resource.uri)).small().color(Color32::DARK_GRAY));
+            }
+        }
+    }
+
+    /// Render prompt selection UI
+    fn render_prompt_selection_static(ui: &mut Ui, dialog: &mut ToolTestDialog) {
+        ui.label("选择要测试的提示:");
+
+        if dialog.capabilities.prompts.is_empty() {
+            ui.colored_label(Color32::GRAY, "该服务器没有可用的提示");
+            return;
+        }
+
+        egui::ComboBox::from_id_source("prompt_selection")
+            .selected_text(
+                dialog.selected_prompt_index
+                    .and_then(|i| dialog.capabilities.prompts.get(i))
+                    .map(|prompt| prompt.name.as_str())
+                    .unwrap_or("选择提示...")
+            )
+            .show_ui(ui, |ui| {
+                for (index, prompt) in dialog.capabilities.prompts.iter().enumerate() {
+                    let selected = dialog.selected_prompt_index == Some(index);
+                    if ui.selectable_label(selected, &prompt.name).clicked() {
+                        dialog.selected_prompt_index = Some(index);
+                        dialog.parameter_inputs.clear();
+                    }
+                }
+            });
+
+        // Show prompt description
+        if let Some(index) = dialog.selected_prompt_index {
+            if let Some(prompt) = dialog.capabilities.prompts.get(index) {
+                if let Some(desc) = &prompt.description {
+                    ui.label(RichText::new(desc).small().color(Color32::GRAY));
+                }
+            }
+        }
+    }
+
+    /// Render parameter input UI
+    fn render_parameter_inputs_static(ui: &mut Ui, dialog: &mut ToolTestDialog) {
+        let parameters = match dialog.selected_category {
+            TestCategory::Tools => {
+                dialog.selected_tool_index
+                    .and_then(|i| dialog.capabilities.tools.get(i))
+                    .map(|_| Vec::new()) // Tools don't have visible parameters in our current structure
+                    .unwrap_or_default()
+            }
+            TestCategory::Resources => {
+                // Resources typically don't have parameters, but we can add URI parameter
+                if dialog.selected_resource_index.is_some() {
+                    vec![("uri".to_string(), "资源URI".to_string(), true)]
+                } else {
+                    Vec::new()
+                }
+            }
+            TestCategory::Prompts => {
+                dialog.selected_prompt_index
+                    .and_then(|i| dialog.capabilities.prompts.get(i))
+                    .map(|prompt| {
+                        prompt.arguments.iter()
+                            .map(|arg| (arg.name.clone(), arg.description.clone().unwrap_or_default(), arg.required))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+        };
+
+        if !parameters.is_empty() {
+            ui.label("参数:");
+
+            for (param_name, param_desc, required) in parameters {
+                ui.horizontal(|ui| {
+                    let label_text = if required {
+                        format!("{}*", param_name)
+                    } else {
+                        param_name.clone()
+                    };
+
+                    ui.label(label_text);
+
+                    let current_value = dialog.parameter_inputs.get(&param_name).cloned().unwrap_or_default();
+                    let mut value = current_value;
+
+                    if ui.text_edit_singleline(&mut value).changed() {
+                        dialog.parameter_inputs.insert(param_name.clone(), value);
+                    }
+
+                    if !param_desc.is_empty() {
+                        ui.label(RichText::new(format!("({})", param_desc)).small().color(Color32::GRAY));
+                    }
+                });
+            }
+        } else {
+            ui.label(RichText::new("该项目不需要参数").color(Color32::GRAY));
+        }
+    }
+
+    /// Check if test can be executed
+    fn can_execute_test_static(dialog: &ToolTestDialog) -> bool {
+        match dialog.selected_category {
+            TestCategory::Tools => dialog.selected_tool_index.is_some(),
+            TestCategory::Resources => dialog.selected_resource_index.is_some(),
+            TestCategory::Prompts => {
+                if let Some(index) = dialog.selected_prompt_index {
+                    if let Some(prompt) = dialog.capabilities.prompts.get(index) {
+                        // Check if all required parameters are provided
+                        prompt.arguments.iter().all(|arg| {
+                            !arg.required || dialog.parameter_inputs.contains_key(&arg.name)
+                        })
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Execute tool test with separate data to avoid borrowing issues
+    fn execute_tool_test_with_data(
+        &mut self,
+        server_id: Uuid,
+        selected_category: TestCategory,
+        selected_tool_index: Option<usize>,
+        selected_resource_index: Option<usize>,
+        selected_prompt_index: Option<usize>,
+        capabilities: &ServerCapabilities,
+        parameter_inputs: &HashMap<String, String>
+    ) -> ToolTestResult {
+        let start_time = std::time::Instant::now();
+
+        // Execute real MCP test using actual server manager
+        match selected_category {
+            TestCategory::Tools => {
+                if let Some(index) = selected_tool_index {
+                    if let Some(tool) = capabilities.tools.get(index) {
+                        self.execute_real_tool_test(server_id, &tool.name, parameter_inputs)
+                    } else {
+                        ToolTestResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some("工具不存在".to_string()),
+                            duration: start_time.elapsed(),
+                            stdin: None,
+                            stdout: None,
+                            stderr: None,
+                            mcp_request: None,
+                            mcp_response: None,
+                        }
+                    }
+                } else {
+                    ToolTestResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some("未选择工具".to_string()),
+                        duration: start_time.elapsed(),
+                        stdin: None,
+                        stdout: None,
+                        stderr: None,
+                        mcp_request: None,
+                        mcp_response: None,
+                    }
+                }
+            }
+            TestCategory::Resources => {
+                if let Some(index) = selected_resource_index {
+                    if let Some(resource) = capabilities.resources.get(index) {
+                        self.execute_real_resource_test(server_id, &resource.uri, parameter_inputs)
+                    } else {
+                        ToolTestResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some("资源不存在".to_string()),
+                            duration: start_time.elapsed(),
+                            stdin: None,
+                            stdout: None,
+                            stderr: None,
+                            mcp_request: None,
+                            mcp_response: None,
+                        }
+                    }
+                } else {
+                    ToolTestResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some("未选择资源".to_string()),
+                        duration: start_time.elapsed(),
+                        stdin: None,
+                        stdout: None,
+                        stderr: None,
+                        mcp_request: None,
+                        mcp_response: None,
+                    }
+                }
+            }
+            TestCategory::Prompts => {
+                if let Some(index) = selected_prompt_index {
+                    if let Some(prompt) = capabilities.prompts.get(index) {
+                        self.execute_real_prompt_test(server_id, &prompt.name, parameter_inputs)
+                    } else {
+                        ToolTestResult {
+                            success: false,
+                            output: String::new(),
+                            error: Some("提示不存在".to_string()),
+                            duration: start_time.elapsed(),
+                            stdin: None,
+                            stdout: None,
+                            stderr: None,
+                            mcp_request: None,
+                            mcp_response: None,
+                        }
+                    }
+                } else {
+                    ToolTestResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some("未选择提示".to_string()),
+                        duration: start_time.elapsed(),
+                        stdin: None,
+                        stdout: None,
+                        stderr: None,
+                        mcp_request: None,
+                        mcp_response: None,
+                    }
+                }
+            }
+        }
+    }
+
+
+
+    /// Render test result with tab interface
+    fn render_test_result_static(ui: &mut Ui, result: &ToolTestResult, dialog: &mut ToolTestDialog) {
+        ui.label(RichText::new("测试结果:").strong());
+
+        let status_color = if result.success { Color32::GREEN } else { Color32::RED };
+        let status_text = if result.success { "✅ 成功" } else { "❌ 失败" };
+
+        ui.horizontal(|ui| {
+            ui.colored_label(status_color, status_text);
+            ui.label(format!("(耗时: {:.2}秒)", result.duration.as_secs_f64()));
+        });
+
+        // Tab-based display for detailed information
+        ui.separator();
+
+        // Create tabs for different information types
+        egui::TopBottomPanel::top("test_result_tabs")
+            .resizable(false)
+            .min_height(0.0)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut dialog.selected_result_tab, ResultTab::Summary, "📋 概要");
+
+                    if result.stdin.is_some() {
+                        ui.selectable_value(&mut dialog.selected_result_tab, ResultTab::Stdin, "📤 请求 (STDIN)");
+                    }
+
+                    if result.stdout.is_some() {
+                        ui.selectable_value(&mut dialog.selected_result_tab, ResultTab::Stdout, "📥 响应 (STDOUT)");
+                    }
+
+                    if !result.output.is_empty() {
+                        ui.selectable_value(&mut dialog.selected_result_tab, ResultTab::FullResponse, "🔍 完整响应");
+                    }
+
+                    if result.error.is_some() || result.stderr.is_some() {
+                        ui.selectable_value(&mut dialog.selected_result_tab, ResultTab::Errors, "❌ 错误");
+                    }
+                });
+            });
+
+        // Content area for selected tab
+        egui::ScrollArea::vertical()
+            .max_height(300.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                match dialog.selected_result_tab {
+                    ResultTab::Summary => {
+                        ui.label(RichText::new("测试概要").heading());
+                        ui.add_space(5.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("状态:");
+                            if result.success {
+                                ui.colored_label(Color32::GREEN, "✅ 成功");
+                            } else {
+                                ui.colored_label(Color32::RED, "❌ 失败");
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("耗时:");
+                            ui.label(format!("{:.2?}", result.duration));
+                        });
+
+                        if let Some(stdout) = &result.stdout {
+                            ui.add_space(10.0);
+                            ui.label(RichText::new("执行状态:").strong());
+                            ui.colored_label(Color32::from_rgb(0, 150, 0), stdout);
+                        }
+                    }
+
+                    ResultTab::Stdin => {
+                        if let Some(stdin) = &result.stdin {
+                            ui.label(RichText::new("MCP请求 (STDIN)").heading().color(Color32::BLUE));
+                            ui.add_space(5.0);
+
+                            egui::ScrollArea::vertical()
+                                .max_height(250.0)
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut stdin.as_str())
+                                            .desired_width(f32::INFINITY)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_rows(12)
+                                            .interactive(false)
+                                    );
+                                });
+                        }
+                    }
+
+                    ResultTab::Stdout => {
+                        if let Some(stdout) = &result.stdout {
+                            ui.label(RichText::new("执行状态 (STDOUT)").heading().color(Color32::GREEN));
+                            ui.add_space(5.0);
+
+                            egui::ScrollArea::vertical()
+                                .max_height(250.0)
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut stdout.as_str())
+                                            .desired_width(f32::INFINITY)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_rows(8)
+                                            .interactive(false)
+                                    );
+                                });
+                        }
+                    }
+
+                    ResultTab::FullResponse => {
+                        if !result.output.is_empty() {
+                            ui.label(RichText::new("完整响应").heading());
+                            ui.add_space(5.0);
+
+                            egui::ScrollArea::vertical()
+                                .max_height(250.0)
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut result.output.as_str())
+                                            .desired_width(f32::INFINITY)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_rows(12)
+                                            .interactive(false)
+                                    );
+                                });
+                        }
+                    }
+
+                    ResultTab::Errors => {
+                        ui.label(RichText::new("错误信息").heading().color(Color32::RED));
+                        ui.add_space(5.0);
+
+                        if let Some(error) = &result.error {
+                            ui.label(RichText::new("错误详情:").strong());
+                            ui.colored_label(Color32::RED, error);
+                            ui.add_space(10.0);
+                        }
+
+                        if let Some(stderr) = &result.stderr {
+                            ui.label(RichText::new("STDERR输出:").strong());
+                            egui::ScrollArea::vertical()
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut stderr.as_str())
+                                            .desired_width(f32::INFINITY)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_rows(8)
+                                            .interactive(false)
+                                    );
+                                });
+                        }
+                    }
+                }
+            });
+    }
+
+    /// Execute real tool test using MCP protocol
+    fn execute_real_tool_test(&mut self, server_id: Uuid, tool_name: &str, parameters: &HashMap<String, String>) -> ToolTestResult {
+        let start_time = std::time::Instant::now();
+
+        // Convert parameters to JSON
+        let arguments = serde_json::json!(parameters);
+
+        // Create MCP request
+        let mcp_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments
+            }
+        });
+
+        let request_str = serde_json::to_string_pretty(&mcp_request).unwrap_or_default();
+
+        // Log the MCP request
+        log::info!("Executing real tool test: {} on server {}", tool_name, server_id);
+        log::debug!("MCP Request STDIN: {}", request_str);
+
+        // Try to call the real MCP server
+        let call_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(self.server_manager.call_tool(server_id, tool_name, arguments.clone()))
+        } else {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    rt.block_on(self.server_manager.call_tool(server_id, tool_name, arguments.clone()))
+                }
+                Err(e) => Err(anyhow::anyhow!("无法创建异步运行时: {}", e))
+            }
+        };
+
+        let (success, output, error, stdout_content) = match call_result {
+            Ok(real_response) => {
+                // Real MCP server response
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": real_response
+                });
+                let stdout_msg = format!("Tool '{}' executed successfully on server {}", tool_name, server_id);
+                log::info!("{}", stdout_msg);
+                (
+                    true,
+                    serde_json::to_string_pretty(&response).unwrap_or_default(),
+                    None,
+                    stdout_msg
+                )
+            },
+            Err(e) => {
+                // Fallback to simulation if real call fails
+                log::warn!("Real MCP call failed for tool '{}' on server {}: {}. Falling back to simulation.", tool_name, server_id, e);
+
+                match tool_name {
+                    "read_file" => {
+                        let default_path = "example.txt".to_string();
+                        let file_path = parameters.get("path").unwrap_or(&default_path);
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "result": {
+                                "content": format!("# 文件内容: {}\n\n这是模拟的文件内容（真实调用失败）。", file_path),
+                                "encoding": "utf-8",
+                                "size": 1024,
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            format!("Simulated file read: {} (real call failed)", file_path)
+                        )
+                    },
+                    "write_file" => {
+                        let default_path = "example.txt".to_string();
+                        let file_path = parameters.get("path").unwrap_or(&default_path);
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "result": {
+                                "success": true,
+                                "message": format!("文件 {} 模拟写入成功（真实调用失败）", file_path),
+                                "bytes_written": 512,
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            format!("Simulated file write: {} (real call failed)", file_path)
+                        )
+                    },
+                    "list_directory" => {
+                        let default_path = ".".to_string();
+                        let dir_path = parameters.get("path").unwrap_or(&default_path);
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "result": {
+                                "path": dir_path,
+                                "entries": [
+                                    {"name": "file1.txt", "type": "file", "size": 1024},
+                                    {"name": "file2.md", "type": "file", "size": 2048}
+                                ],
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            format!("Simulated directory listing: {} (real call failed)", dir_path)
+                        )
+                    },
+                    "git_status" => {
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "result": {
+                                "branch": "main",
+                                "status": "clean",
+                                "staged": [],
+                                "modified": [],
+                                "untracked": [],
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            "Simulated git status (real call failed)".to_string()
+                        )
+                    },
+                    _ => {
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "result": {
+                                "success": true,
+                                "message": format!("工具 '{}' 模拟执行成功（真实调用失败）", tool_name),
+                                "tool": tool_name,
+                                "server_id": server_id.to_string(),
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            format!("Simulated tool '{}' execution (real call failed)", tool_name)
+                        )
+                    }
+                }
+            }
+        };
+
+        // Log the response
+        log::debug!("MCP Response STDOUT: {}", stdout_content);
+
+        ToolTestResult {
+            success,
+            output: output.clone(),
+            error,
+            duration: start_time.elapsed(),
+            stdin: Some(request_str),
+            stdout: Some(stdout_content),
+            stderr: None,
+            mcp_request: Some(serde_json::to_string_pretty(&mcp_request).unwrap_or_default()),
+            mcp_response: Some(output),
+        }
+    }
+
+    /// Execute real resource test using MCP protocol
+    fn execute_real_resource_test(&mut self, server_id: Uuid, uri: &str, _parameters: &HashMap<String, String>) -> ToolTestResult {
+        let start_time = std::time::Instant::now();
+
+        // Create MCP request
+        let mcp_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": {
+                "uri": uri
+            }
+        });
+
+        let request_str = serde_json::to_string_pretty(&mcp_request).unwrap_or_default();
+
+        log::info!("Executing real resource test: {} on server {}", uri, server_id);
+        log::debug!("MCP Request STDIN: {}", request_str);
+
+        // Try to call the real MCP server
+        let call_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(self.server_manager.read_resource(server_id, uri))
+        } else {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    rt.block_on(self.server_manager.read_resource(server_id, uri))
+                }
+                Err(e) => Err(anyhow::anyhow!("无法创建异步运行时: {}", e))
+            }
+        };
+
+        let (success, output, error, stdout_content) = match call_result {
+            Ok(real_response) => {
+                // Real MCP server response
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "result": real_response
+                });
+                let stdout_msg = format!("Resource '{}' accessed successfully on server {}", uri, server_id);
+                log::info!("{}", stdout_msg);
+                (
+                    true,
+                    serde_json::to_string_pretty(&response).unwrap_or_default(),
+                    None,
+                    stdout_msg
+                )
+            },
+            Err(e) => {
+                // Fallback to simulation if real call fails
+                log::warn!("Real MCP resource call failed for '{}' on server {}: {}. Falling back to simulation.", uri, server_id, e);
+
+                if uri.starts_with("file://") {
+                    let file_path = uri.strip_prefix("file://").unwrap_or(uri);
+                    let response = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {
+                            "uri": uri,
+                            "content": format!("# 资源内容: {}\n\n这是模拟的文件系统资源（真实调用失败）。", file_path),
+                            "mime_type": "text/plain",
+                            "size": 1024,
+                            "_simulation": true,
+                            "_error": e.to_string()
+                        }
+                    });
+                    (
+                        false,
+                        serde_json::to_string_pretty(&response).unwrap_or_default(),
+                        Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                        format!("Simulated file resource read: {} (real call failed)", file_path)
+                    )
+                } else if uri.starts_with("https://") {
+                    let response = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {
+                            "uri": uri,
+                            "content": format!("<!DOCTYPE html><html><head><title>MCP Resource</title></head><body><h1>模拟的Web资源（真实调用失败）</h1><p>URI: {}</p></body></html>", uri),
+                            "mime_type": "text/html",
+                            "size": 2048,
+                            "_simulation": true,
+                            "_error": e.to_string()
+                        }
+                    });
+                    (
+                        false,
+                        serde_json::to_string_pretty(&response).unwrap_or_default(),
+                        Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                        format!("Simulated web resource fetch: {} (real call failed)", uri)
+                    )
+                } else {
+                    let response = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {
+                            "uri": uri,
+                            "content": format!("模拟的通用资源（真实调用失败）: {}", uri),
+                            "mime_type": "application/json",
+                            "size": 512,
+                            "_simulation": true,
+                            "_error": e.to_string()
+                        }
+                    });
+                    (
+                        false,
+                        serde_json::to_string_pretty(&response).unwrap_or_default(),
+                        Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                        format!("Simulated resource access: {} (real call failed)", uri)
+                    )
+                }
+            }
+        };
+
+        // Log the response
+        log::debug!("MCP Response STDOUT: {}", stdout_content);
+
+        ToolTestResult {
+            success,
+            output: output.clone(),
+            error,
+            duration: start_time.elapsed(),
+            stdin: Some(request_str),
+            stdout: Some(stdout_content),
+            stderr: None,
+            mcp_request: Some(serde_json::to_string_pretty(&mcp_request).unwrap_or_default()),
+            mcp_response: Some(output),
+        }
+    }
+
+    /// Execute real prompt test using MCP protocol
+    fn execute_real_prompt_test(&mut self, server_id: Uuid, prompt_name: &str, parameters: &HashMap<String, String>) -> ToolTestResult {
+        let start_time = std::time::Instant::now();
+
+        // Create MCP request
+        let arguments = if parameters.is_empty() {
+            None
+        } else {
+            Some(serde_json::json!(parameters))
+        };
+
+        let mcp_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "prompts/get",
+            "params": {
+                "name": prompt_name,
+                "arguments": arguments
+            }
+        });
+
+        let request_str = serde_json::to_string_pretty(&mcp_request).unwrap_or_default();
+
+        log::info!("Executing real prompt test: {} on server {}", prompt_name, server_id);
+        log::debug!("MCP Request STDIN: {}", request_str);
+
+        // Try to call the real MCP server
+        let call_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(self.server_manager.get_prompt(server_id, prompt_name, arguments.clone()))
+        } else {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    rt.block_on(self.server_manager.get_prompt(server_id, prompt_name, arguments.clone()))
+                }
+                Err(e) => Err(anyhow::anyhow!("无法创建异步运行时: {}", e))
+            }
+        };
+
+        let params_str = if parameters.is_empty() {
+            "{}".to_string()
+        } else {
+            serde_json::to_string(parameters).unwrap_or_default()
+        };
+
+        let (success, output, error, stdout_content) = match call_result {
+            Ok(real_response) => {
+                // Real MCP server response
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "result": real_response
+                });
+                let stdout_msg = format!("Prompt '{}' executed successfully on server {}", prompt_name, server_id);
+                log::info!("{}", stdout_msg);
+                (
+                    true,
+                    serde_json::to_string_pretty(&response).unwrap_or_default(),
+                    None,
+                    stdout_msg
+                )
+            },
+            Err(e) => {
+                // Fallback to simulation if real call fails
+                log::warn!("Real MCP prompt call failed for '{}' on server {}: {}. Falling back to simulation.", prompt_name, server_id, e);
+
+                match prompt_name {
+                    "code_review" => {
+                        let default_file = "unknown_file".to_string();
+                        let file_path = parameters.get("file_path").unwrap_or(&default_file);
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 3,
+                            "result": {
+                                "prompt": prompt_name,
+                                "result": format!("# 模拟代码审查报告: {}\n\n## 总体评价\n模拟分析（真实调用失败），代码结构良好。\n\n## 建议\n1. 添加更多注释\n2. 考虑性能优化", file_path),
+                                "arguments": params_str,
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            format!("Simulated code review for: {} (real call failed)", file_path)
+                        )
+                    },
+                    "explain_code" => {
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 3,
+                            "result": {
+                                "prompt": prompt_name,
+                                "result": "# 模拟代码解释\n\n模拟分析（真实调用失败），这段代码实现了核心功能模块。\n\n## 主要功能\n- 数据处理\n- 业务逻辑\n- 结果返回",
+                                "arguments": params_str,
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            "Simulated code explanation (real call failed)".to_string()
+                        )
+                    },
+                    "summarize_directory" => {
+                        let default_dir = ".".to_string();
+                        let dir_path = parameters.get("directory_path").unwrap_or(&default_dir);
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 3,
+                            "result": {
+                                "prompt": prompt_name,
+                                "result": format!("# 模拟目录总结: {}\n\n## 文件统计\n模拟扫描（真实调用失败），发现15个文件。\n\n## 主要内容\n项目核心代码和文档。", dir_path),
+                                "arguments": params_str,
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            format!("Simulated directory summary for: {} (real call failed)", dir_path)
+                        )
+                    },
+                    _ => {
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 3,
+                            "result": {
+                                "prompt": prompt_name,
+                                "result": format!("提示 '{}' 模拟执行成功（真实调用失败）。\n\n参数: {}", prompt_name, params_str),
+                                "arguments": params_str,
+                                "_simulation": true,
+                                "_error": e.to_string()
+                            }
+                        });
+                        (
+                            false,
+                            serde_json::to_string_pretty(&response).unwrap_or_default(),
+                            Some(format!("真实调用失败，使用模拟数据: {}", e)),
+                            format!("Simulated prompt '{}' execution (real call failed)", prompt_name)
+                        )
+                    }
+                }
+            }
+        };
+
+        // Log the response
+        log::debug!("MCP Response STDOUT: {}", stdout_content);
+
+        ToolTestResult {
+            success,
+            output: output.clone(),
+            error,
+            duration: start_time.elapsed(),
+            stdin: Some(request_str),
+            stdout: Some(stdout_content),
+            stderr: None,
+            mcp_request: Some(serde_json::to_string_pretty(&mcp_request).unwrap_or_default()),
+            mcp_response: Some(output),
+        }
+    }
 }
 
 impl Default for McpUiState {
@@ -1283,6 +2667,7 @@ impl Default for McpUiState {
             add_server_json_mode: false,
             add_server_json_text: String::new(),
             use_real_rmcp: false,
+            tool_test_dialog: None,
         }
     }
 }
