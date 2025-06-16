@@ -2169,8 +2169,20 @@ impl McpSettingsUi {
     fn execute_real_tool_test(&mut self, server_id: Uuid, tool_name: &str, parameters: &HashMap<String, String>) -> ToolTestResult {
         let start_time = std::time::Instant::now();
 
-        // Convert parameters to JSON
-        let arguments = serde_json::json!(parameters);
+        // Convert parameters to JSON object format expected by MCP
+        let arguments = if parameters.is_empty() {
+            serde_json::Value::Object(serde_json::Map::new())
+        } else {
+            // Convert HashMap<String, String> to JSON object with proper value types
+            let mut json_map = serde_json::Map::new();
+            for (key, value) in parameters {
+                // Try to parse the value as JSON first, fallback to string
+                let json_value = serde_json::from_str::<serde_json::Value>(value)
+                    .unwrap_or_else(|_| serde_json::Value::String(value.clone()));
+                json_map.insert(key.clone(), json_value);
+            }
+            serde_json::Value::Object(json_map)
+        };
 
         // Create MCP request
         let mcp_request = serde_json::json!({
@@ -2186,8 +2198,36 @@ impl McpSettingsUi {
         let request_str = serde_json::to_string_pretty(&mcp_request).unwrap_or_default();
 
         // Log the MCP request
-        log::info!("Executing real tool test: {} on server {}", tool_name, server_id);
+        log::info!("Executing real tool test: {} on server {} with arguments: {:?}", tool_name, server_id, arguments);
         log::debug!("MCP Request STDIN: {}", request_str);
+
+        // Ensure server is connected before calling tool
+        log::info!("🔧 Ensuring server connection before tool test for server: {}", server_id);
+        let ensure_connection_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(self.server_manager.ensure_server_connected(server_id))
+        } else {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    rt.block_on(self.server_manager.ensure_server_connected(server_id))
+                }
+                Err(e) => Err(anyhow::anyhow!("无法创建异步运行时: {}", e))
+            }
+        };
+
+        match ensure_connection_result {
+            Ok(()) => {
+                log::info!("✅ Server connection ensured successfully for {}", server_id);
+
+                // Add a longer delay to allow any ongoing capability queries to complete
+                // This prevents conflicts between capability queries and tool calls
+                log::info!("⏳ Waiting for rmcp service to stabilize before tool call...");
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => {
+                log::warn!("❌ Failed to ensure server connection for {}: {}", server_id, e);
+                log::warn!("🔄 Will attempt tool call anyway, but it may fail");
+            }
+        }
 
         // Try to call the real MCP server
         let call_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -2200,6 +2240,70 @@ impl McpSettingsUi {
                 Err(e) => Err(anyhow::anyhow!("无法创建异步运行时: {}", e))
             }
         };
+
+        // Check if the error indicates a connection loss that requires reconnection
+        if let Err(ref e) = call_result {
+            let error_str = e.to_string();
+            if error_str.contains("reconnection needed") || error_str.contains("connection lost") {
+                log::warn!("🔄 Detected connection loss, attempting automatic reconnection...");
+
+                // Attempt to reconnect
+                let reconnect_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.block_on(self.server_manager.ensure_server_connected(server_id))
+                } else {
+                    match tokio::runtime::Runtime::new() {
+                        Ok(rt) => {
+                            rt.block_on(self.server_manager.ensure_server_connected(server_id))
+                        }
+                        Err(e) => Err(anyhow::anyhow!("无法创建异步运行时: {}", e))
+                    }
+                };
+
+                if let Ok(()) = reconnect_result {
+                    log::info!("✅ Automatic reconnection successful, retrying tool call...");
+
+                    // Add a longer delay after reconnection to ensure stability
+                    log::info!("⏳ Waiting for rmcp service to stabilize after reconnection...");
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+
+                    // Retry the tool call
+                    let retry_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.block_on(self.server_manager.call_tool(server_id, tool_name, arguments.clone()))
+                    } else {
+                        match tokio::runtime::Runtime::new() {
+                            Ok(rt) => {
+                                rt.block_on(self.server_manager.call_tool(server_id, tool_name, arguments.clone()))
+                            }
+                            Err(e) => Err(anyhow::anyhow!("无法创建异步运行时: {}", e))
+                        }
+                    };
+
+                    // Use the retry result instead of the original failed result
+                    match retry_result {
+                        Ok(response) => {
+                            log::info!("🎉 Tool call succeeded after reconnection!");
+                            return ToolTestResult {
+                                success: true,
+                                output: serde_json::to_string_pretty(&response).unwrap_or_else(|_| format!("{:?}", response)),
+                                error: None,
+                                duration: start_time.elapsed(),
+                                stdin: Some(request_str.clone()),
+                                stdout: Some(serde_json::to_string_pretty(&response).unwrap_or_else(|_| format!("{:?}", response))),
+                                stderr: None,
+                                mcp_request: Some(request_str.clone()),
+                                mcp_response: Some(serde_json::to_string_pretty(&response).unwrap_or_else(|_| format!("{:?}", response))),
+                            };
+                        }
+                        Err(retry_error) => {
+                            log::warn!("❌ Tool call failed even after reconnection: {}", retry_error);
+                            // Continue with the original error handling below
+                        }
+                    }
+                } else {
+                    log::warn!("❌ Automatic reconnection failed: {:?}", reconnect_result);
+                }
+            }
+        }
 
         let (success, output, error, stdout_content) = match call_result {
             Ok(real_response) => {
@@ -2483,11 +2587,19 @@ impl McpSettingsUi {
     fn execute_real_prompt_test(&mut self, server_id: Uuid, prompt_name: &str, parameters: &HashMap<String, String>) -> ToolTestResult {
         let start_time = std::time::Instant::now();
 
-        // Create MCP request
+        // Create MCP request with proper argument formatting
         let arguments = if parameters.is_empty() {
             None
         } else {
-            Some(serde_json::json!(parameters))
+            // Convert HashMap<String, String> to JSON object with proper value types
+            let mut json_map = serde_json::Map::new();
+            for (key, value) in parameters {
+                // Try to parse the value as JSON first, fallback to string
+                let json_value = serde_json::from_str::<serde_json::Value>(value)
+                    .unwrap_or_else(|_| serde_json::Value::String(value.clone()));
+                json_map.insert(key.clone(), json_value);
+            }
+            Some(serde_json::Value::Object(json_map))
         };
 
         let mcp_request = serde_json::json!({
@@ -2502,7 +2614,7 @@ impl McpSettingsUi {
 
         let request_str = serde_json::to_string_pretty(&mcp_request).unwrap_or_default();
 
-        log::info!("Executing real prompt test: {} on server {}", prompt_name, server_id);
+        log::info!("Executing real prompt test: {} on server {} with arguments: {:?}", prompt_name, server_id, arguments);
         log::debug!("MCP Request STDIN: {}", request_str);
 
         // Try to call the real MCP server

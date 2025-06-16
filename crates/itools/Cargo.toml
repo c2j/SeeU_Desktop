@@ -41,7 +41,7 @@ oso = "0.27"
 wasmtime = "13.0"
 
 # MCP Protocol SDK
-rmcp = { version = "0.1", features = ["client", "transport-child-process"] }
+rmcp = { version = "0.1.5", features = ["client", "transport-child-process"] }
 
 # JSON-RPC for MCP protocol (legacy)
 jsonrpc-core = "18.0"

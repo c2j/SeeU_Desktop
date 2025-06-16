@@ -376,6 +376,11 @@ impl McpServerManager {
         self.client.get_prompt(server_id, prompt_name, arguments).await
     }
 
+    /// Ensure server is connected and ready for operations
+    pub async fn ensure_server_connected(&mut self, server_id: Uuid) -> Result<()> {
+        self.client.ensure_server_connected(server_id).await
+    }
+
     /// Import server configuration from file
     pub async fn import_server_config(&mut self, file_path: PathBuf) -> Result<Vec<Uuid>> {
         let content = tokio::fs::read_to_string(file_path).await?;

@@ -15,6 +15,7 @@ use rmcp::{
     model::{CallToolRequestParam, ReadResourceRequestParam, GetPromptRequestParam},
     service::RunningService,
     RoleClient,
+    object,
 };
 use serde_json::json;
 
@@ -120,15 +121,34 @@ impl McpClient {
 
     /// Call a tool using rmcp service
     async fn call_tool(&self, name: &str, arguments: Option<Value>) -> Result<Value> {
-        log::debug!("Calling tool '{}' using rmcp service", name);
+        log::debug!("Calling tool '{}' using rmcp service with arguments: {:?}", name, arguments);
 
-        let arguments_map = arguments.and_then(|v| v.as_object().cloned());
+        // Convert arguments to the format expected by rmcp
+        let arguments_map = if let Some(args) = arguments {
+            // If arguments is already an object, use it directly
+            if let Some(obj) = args.as_object() {
+                Some(obj.clone())
+            } else {
+                // If it's not an object, try to convert it to one
+                log::warn!("Arguments for tool '{}' are not an object, attempting conversion: {:?}", name, args);
+                None
+            }
+        } else {
+            None
+        };
+
+        log::debug!("Converted arguments for tool '{}': {:?}", name, arguments_map);
 
         let result = self.service.call_tool(CallToolRequestParam {
             name: name.to_string().into(),
             arguments: arguments_map,
         }).await
-            .map_err(|e| anyhow::anyhow!("Failed to call tool '{}': {}", name, e))?;
+            .map_err(|e| {
+                log::error!("RMCP service call_tool failed for '{}': {}", name, e);
+                anyhow::anyhow!("Failed to call tool '{}': {}", name, e)
+            })?;
+
+        log::debug!("RMCP service call_tool result for '{}': {:?}", name, result);
 
         // Convert rmcp result to JSON format
         serde_json::to_value(&result)
@@ -140,9 +160,14 @@ impl McpClient {
         log::debug!("Reading resource '{}' using rmcp service", uri);
 
         let result = self.service.read_resource(ReadResourceRequestParam {
-            uri: uri.to_string(),
+            uri: uri.to_string().into(),
         }).await
-            .map_err(|e| anyhow::anyhow!("Failed to read resource '{}': {}", uri, e))?;
+            .map_err(|e| {
+                log::error!("RMCP service read_resource failed for '{}': {}", uri, e);
+                anyhow::anyhow!("Failed to read resource '{}': {}", uri, e)
+            })?;
+
+        log::debug!("RMCP service read_resource result for '{}': {:?}", uri, result);
 
         // Convert rmcp result to JSON format
         serde_json::to_value(&result)
@@ -151,15 +176,34 @@ impl McpClient {
 
     /// Get a prompt using rmcp service
     async fn get_prompt(&self, name: &str, arguments: Option<Value>) -> Result<Value> {
-        log::debug!("Getting prompt '{}' using rmcp service", name);
+        log::debug!("Getting prompt '{}' using rmcp service with arguments: {:?}", name, arguments);
 
-        let arguments_map = arguments.and_then(|v| v.as_object().cloned());
+        // Convert arguments to the format expected by rmcp
+        let arguments_map = if let Some(args) = arguments {
+            // If arguments is already an object, use it directly
+            if let Some(obj) = args.as_object() {
+                Some(obj.clone())
+            } else {
+                // If it's not an object, try to convert it to one
+                log::warn!("Arguments for prompt '{}' are not an object, attempting conversion: {:?}", name, args);
+                None
+            }
+        } else {
+            None
+        };
+
+        log::debug!("Converted arguments for prompt '{}': {:?}", name, arguments_map);
 
         let result = self.service.get_prompt(GetPromptRequestParam {
-            name: name.to_string(),
+            name: name.to_string().into(),
             arguments: arguments_map,
         }).await
-            .map_err(|e| anyhow::anyhow!("Failed to get prompt '{}': {}", name, e))?;
+            .map_err(|e| {
+                log::error!("RMCP service get_prompt failed for '{}': {}", name, e);
+                anyhow::anyhow!("Failed to get prompt '{}': {}", name, e)
+            })?;
+
+        log::debug!("RMCP service get_prompt result for '{}': {:?}", name, result);
 
         // Convert rmcp result to JSON format
         serde_json::to_value(&result)
@@ -382,6 +426,32 @@ impl RmcpClient {
                     // Don't fail the connection just because capability query failed
                 }
 
+                // Add a longer delay after capability query to stabilize the connection
+                log::debug!("⏳ Allowing rmcp service to stabilize after capability query...");
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+                // Verify the service is still healthy after capability query
+                log::debug!("🔍 Verifying rmcp service health after capability query...");
+                if let Some(connection) = self.servers.get(&server_id) {
+                    if let Some(rmcp_service) = &connection.rmcp_service {
+                        match rmcp_service.list_tools().await {
+                            Ok(_) => {
+                                log::info!("✅ RMCP service is healthy after capability query");
+                            }
+                            Err(e) => {
+                                log::error!("❌ RMCP service became unhealthy after capability query: {}", e);
+                                // Mark as disconnected so it will be reconnected on next use
+                                if let Some(conn) = self.servers.get_mut(&server_id) {
+                                    conn.status = ConnectionStatus::Disconnected;
+                                    conn.rmcp_service = None;
+                                    conn.capabilities = None;
+                                }
+                                return Err(anyhow::anyhow!("RMCP service became unhealthy after capability query: {}", e));
+                            }
+                        }
+                    }
+                }
+
                 Ok(())
             }
             Err(e) => {
@@ -459,7 +529,7 @@ impl RmcpClient {
             cmd.arg(arg);
         }
 
-        // Configure stdio
+        // Configure stdio for MCP communication
         cmd.stdin(std::process::Stdio::piped())
            .stdout(std::process::Stdio::piped())
            .stderr(std::process::Stdio::piped());
@@ -486,12 +556,41 @@ impl RmcpClient {
     // Future: Query rmcp client capabilities
     // This will be implemented when rmcp integration is complete
 
-    /// Disconnect from a server
-    pub fn disconnect_server(&mut self, server_id: Uuid) -> Result<()> {
+    /// Disconnect from a server (async version)
+    pub async fn disconnect_server_async(&mut self, server_id: Uuid) -> Result<()> {
         if let Some(connection) = self.servers.get_mut(&server_id) {
+            // If we have an rmcp service, cancel it properly
+            if let Some(rmcp_service) = connection.rmcp_service.take() {
+                log::info!("Properly cancelling rmcp service for server: {}", server_id);
+                if let Err(e) = rmcp_service.service.cancel().await {
+                    log::warn!("Failed to cancel rmcp service for server {}: {}", server_id, e);
+                } else {
+                    log::info!("Successfully cancelled rmcp service for server: {}", server_id);
+                }
+            }
+
             connection.status = ConnectionStatus::Disconnected;
             connection.capabilities = None;
             connection.last_ping = None;
+        }
+
+        self.send_event(McpEvent::ServerDisconnected(server_id));
+        log::info!("Disconnected from server: {}", server_id);
+        Ok(())
+    }
+
+    /// Disconnect from a server (sync version - for backward compatibility)
+    pub fn disconnect_server(&mut self, server_id: Uuid) -> Result<()> {
+        if let Some(connection) = self.servers.get_mut(&server_id) {
+            // If we have an rmcp service, we can't cancel it properly in sync context
+            if connection.rmcp_service.is_some() {
+                log::warn!("Dropping rmcp service for server {} without proper cancellation (sync context)", server_id);
+            }
+
+            connection.status = ConnectionStatus::Disconnected;
+            connection.capabilities = None;
+            connection.last_ping = None;
+            connection.rmcp_service = None; // This will drop the service
         }
 
         self.send_event(McpEvent::ServerDisconnected(server_id));
@@ -1265,35 +1364,54 @@ impl RmcpClient {
 
     /// Check if stderr content contains error patterns
     fn contains_error_patterns(&self, stderr_content: &str) -> bool {
-        let error_patterns = [
-            "Error:",
-            "ERROR:",
-            "error:",
+        // More specific error patterns to reduce false positives
+        let critical_error_patterns = [
+            "FATAL:",
+            "Fatal:",
+            "fatal:",
+            "PANIC:",
+            "Panic:",
+            "panic:",
             "ENOENT:",
             "EACCES:",
             "EPERM:",
-            "no such file or directory",
             "permission denied",
             "access denied",
             "cannot access",
-            "failed to",
-            "unable to",
-            "not found",
-            "invalid",
-            "exception:",
-            "Exception:",
-            "EXCEPTION:",
-            "fatal:",
-            "Fatal:",
-            "FATAL:",
-            "panic:",
-            "Panic:",
-            "PANIC:",
+            "command not found",
+            "No such file or directory",
+            "failed to start",
+            "failed to execute",
+            "unable to start",
+            "unable to execute",
+            "Connection refused",
+            "Address already in use",
+            "Broken pipe",
         ];
 
-        for pattern in &error_patterns {
+        // Check for critical errors that definitely indicate failure
+        for pattern in &critical_error_patterns {
             if stderr_content.contains(pattern) {
+                log::debug!("Found critical error pattern '{}' in stderr", pattern);
                 return true;
+            }
+        }
+
+        // Check for error patterns at the beginning of lines (more likely to be actual errors)
+        let line_start_error_patterns = [
+            "Error:",
+            "ERROR:",
+            "Exception:",
+            "EXCEPTION:",
+        ];
+
+        for line in stderr_content.lines() {
+            let trimmed_line = line.trim();
+            for pattern in &line_start_error_patterns {
+                if trimmed_line.starts_with(pattern) {
+                    log::debug!("Found line-start error pattern '{}' in stderr line: {}", pattern, trimmed_line);
+                    return true;
+                }
             }
         }
 
@@ -1318,10 +1436,24 @@ impl RmcpClient {
 
         log::info!("Calling tool '{}' on server: {} ({})", tool_name, config.name, server_id);
 
-        // Check if server is connected
-        if !self.servers.contains_key(&server_id) {
-            return Err(anyhow::anyhow!("Server not connected"));
+        // Check if server is connected and has rmcp service
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if connection.status != ConnectionStatus::Connected {
+            return Err(anyhow::anyhow!("Server is not connected (status: {:?})", connection.status));
         }
+
+        if connection.rmcp_service.is_none() {
+            return Err(anyhow::anyhow!("Server does not have an active rmcp service"));
+        }
+
+        // Skip health check to avoid potential conflicts
+        // The health check itself might be causing the disconnection
+        log::debug!("⚠️ Skipping health check to avoid potential rmcp service conflicts");
+
+        // Instead, try the actual tool call directly and handle errors
+        log::debug!("� Proceeding directly to tool call without health check");
 
         // Create call_tool request
         let request = super::protocol::McpRequest::new(
@@ -1339,19 +1471,27 @@ impl RmcpClient {
 
         if let Some(rmcp_service) = &connection.rmcp_service {
             // Use real MCP protocol to call the tool
+            log::debug!("Calling rmcp_service.call_tool with tool_name: '{}', arguments: {:?}", tool_name, arguments);
+
             match rmcp_service.call_tool(tool_name, Some(arguments)).await {
                 Ok(response) => {
-                    log::info!("Tool '{}' executed successfully", tool_name);
+                    log::info!("Tool '{}' executed successfully via rmcp", tool_name);
+                    log::debug!("Tool '{}' response: {:?}", tool_name, response);
 
-                    // Extract the content from the response
-                    if let Some(content) = response.get("content") {
-                        Ok(content.clone())
-                    } else {
-                        Ok(response)
-                    }
+                    // Return the full response - let the caller decide what to extract
+                    Ok(response)
                 }
                 Err(e) => {
-                    log::error!("Failed to call tool '{}': {}", tool_name, e);
+                    log::error!("RMCP tool call failed for '{}': {}", tool_name, e);
+
+                    // Check if this is a transport/connection error
+                    let error_str = e.to_string();
+                    if error_str.contains("disconnected") || error_str.contains("Transport error") {
+                        log::warn!("Detected connection issue for server {}, marking as disconnected", server_id);
+                        // Note: We can't modify self here because this method takes &self
+                        // The UI should handle reconnection
+                    }
+
                     Err(anyhow::anyhow!("Tool call failed: {}", e))
                 }
             }
@@ -1387,19 +1527,18 @@ impl RmcpClient {
 
         if let Some(rmcp_service) = &connection.rmcp_service {
             // Use real MCP protocol to read the resource
+            log::debug!("Calling rmcp_service.read_resource with uri: '{}'", uri);
+
             match rmcp_service.read_resource(uri).await {
                 Ok(response) => {
-                    log::info!("Resource '{}' read successfully", uri);
+                    log::info!("Resource '{}' read successfully via rmcp", uri);
+                    log::debug!("Resource '{}' response: {:?}", uri, response);
 
-                    // Extract the content from the response
-                    if let Some(content) = response.get("contents") {
-                        Ok(content.clone())
-                    } else {
-                        Ok(response)
-                    }
+                    // Return the full response - let the caller decide what to extract
+                    Ok(response)
                 }
                 Err(e) => {
-                    log::error!("Failed to read resource '{}': {}", uri, e);
+                    log::error!("RMCP resource read failed for '{}': {}", uri, e);
                     Err(anyhow::anyhow!("Resource read failed: {}", e))
                 }
             }
@@ -1436,24 +1575,94 @@ impl RmcpClient {
 
         if let Some(rmcp_service) = &connection.rmcp_service {
             // Use real MCP protocol to get the prompt
+            log::debug!("Calling rmcp_service.get_prompt with prompt_name: '{}', arguments: {:?}", prompt_name, arguments);
+
             match rmcp_service.get_prompt(prompt_name, arguments).await {
                 Ok(response) => {
-                    log::info!("Prompt '{}' executed successfully", prompt_name);
+                    log::info!("Prompt '{}' executed successfully via rmcp", prompt_name);
+                    log::debug!("Prompt '{}' response: {:?}", prompt_name, response);
 
-                    // Extract the content from the response
-                    if let Some(content) = response.get("messages") {
-                        Ok(content.clone())
-                    } else {
-                        Ok(response)
-                    }
+                    // Return the full response - let the caller decide what to extract
+                    Ok(response)
                 }
                 Err(e) => {
-                    log::error!("Failed to get prompt '{}': {}", prompt_name, e);
+                    log::error!("RMCP prompt execution failed for '{}': {}", prompt_name, e);
                     Err(anyhow::anyhow!("Prompt execution failed: {}", e))
                 }
             }
         } else {
             Err(anyhow::anyhow!("Server not properly connected with rmcp"))
+        }
+    }
+
+    /// Check if server connection is healthy and reconnect if needed
+    pub async fn ensure_server_connected(&mut self, server_id: Uuid) -> Result<()> {
+        log::info!("🔍 Checking connection status for server: {}", server_id);
+
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?
+            .clone();
+
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        log::info!("📊 Server {} status: {:?}, has_rmcp_service: {}",
+                   server_id, connection.status, connection.rmcp_service.is_some());
+
+        // Check if we have a valid connection and test its health
+        let needs_reconnection = if connection.status == ConnectionStatus::Connected && connection.rmcp_service.is_some() {
+            log::info!("🔍 Server {} appears connected, testing rmcp service health...", server_id);
+
+            // Test the actual health of the rmcp service
+            if let Some(rmcp_service) = &connection.rmcp_service {
+                match rmcp_service.list_tools().await {
+                    Ok(_) => {
+                        log::info!("✅ RMCP service for server {} is healthy", server_id);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        log::warn!("❌ RMCP service for server {} is unhealthy: {}", server_id, e);
+                        log::info!("🔄 Marking server as disconnected and will reconnect");
+                        true // Need reconnection
+                    }
+                }
+            } else {
+                true // Need reconnection
+            }
+        } else {
+            true // Need reconnection
+        };
+
+        if needs_reconnection {
+            // Properly disconnect the old service before reconnecting
+            log::info!("🧹 Cleaning up old rmcp service before reconnection...");
+            if let Some(connection) = self.servers.get_mut(&server_id) {
+                if let Some(rmcp_service) = connection.rmcp_service.take() {
+                    log::info!("🔄 Properly cancelling old rmcp service for server: {}", server_id);
+                    if let Err(e) = rmcp_service.service.cancel().await {
+                        log::warn!("Failed to cancel old rmcp service for server {}: {}", server_id, e);
+                    } else {
+                        log::info!("✅ Successfully cancelled old rmcp service for server: {}", server_id);
+                    }
+                }
+
+                connection.status = ConnectionStatus::Disconnected;
+                connection.capabilities = None;
+                connection.last_ping = None;
+            }
+        }
+
+        log::info!("🔄 Server {} needs reconnection", server_id);
+
+        // Try to reconnect
+        match &config.transport {
+            crate::mcp::server_manager::TransportConfig::Command { command, args, .. } => {
+                log::info!("🚀 Attempting to reconnect to server {} using command: {} {:?}", server_id, command, args);
+                self.connect_command_server(server_id, &command, &args).await
+            }
+            _ => {
+                Err(anyhow::anyhow!("Transport type not supported for reconnection"))
+            }
         }
     }
 
