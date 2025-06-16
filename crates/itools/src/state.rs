@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
-use crate::roles::{Role, UserRole};
-use crate::plugins::{Plugin, PluginStatus, PluginManager};
+use crate::roles::UserRole;
+use crate::plugins::PluginManager;
 use crate::mcp::{McpClient, McpServerManager};
 use crate::ui::mcp_settings::McpSettingsUi;
 

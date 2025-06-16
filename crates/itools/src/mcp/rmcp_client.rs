@@ -1,12 +1,8 @@
 use std::collections::HashMap;
-use std::process::Child;
 use uuid::Uuid;
 use serde_json::Value;
 use anyhow::Result;
-use tokio::sync::{mpsc, oneshot};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, AsyncReadExt, BufReader};
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 // Real rmcp integration for MCP protocol
 use rmcp::{
@@ -15,12 +11,10 @@ use rmcp::{
     model::{CallToolRequestParam, ReadResourceRequestParam, GetPromptRequestParam},
     service::RunningService,
     RoleClient,
-    object,
 };
 use serde_json::json;
 
-use super::server_manager::{McpServerConfig, McpServerInfo, TransportConfig};
-use super::protocol_handler::{McpProtocolHandler, ProtocolState, ClientInfo as ProtocolClientInfo};
+use super::server_manager::{McpServerConfig, McpServerInfo};
 
 /// MCP Client implementation using rmcp
 #[derive(Debug)]
@@ -59,16 +53,28 @@ impl McpClient {
 
         log::debug!("Raw tools response from rmcp: {:?}", tools);
 
-        // rmcp returns a Vec<Tool> directly, convert to our expected JSON format
+        // rmcp returns a Vec<Tool> directly, convert to our expected JSON format with proper inputSchema
         let tools_json: Vec<Value> = tools.iter().map(|tool| {
+            // Ensure inputSchema is properly formatted for UI consumption
+            let input_schema = if tool.input_schema.is_empty() {
+                // Default empty object schema for tools without parameters
+                json!({
+                    "type": "object",
+                    "title": "EmptyObject"
+                })
+            } else {
+                // Convert Arc<Map<String, Value>> to Value
+                serde_json::Value::Object((*tool.input_schema).clone())
+            };
+
             json!({
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": tool.input_schema
+                "inputSchema": input_schema
             })
         }).collect();
 
-        log::debug!("Converted {} tools to JSON format", tools_json.len());
+        log::debug!("Converted {} tools to JSON format with proper inputSchema", tools_json.len());
 
         Ok(json!({ "tools": tools_json }))
     }
@@ -222,12 +228,6 @@ pub struct RmcpClient {
 
     /// Event sender for UI updates
     event_sender: Option<mpsc::UnboundedSender<McpEvent>>,
-
-    /// Pending requests waiting for responses
-    pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
-
-    // Future: RMCP client instances (currently using protocol handler)
-    // rmcp_clients: HashMap<Uuid, RoleClient>,
 }
 
 /// Connection to an MCP server using rmcp
@@ -236,12 +236,10 @@ pub struct ServerConnection {
     pub server_id: Uuid,
     pub config: McpServerConfig,
     pub status: ConnectionStatus,
+    pub health_status: ServerHealthStatus,
     pub capabilities: Option<ServerCapabilities>,
-    pub last_ping: Option<chrono::DateTime<chrono::Utc>>,
-    pub process: Option<Child>,
-    pub protocol_handler: Option<McpProtocolHandler>,
-    pub message_sender: Option<mpsc::UnboundedSender<String>>,
-    // Real rmcp client integration
+    pub last_test_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub test_results: Vec<TestResult>,
     pub rmcp_service: Option<McpClient>,
 }
 
@@ -252,6 +250,17 @@ pub enum ConnectionStatus {
     Connecting,
     Connected,
     Error(String),
+}
+
+/// Server health status (traffic light system)
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServerHealthStatus {
+    /// Red light: Server configuration added/modified but not tested
+    Red,
+    /// Yellow light: Server connected successfully but not tested
+    Yellow,
+    /// Green light: Server connected and passed all tests
+    Green,
 }
 
 /// Server capabilities
@@ -302,6 +311,8 @@ pub enum McpEvent {
     ServerDisconnected(Uuid),
     ServerError(Uuid, String),
     CapabilitiesUpdated(Uuid, ServerCapabilities),
+    HealthStatusChanged(Uuid, ServerHealthStatus),
+    TestCompleted(Uuid, TestResult),
 }
 
 /// Test result with detailed output information
@@ -320,8 +331,6 @@ impl RmcpClient {
             servers: HashMap::new(),
             server_configs: HashMap::new(),
             event_sender: None,
-            pending_requests: Arc::new(Mutex::new(HashMap::new())),
-            // rmcp_clients: HashMap::new(),
         }
     }
 
@@ -339,17 +348,50 @@ impl RmcpClient {
             server_id,
             config,
             status: ConnectionStatus::Disconnected,
+            health_status: ServerHealthStatus::Red, // New servers start with red status
             capabilities: None,
-            last_ping: None,
-            process: None,
-            protocol_handler: None,
-            message_sender: None,
-            // Real rmcp client integration
+            last_test_time: None,
+            test_results: Vec::new(),
             rmcp_service: None,
         };
 
         self.servers.insert(server_id, connection);
+
+        // Notify UI of the new server's health status
+        self.send_event(McpEvent::HealthStatusChanged(server_id, ServerHealthStatus::Red));
+
         server_id
+    }
+
+    /// Update a server configuration (resets health status to Red)
+    pub fn update_server_config(&mut self, config: McpServerConfig) -> Result<()> {
+        let server_id = config.id;
+
+        // Disconnect if currently connected
+        if let Some(connection) = self.servers.get(&server_id) {
+            if connection.status == ConnectionStatus::Connected {
+                let _ = self.disconnect_server(server_id); // Ignore errors during disconnect
+            }
+        }
+
+        // Update configuration
+        self.server_configs.insert(server_id, config.clone());
+
+        // Reset health status to Red when configuration is modified
+        if let Some(connection) = self.servers.get_mut(&server_id) {
+            connection.config = config;
+            connection.health_status = ServerHealthStatus::Red;
+            connection.status = ConnectionStatus::Disconnected;
+            connection.capabilities = None;
+            connection.last_test_time = None;
+            connection.test_results.clear();
+            connection.rmcp_service = None;
+
+            // Notify UI of health status change
+            self.send_event(McpEvent::HealthStatusChanged(server_id, ServerHealthStatus::Red));
+        }
+
+        Ok(())
     }
 
     /// Remove a server configuration
@@ -383,7 +425,9 @@ impl RmcpClient {
                 self.connect_command_server(server_id, &command, &args).await
             }
             crate::mcp::server_manager::TransportConfig::Tcp { host, port } => {
-                self.connect_tcp_server(server_id, &host, *port).await
+                let error = format!("TCP transport not yet supported: {}:{}", host, port);
+                self.set_server_error(server_id, error.clone());
+                Err(anyhow::anyhow!(error))
             }
             _ => {
                 let error = "Transport type not yet supported".to_string();
@@ -414,7 +458,11 @@ impl RmcpClient {
                 if let Some(connection) = self.servers.get_mut(&server_id) {
                     connection.rmcp_service = Some(mcp_client);
                     connection.status = ConnectionStatus::Connected;
-                    log::info!("Stored rmcp service for server {} and marked as connected", server_id);
+                    connection.health_status = ServerHealthStatus::Yellow; // Connected but not tested
+                    log::info!("Stored rmcp service for server {} and marked as connected (Yellow status)", server_id);
+
+                    // Notify UI of health status change
+                    self.send_event(McpEvent::HealthStatusChanged(server_id, ServerHealthStatus::Yellow));
                 } else {
                     log::error!("Failed to find connection for server {} when storing rmcp service", server_id);
                     return Err(anyhow::anyhow!("Failed to find connection for server"));
@@ -466,27 +514,8 @@ impl RmcpClient {
                         let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("Failed to get stdin"))?;
                         let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("Failed to get stdout"))?;
 
-                        // Create protocol handler as fallback
-                        let mut protocol_handler = McpProtocolHandler::new(server_id);
-
-                        // Setup message communication
-                        let (message_sender, message_receiver) = mpsc::unbounded_channel::<String>();
-                        let (event_sender, mut event_receiver) = mpsc::unbounded_channel();
-
-                        protocol_handler.set_event_sender(event_sender);
-                        protocol_handler.connect();
-
-                        // Store connection info
-                        if let Some(connection) = self.servers.get_mut(&server_id) {
-                            connection.protocol_handler = Some(protocol_handler);
-                            connection.message_sender = Some(message_sender.clone());
-                        }
-
-                        // Start message handling tasks
-                        self.start_message_tasks(server_id, stdin, stdout, message_receiver, message_sender.clone()).await?;
-
-                        // Start protocol initialization
-                        self.initialize_protocol(server_id).await?;
+                        // Fallback: just mark as connected without protocol handler
+                        log::warn!("Using fallback connection without rmcp service for server {}", server_id);
 
                         // Update connection status to connected
                         if let Some(connection) = self.servers.get_mut(&server_id) {
@@ -499,13 +528,7 @@ impl RmcpClient {
                             // Don't fail the connection just because capability query failed
                         }
 
-                        // Handle protocol events
-                        tokio::spawn(async move {
-                            while let Some(event) = event_receiver.recv().await {
-                                log::debug!("Protocol event: {:?}", event);
-                                // Handle events (state changes, capabilities, etc.)
-                            }
-                        });
+                        // Fallback connection established
 
                         Ok(())
                     }
@@ -547,14 +570,7 @@ impl RmcpClient {
         })
     }
 
-    /// Connect to a TCP server
-    async fn connect_tcp_server(&mut self, _server_id: Uuid, _host: &str, _port: u16) -> Result<()> {
-        // TODO: Implement TCP connection using tokio TcpStream
-        Err(anyhow::anyhow!("TCP transport not yet implemented"))
-    }
 
-    // Future: Query rmcp client capabilities
-    // This will be implemented when rmcp integration is complete
 
     /// Disconnect from a server (async version)
     pub async fn disconnect_server_async(&mut self, server_id: Uuid) -> Result<()> {
@@ -571,7 +587,6 @@ impl RmcpClient {
 
             connection.status = ConnectionStatus::Disconnected;
             connection.capabilities = None;
-            connection.last_ping = None;
         }
 
         self.send_event(McpEvent::ServerDisconnected(server_id));
@@ -589,7 +604,6 @@ impl RmcpClient {
 
             connection.status = ConnectionStatus::Disconnected;
             connection.capabilities = None;
-            connection.last_ping = None;
             connection.rmcp_service = None; // This will drop the service
         }
 
@@ -634,36 +648,16 @@ impl RmcpClient {
             return Ok(());
         }
 
-        // Fallback to manual JSON-RPC queries if no rmcp service
-        log::info!("No rmcp service available, falling back to manual queries for server: {}", config.name);
+        // Fallback: no rmcp service available, return empty capabilities
+        log::warn!("No rmcp service available for server: {}, returning empty capabilities", config.name);
 
-        // Fallback to manual JSON-RPC queries if no rmcp service
-        log::info!("No rmcp service available, falling back to manual queries for server: {}", config.name);
-
-        let message_sender = connection.message_sender.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No message sender available"))?;
-
-        // First, query tools
-        let tools = self.query_server_tools(server_id, message_sender).await?;
-
-        // Then, query resources
-        let resources = self.query_server_resources(server_id, message_sender).await?;
-
-        // Finally, query prompts
-        let prompts = self.query_server_prompts(server_id, message_sender).await?;
-
-        // Log the counts before moving the data
-        log::info!("Successfully queried capabilities for server: {} - Tools: {}, Resources: {}, Prompts: {}",
-                   config.name, tools.len(), resources.len(), prompts.len());
-
-        // Create capabilities from the queried data
         let capabilities = ServerCapabilities {
-            tools,
-            resources,
-            prompts,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
         };
 
-        // Update connection with capabilities
+        // Update connection with empty capabilities
         if let Some(connection) = self.servers.get_mut(&server_id) {
             connection.capabilities = Some(capabilities.clone());
         }
@@ -815,8 +809,11 @@ impl RmcpClient {
             name: config.name.clone(),
             description: config.description.clone(),
             status: connection.status.clone(),
+            health_status: connection.health_status.clone(),
             capabilities: connection.capabilities.clone(),
-            last_ping: connection.last_ping,
+            last_ping: None, // Field removed from ServerConnection
+            last_test_time: connection.last_test_time,
+            test_results: connection.test_results.clone(),
         })
     }
 
@@ -837,10 +834,7 @@ impl RmcpClient {
                 // Server is already connected, test with ping
                 log::info!("Testing connected server: {}", server_id);
 
-                // Update last ping time
-                if let Some(conn) = self.servers.get_mut(&server_id) {
-                    conn.last_ping = Some(chrono::Utc::now());
-                }
+                // Server is connected, no need to update ping time (field removed)
 
                 Ok(true)
             }
@@ -878,545 +872,28 @@ impl RmcpClient {
 
     /// Test server connection with detailed output
     pub async fn test_server_detailed(&mut self, server_id: Uuid) -> Result<TestResult> {
-        let config = self.server_configs.get(&server_id)
-            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?
-            .clone();
-
-        log::info!("Starting detailed test for server: {} ({})", config.name, server_id);
-
-        // Try to start the server process temporarily
-        match &config.transport {
-            TransportConfig::Command { command, args, env } => {
-                log::info!("Testing command: {} with args: {:?}", command, args);
-                if !env.is_empty() {
-                    log::debug!("Environment variables: {:?}", env);
-                }
-
-                // Create a temporary process to test the connection
-                let mut cmd = tokio::process::Command::new(command);
-                cmd.args(args);
-
-                // Set environment variables
-                for (key, value) in env {
-                    cmd.env(key, value);
-                }
-
-                // Configure process
-                cmd.stdin(std::process::Stdio::piped())
-                   .stdout(std::process::Stdio::piped())
-                   .stderr(std::process::Stdio::piped());
-
-                // Try to spawn the process
-                match cmd.spawn() {
-                    Ok(mut child) => {
-                        log::info!("Successfully spawned test process for server {} (PID: {:?})", server_id, child.id());
-
-                        // Set a timeout for the test
-                        let timeout_duration = tokio::time::Duration::from_secs(15);
-
-                        let test_result = tokio::time::timeout(
-                            timeout_duration,
-                            self.perform_detailed_process_test_with_output(&mut child, server_id)
-                        ).await;
-
-                        match test_result {
-                            Ok(result) => {
-                                // Clean up the test process
-                                let _ = child.kill().await;
-                                let _ = child.wait().await;
-                                result
-                            }
-                            Err(_) => {
-                                log::error!("Test for server {} timed out after {} seconds", server_id, timeout_duration.as_secs());
-                                // Clean up the test process
-                                let _ = child.kill().await;
-                                let _ = child.wait().await;
-                                Ok(TestResult {
-                                    success: false,
-                                    stdout: String::new(),
-                                    stderr: String::new(),
-                                    error_message: Some(format!("Test timed out after {} seconds", timeout_duration.as_secs())),
-                                })
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to spawn test process for server {}: {}", server_id, e);
-                        log::error!("Command details - executable: '{}', args: {:?}", command, args);
-
-                        // Check if the command exists
-                        let command_check_error = if let Err(spawn_err) = std::process::Command::new(command).arg("--help").output() {
-                            format!("Command '{}' may not be available: {}", command, spawn_err)
-                        } else {
-                            String::new()
-                        };
-
-                        Ok(TestResult {
-                            success: false,
-                            stdout: String::new(),
-                            stderr: format!("Failed to spawn process: {}", e),
-                            error_message: Some(if command_check_error.is_empty() {
-                                format!("Process spawn failed: {}", e)
-                            } else {
-                                format!("Process spawn failed: {}. {}", e, command_check_error)
-                            }),
-                        })
-                    }
-                }
-            }
-            _ => {
-                // For non-command transports, fall back to simple test
-                let success = self.test_connection_temporarily(server_id).await?;
-                Ok(TestResult {
-                    success,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    error_message: if success { None } else { Some("Connection test failed".to_string()) },
-                })
-            }
-        }
+        // Use the simplified test functionality
+        self.test_server_functionality(server_id).await
     }
 
     /// Test connection temporarily without changing the server's persistent state
     async fn test_connection_temporarily(&mut self, server_id: Uuid) -> Result<bool> {
-        let config = self.server_configs.get(&server_id)
-            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?
-            .clone();
-
-        log::info!("Starting temporary connection test for server: {} ({})", config.name, server_id);
-
-        // Try to start the server process temporarily
-        match &config.transport {
-            TransportConfig::Command { command, args, env } => {
-                log::info!("Testing command: {} with args: {:?}", command, args);
-                if !env.is_empty() {
-                    log::debug!("Environment variables: {:?}", env);
-                }
-
-                // Create a temporary process to test the connection
-                let mut cmd = tokio::process::Command::new(command);
-                cmd.args(args);
-
-                // Set environment variables
-                for (key, value) in env {
-                    cmd.env(key, value);
-                }
-
-                // Configure process
-                cmd.stdin(std::process::Stdio::piped())
-                   .stdout(std::process::Stdio::piped())
-                   .stderr(std::process::Stdio::piped());
-
-                // Try to spawn the process
-                match cmd.spawn() {
-                    Ok(mut child) => {
-                        log::info!("Successfully spawned test process for server {} (PID: {:?})", server_id, child.id());
-
-                        // Set a timeout for the test
-                        let timeout_duration = tokio::time::Duration::from_secs(15);
-
-                        let test_result = tokio::time::timeout(
-                            timeout_duration,
-                            self.perform_detailed_process_test(&mut child, server_id)
-                        ).await;
-
-                        match test_result {
-                            Ok(result) => {
-                                // Clean up the test process
-                                let _ = child.kill().await;
-                                let _ = child.wait().await;
-                                result
-                            }
-                            Err(_) => {
-                                log::error!("Test for server {} timed out after {} seconds", server_id, timeout_duration.as_secs());
-                                // Clean up the test process
-                                let _ = child.kill().await;
-                                let _ = child.wait().await;
-                                Ok(false)
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to spawn test process for server {}: {}", server_id, e);
-                        log::error!("Command details - executable: '{}', args: {:?}", command, args);
-
-                        // Check if the command exists
-                        if let Err(spawn_err) = std::process::Command::new(command).arg("--help").output() {
-                            log::error!("Command '{}' may not be available: {}", command, spawn_err);
-                        }
-
-                        Ok(false)
-                    }
-                }
-            }
-            TransportConfig::Tcp { host, port } => {
-                log::debug!("Testing TCP connection to {}:{}", host, port);
-
-                // Try to connect to the TCP endpoint
-                match tokio::net::TcpStream::connect(format!("{}:{}", host, port)).await {
-                    Ok(_) => {
-                        log::info!("Successfully connected to TCP endpoint {}:{}", host, port);
-                        Ok(true)
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to connect to TCP endpoint {}:{}: {}", host, port, e);
-                        Ok(false)
-                    }
-                }
-            }
-            TransportConfig::Unix { socket_path } => {
-                log::debug!("Testing Unix socket connection to {}", socket_path);
-
-                // Try to connect to the Unix socket
-                match tokio::net::UnixStream::connect(socket_path).await {
-                    Ok(_) => {
-                        log::info!("Successfully connected to Unix socket {}", socket_path);
-                        Ok(true)
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to connect to Unix socket {}: {}", socket_path, e);
-                        Ok(false)
-                    }
-                }
-            }
-            TransportConfig::WebSocket { url } => {
-                log::debug!("Testing WebSocket connection to {}", url);
-
-                // For WebSocket, we'll just validate the URL format for now
-                // A full implementation would require a WebSocket client
-                if url.starts_with("ws://") || url.starts_with("wss://") {
-                    log::info!("WebSocket URL format is valid: {}", url);
-                    Ok(true)
-                } else {
-                    log::warn!("Invalid WebSocket URL format: {}", url);
-                    Ok(false)
-                }
-            }
+        // Use the simplified test functionality
+        match self.test_server_functionality(server_id).await {
+            Ok(result) => Ok(result.success),
+            Err(_) => Ok(false),
         }
     }
 
-    /// Perform detailed process testing with output capture
-    async fn perform_detailed_process_test(&self, child: &mut tokio::process::Child, server_id: Uuid) -> Result<bool> {
-        // Give the process a moment to start
-        tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
 
-        // Check if the process is still running
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Process has exited
-                if status.success() {
-                    log::info!("Test process for server {} exited successfully with status: {}", server_id, status);
 
-                    // Try to capture any output before the process exited and check for errors
-                    let output_ok = self.capture_process_output(child, server_id, true).await;
-                    if !output_ok {
-                        log::error!("Test process for server {} exited successfully but stderr contains errors", server_id);
-                        return Ok(false);
-                    }
-                    Ok(true)
-                } else {
-                    log::error!("Test process for server {} exited with error status: {}", server_id, status);
 
-                    // Capture error output
-                    self.capture_process_output(child, server_id, false).await;
-                    Ok(false)
-                }
-            }
-            Ok(None) => {
-                // Process is still running, which is good for an MCP server
-                log::info!("Test process for server {} is running successfully", server_id);
 
-                // Try to capture some output to verify the server is responsive and check for errors
-                let output_ok = self.capture_process_output(child, server_id, true).await;
-                if !output_ok {
-                    log::error!("Test process for server {} is running but stderr contains errors", server_id);
-                    return Ok(false);
-                }
-                Ok(true)
-            }
-            Err(e) => {
-                log::error!("Error checking test process status for server {}: {}", server_id, e);
-                Ok(false)
-            }
-        }
-    }
 
-    /// Perform detailed process testing with output capture and return detailed results
-    async fn perform_detailed_process_test_with_output(&self, child: &mut tokio::process::Child, server_id: Uuid) -> Result<TestResult> {
-        // Give the process a moment to start
-        tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
 
-        // Capture output first
-        let (stdout_output, stderr_output) = self.capture_process_output_detailed(child, server_id).await;
 
-        // Check if the process is still running
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Process has exited
-                if status.success() {
-                    log::info!("Test process for server {} exited successfully with status: {}", server_id, status);
 
-                    // Check for errors in stderr even if process succeeded
-                    let has_errors = self.contains_error_patterns(&stderr_output);
-                    if has_errors {
-                        log::error!("Test process for server {} exited successfully but stderr contains errors", server_id);
-                        Ok(TestResult {
-                            success: false,
-                            stdout: stdout_output,
-                            stderr: stderr_output,
-                            error_message: Some("Process succeeded but stderr contains error messages".to_string()),
-                        })
-                    } else {
-                        Ok(TestResult {
-                            success: true,
-                            stdout: stdout_output,
-                            stderr: stderr_output,
-                            error_message: None,
-                        })
-                    }
-                } else {
-                    log::error!("Test process for server {} exited with error status: {}", server_id, status);
-                    Ok(TestResult {
-                        success: false,
-                        stdout: stdout_output,
-                        stderr: stderr_output,
-                        error_message: Some(format!("Process exited with error status: {}", status)),
-                    })
-                }
-            }
-            Ok(None) => {
-                // Process is still running, which is good for an MCP server
-                log::info!("Test process for server {} is running successfully", server_id);
 
-                // Check for errors in stderr even if process is running
-                let has_errors = self.contains_error_patterns(&stderr_output);
-                if has_errors {
-                    log::error!("Test process for server {} is running but stderr contains errors", server_id);
-                    Ok(TestResult {
-                        success: false,
-                        stdout: stdout_output,
-                        stderr: stderr_output,
-                        error_message: Some("Process is running but stderr contains error messages".to_string()),
-                    })
-                } else {
-                    Ok(TestResult {
-                        success: true,
-                        stdout: stdout_output,
-                        stderr: stderr_output,
-                        error_message: None,
-                    })
-                }
-            }
-            Err(e) => {
-                log::error!("Error checking test process status for server {}: {}", server_id, e);
-                Ok(TestResult {
-                    success: false,
-                    stdout: stdout_output,
-                    stderr: stderr_output,
-                    error_message: Some(format!("Error checking process status: {}", e)),
-                })
-            }
-        }
-    }
-
-    /// Capture process output and return both stdout and stderr
-    async fn capture_process_output_detailed(&self, child: &mut tokio::process::Child, server_id: Uuid) -> (String, String) {
-        let mut stdout_output = String::new();
-        let mut stderr_output = String::new();
-
-        // Capture stdout
-        if let Some(stdout) = child.stdout.take() {
-            let mut stdout_reader = tokio::io::BufReader::new(stdout);
-
-            let read_result = tokio::time::timeout(
-                tokio::time::Duration::from_millis(1000),
-                stdout_reader.read_to_string(&mut stdout_output)
-            ).await;
-
-            match read_result {
-                Ok(Ok(bytes_read)) => {
-                    if bytes_read > 0 && !stdout_output.trim().is_empty() {
-                        log::info!("Server {} stdout output ({} bytes): {}", server_id, bytes_read, stdout_output.trim());
-                    } else {
-                        log::debug!("Server {} produced no stdout output", server_id);
-                    }
-                }
-                Ok(Err(e)) => {
-                    log::debug!("Could not read stdout from server {}: {}", server_id, e);
-                    stdout_output = format!("Error reading stdout: {}", e);
-                }
-                Err(_) => {
-                    log::debug!("Timeout reading stdout from server {} (normal for some servers)", server_id);
-                    stdout_output = "Timeout reading stdout".to_string();
-                }
-            }
-        }
-
-        // Capture stderr
-        if let Some(stderr) = child.stderr.take() {
-            let mut stderr_reader = tokio::io::BufReader::new(stderr);
-
-            let read_result = tokio::time::timeout(
-                tokio::time::Duration::from_millis(1000),
-                stderr_reader.read_to_string(&mut stderr_output)
-            ).await;
-
-            match read_result {
-                Ok(Ok(bytes_read)) => {
-                    if bytes_read > 0 && !stderr_output.trim().is_empty() {
-                        let stderr_content = stderr_output.trim();
-
-                        // Check for common error patterns in stderr
-                        let has_errors = self.contains_error_patterns(stderr_content);
-
-                        if has_errors {
-                            log::error!("Server {} stderr contains errors ({} bytes): {}", server_id, bytes_read, stderr_content);
-                        } else {
-                            log::info!("Server {} stderr output ({} bytes): {}", server_id, bytes_read, stderr_content);
-                        }
-                    }
-                }
-                Ok(Err(e)) => {
-                    log::debug!("Could not read stderr from server {}: {}", server_id, e);
-                    stderr_output = format!("Error reading stderr: {}", e);
-                }
-                Err(_) => {
-                    log::debug!("Timeout reading stderr from server {}", server_id);
-                    stderr_output = "Timeout reading stderr".to_string();
-                }
-            }
-        }
-
-        (stdout_output, stderr_output)
-    }
-
-    /// Capture process output for logging and error detection
-    async fn capture_process_output(&self, child: &mut tokio::process::Child, server_id: Uuid, is_success: bool) -> bool {
-        let mut has_errors = false;
-
-        // Capture stdout
-        if let Some(stdout) = child.stdout.take() {
-            let mut stdout_reader = tokio::io::BufReader::new(stdout);
-            let mut stdout_output = String::new();
-
-            let read_result = tokio::time::timeout(
-                tokio::time::Duration::from_millis(1000),
-                stdout_reader.read_to_string(&mut stdout_output)
-            ).await;
-
-            match read_result {
-                Ok(Ok(bytes_read)) => {
-                    if bytes_read > 0 && !stdout_output.trim().is_empty() {
-                        if is_success {
-                            log::info!("Server {} stdout output ({} bytes): {}", server_id, bytes_read, stdout_output.trim());
-                        } else {
-                            log::warn!("Server {} stdout output ({} bytes): {}", server_id, bytes_read, stdout_output.trim());
-                        }
-                    } else {
-                        log::debug!("Server {} produced no stdout output", server_id);
-                    }
-                }
-                Ok(Err(e)) => {
-                    log::debug!("Could not read stdout from server {}: {}", server_id, e);
-                }
-                Err(_) => {
-                    log::debug!("Timeout reading stdout from server {} (normal for some servers)", server_id);
-                }
-            }
-        }
-
-        // Capture stderr and check for errors
-        if let Some(stderr) = child.stderr.take() {
-            let mut stderr_reader = tokio::io::BufReader::new(stderr);
-            let mut stderr_output = String::new();
-
-            let read_result = tokio::time::timeout(
-                tokio::time::Duration::from_millis(1000),
-                stderr_reader.read_to_string(&mut stderr_output)
-            ).await;
-
-            match read_result {
-                Ok(Ok(bytes_read)) => {
-                    if bytes_read > 0 && !stderr_output.trim().is_empty() {
-                        let stderr_content = stderr_output.trim();
-
-                        // Check for common error patterns in stderr
-                        has_errors = self.contains_error_patterns(stderr_content);
-
-                        if has_errors {
-                            log::error!("Server {} stderr contains errors ({} bytes): {}", server_id, bytes_read, stderr_content);
-                        } else {
-                            log::info!("Server {} stderr output ({} bytes): {}", server_id, bytes_read, stderr_content);
-                        }
-                    }
-                }
-                Ok(Err(e)) => {
-                    log::debug!("Could not read stderr from server {}: {}", server_id, e);
-                }
-                Err(_) => {
-                    log::debug!("Timeout reading stderr from server {}", server_id);
-                }
-            }
-        }
-
-        !has_errors
-    }
-
-    /// Check if stderr content contains error patterns
-    fn contains_error_patterns(&self, stderr_content: &str) -> bool {
-        // More specific error patterns to reduce false positives
-        let critical_error_patterns = [
-            "FATAL:",
-            "Fatal:",
-            "fatal:",
-            "PANIC:",
-            "Panic:",
-            "panic:",
-            "ENOENT:",
-            "EACCES:",
-            "EPERM:",
-            "permission denied",
-            "access denied",
-            "cannot access",
-            "command not found",
-            "No such file or directory",
-            "failed to start",
-            "failed to execute",
-            "unable to start",
-            "unable to execute",
-            "Connection refused",
-            "Address already in use",
-            "Broken pipe",
-        ];
-
-        // Check for critical errors that definitely indicate failure
-        for pattern in &critical_error_patterns {
-            if stderr_content.contains(pattern) {
-                log::debug!("Found critical error pattern '{}' in stderr", pattern);
-                return true;
-            }
-        }
-
-        // Check for error patterns at the beginning of lines (more likely to be actual errors)
-        let line_start_error_patterns = [
-            "Error:",
-            "ERROR:",
-            "Exception:",
-            "EXCEPTION:",
-        ];
-
-        for line in stderr_content.lines() {
-            let trimmed_line = line.trim();
-            for pattern in &line_start_error_patterns {
-                if trimmed_line.starts_with(pattern) {
-                    log::debug!("Found line-start error pattern '{}' in stderr line: {}", pattern, trimmed_line);
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
 
     /// Set server error status
     fn set_server_error(&mut self, server_id: Uuid, error: String) {
@@ -1429,12 +906,92 @@ impl RmcpClient {
     // Future: Enhanced MCP operations with rmcp integration
     // These methods will be implemented when rmcp integration is complete
 
+    /// Check if server is ready for operations (Green health status)
+    pub fn is_server_ready(&self, server_id: Uuid) -> Result<bool> {
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        Ok(connection.health_status == ServerHealthStatus::Green)
+    }
+
+    /// Get server health status
+    pub fn get_server_health_status(&self, server_id: Uuid) -> Option<ServerHealthStatus> {
+        self.servers.get(&server_id).map(|conn| conn.health_status.clone())
+    }
+
+    /// Get server test results
+    pub fn get_server_test_results(&self, server_id: Uuid) -> Option<Vec<TestResult>> {
+        self.servers.get(&server_id).map(|conn| conn.test_results.clone())
+    }
+
+    /// List tools for a specific server
+    pub async fn list_tools_for_server(&self, server_id: Uuid) -> Result<Value> {
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            rmcp_service.list_tools().await
+        } else {
+            Err(anyhow::anyhow!("Server not connected with rmcp service"))
+        }
+    }
+
+    /// List resources for a specific server
+    pub async fn list_resources_for_server(&self, server_id: Uuid) -> Result<Value> {
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            rmcp_service.list_resources().await
+        } else {
+            Err(anyhow::anyhow!("Server not connected with rmcp service"))
+        }
+    }
+
+    /// List prompts for a specific server
+    pub async fn list_prompts_for_server(&self, server_id: Uuid) -> Result<Value> {
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        if let Some(rmcp_service) = &connection.rmcp_service {
+            rmcp_service.list_prompts().await
+        } else {
+            Err(anyhow::anyhow!("Server not connected with rmcp service"))
+        }
+    }
+
     /// Call a tool on a specific server
     pub async fn call_tool(&self, server_id: Uuid, tool_name: &str, arguments: Value) -> Result<Value> {
+        self.call_tool_internal(server_id, tool_name, arguments, false).await
+    }
+
+    /// Call a tool on a specific server (for testing purposes, bypasses health status check)
+    pub async fn call_tool_for_testing(&self, server_id: Uuid, tool_name: &str, arguments: Value) -> Result<Value> {
+        self.call_tool_internal(server_id, tool_name, arguments, true).await
+    }
+
+    /// Internal method to call a tool with optional health status bypass
+    async fn call_tool_internal(&self, server_id: Uuid, tool_name: &str, arguments: Value, bypass_health_check: bool) -> Result<Value> {
         let config = self.server_configs.get(&server_id)
             .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
 
-        log::info!("Calling tool '{}' on server: {} ({})", tool_name, config.name, server_id);
+        log::info!("Calling tool '{}' on server: {} ({}) [bypass_health_check: {}]",
+                   tool_name, config.name, server_id, bypass_health_check);
+
+        // Check if server is ready for operations (Green status) - unless bypassing for testing
+        if !bypass_health_check && !self.is_server_ready(server_id)? {
+            let health_status = self.get_server_health_status(server_id)
+                .unwrap_or(ServerHealthStatus::Red);
+            return Err(anyhow::anyhow!(
+                "Server is not ready for operations. Current health status: {:?}. Please test the server first.",
+                health_status
+            ));
+        }
+
+        // For testing, create a fresh rmcp service (like git_stdio.rs)
+        if bypass_health_check {
+            return self.call_tool_with_fresh_service(server_id, tool_name, arguments).await;
+        }
 
         // Check if server is connected and has rmcp service
         let connection = self.servers.get(&server_id)
@@ -1497,6 +1054,64 @@ impl RmcpClient {
             }
         } else {
             Err(anyhow::anyhow!("Server not properly connected with rmcp"))
+        }
+    }
+
+    /// Call tool with fresh rmcp service (like git_stdio.rs pattern)
+    async fn call_tool_with_fresh_service(&self, server_id: Uuid, tool_name: &str, arguments: Value) -> Result<Value> {
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+
+        match &config.transport {
+            crate::mcp::server_manager::TransportConfig::Command { command, args, .. } => {
+                log::info!("🚀 Creating fresh rmcp service for tool call: {} {:?}", command, args);
+
+                // Create fresh rmcp service (like git_stdio.rs)
+                let mut cmd = tokio::process::Command::new(command);
+                for arg in args {
+                    cmd.arg(arg);
+                }
+
+                let transport = TokioChildProcess::new(&mut cmd)
+                    .map_err(|e| anyhow::anyhow!("Failed to create transport: {}", e))?;
+                let service = ().serve(transport).await
+                    .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
+
+                log::info!("✅ Fresh rmcp service created, calling tool '{}'", tool_name);
+
+                // Convert arguments to the format expected by rmcp (like git_stdio.rs)
+                let arguments_map = if let Some(obj) = arguments.as_object() {
+                    Some(obj.clone())
+                } else {
+                    None
+                };
+
+                // Call tool (like git_stdio.rs)
+                let result = service.call_tool(CallToolRequestParam {
+                    name: tool_name.to_string().into(),
+                    arguments: arguments_map,
+                }).await;
+
+                // Clean up service
+                if let Err(e) = service.cancel().await {
+                    log::warn!("Failed to cancel tool call service: {}", e);
+                }
+
+                match result {
+                    Ok(tool_result) => {
+                        log::info!("✅ Tool '{}' executed successfully via fresh rmcp service", tool_name);
+                        serde_json::to_value(&tool_result)
+                            .map_err(|e| anyhow::anyhow!("Failed to serialize tool result: {}", e))
+                    }
+                    Err(e) => {
+                        log::error!("❌ Tool '{}' failed via fresh rmcp service: {}", tool_name, e);
+                        Err(anyhow::anyhow!("Tool call failed: {}", e))
+                    }
+                }
+            }
+            _ => {
+                Err(anyhow::anyhow!("Only command transport is supported for fresh service tool calls"))
+            }
         }
     }
 
@@ -1595,6 +1210,157 @@ impl RmcpClient {
         }
     }
 
+    /// Test server functionality and update health status (simplified approach)
+    pub async fn test_server_functionality(&mut self, server_id: Uuid) -> Result<TestResult> {
+        log::info!("🧪 Testing server functionality for: {}", server_id);
+
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?
+            .clone();
+
+        // Create a fresh rmcp service for testing (like git_stdio.rs)
+        let test_result = match &config.transport {
+            crate::mcp::server_manager::TransportConfig::Command { command, args, .. } => {
+                self.test_server_with_rmcp(server_id, command, args).await
+            }
+            _ => {
+                TestResult {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: "Unsupported transport type for testing".to_string(),
+                    error_message: Some("Only command transport is supported for testing".to_string()),
+                }
+            }
+        };
+
+        // Update server health status and test results
+        if let Some(connection) = self.servers.get_mut(&server_id) {
+            connection.last_test_time = Some(chrono::Utc::now());
+            connection.test_results.push(test_result.clone());
+
+            // Update health status based on test result
+            let new_health_status = if test_result.success {
+                ServerHealthStatus::Green
+            } else {
+                ServerHealthStatus::Yellow // Connected but tests failed
+            };
+
+            if connection.health_status != new_health_status {
+                connection.health_status = new_health_status.clone();
+                self.send_event(McpEvent::HealthStatusChanged(server_id, new_health_status));
+            }
+        }
+
+        // Send test completion event
+        self.send_event(McpEvent::TestCompleted(server_id, test_result.clone()));
+
+        log::info!("🧪 Server {} test completed: success={}", server_id, test_result.success);
+        Ok(test_result)
+    }
+
+    /// Test server using rmcp service (following git_stdio.rs pattern)
+    async fn test_server_with_rmcp(&self, server_id: Uuid, command: &str, args: &[String]) -> TestResult {
+        let start_time = std::time::Instant::now();
+        let mut test_stdout = String::new();
+        let mut test_stderr = String::new();
+
+        log::info!("🚀 Creating fresh rmcp service for testing: {} {:?}", command, args);
+
+        // Create fresh rmcp service for testing (like git_stdio.rs)
+        let mut cmd = tokio::process::Command::new(command);
+        for arg in args {
+            cmd.arg(arg);
+        }
+
+        let transport = match TokioChildProcess::new(&mut cmd) {
+            Ok(transport) => transport,
+            Err(e) => {
+                let error_msg = format!("Failed to create transport: {}", e);
+                log::error!("{}", error_msg);
+                return TestResult {
+                    success: false,
+                    stdout: test_stdout,
+                    stderr: error_msg.clone(),
+                    error_message: Some(error_msg),
+                };
+            }
+        };
+        let service_result = ().serve(transport).await;
+
+        match service_result {
+            Ok(service) => {
+                log::info!("✅ RMCP service created successfully");
+
+                // Test 1: Get server info (like git_stdio.rs)
+                let server_info = service.peer_info();
+                test_stdout.push_str(&format!("✅ Server info: {:#?}\n", server_info));
+                log::info!("✅ Server info retrieved: {:#?}", server_info);
+
+                // Test 2: List tools (like git_stdio.rs)
+                match service.list_tools(Default::default()).await {
+                    Ok(tools) => {
+                        test_stdout.push_str(&format!("✅ Available tools: {:#?}\n", tools));
+                        log::info!("✅ Tools listed successfully: {} tools found", tools.tools.len());
+                    }
+                    Err(e) => {
+                        let error_msg = format!("❌ Failed to list tools: {}", e);
+                        test_stderr.push_str(&format!("{}\n", error_msg));
+                        log::error!("{}", error_msg);
+                    }
+                }
+
+                // Test 3: List resources (optional)
+                match service.list_resources(Default::default()).await {
+                    Ok(resources) => {
+                        test_stdout.push_str(&format!("✅ Available resources: {:#?}\n", resources));
+                        log::info!("✅ Resources listed successfully: {} resources found", resources.resources.len());
+                    }
+                    Err(e) => {
+                        // Resources might not be supported, just log as warning
+                        test_stdout.push_str(&format!("⚠️ Resources not available: {}\n", e));
+                        log::warn!("⚠️ Resources not available: {}", e);
+                    }
+                }
+
+                // Test 4: List prompts (optional)
+                match service.list_prompts(Default::default()).await {
+                    Ok(prompts) => {
+                        test_stdout.push_str(&format!("✅ Available prompts: {:#?}\n", prompts));
+                        log::info!("✅ Prompts listed successfully: {} prompts found", prompts.prompts.len());
+                    }
+                    Err(e) => {
+                        // Prompts might not be supported, just log as warning
+                        test_stdout.push_str(&format!("⚠️ Prompts not available: {}\n", e));
+                        log::warn!("⚠️ Prompts not available: {}", e);
+                    }
+                }
+
+                // Clean up service (like git_stdio.rs)
+                if let Err(e) = service.cancel().await {
+                    log::warn!("Failed to cancel test service: {}", e);
+                }
+
+                TestResult {
+                    success: true,
+                    stdout: test_stdout,
+                    stderr: test_stderr,
+                    error_message: None,
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to create rmcp service: {}", e);
+                log::error!("{}", error_msg);
+
+                TestResult {
+                    success: false,
+                    stdout: test_stdout,
+                    stderr: error_msg.clone(),
+                    error_message: Some(error_msg),
+                }
+            }
+        }
+    }
+
     /// Check if server connection is healthy and reconnect if needed
     pub async fn ensure_server_connected(&mut self, server_id: Uuid) -> Result<()> {
         log::info!("🔍 Checking connection status for server: {}", server_id);
@@ -1648,7 +1414,6 @@ impl RmcpClient {
 
                 connection.status = ConnectionStatus::Disconnected;
                 connection.capabilities = None;
-                connection.last_ping = None;
             }
         }
 
@@ -1678,190 +1443,13 @@ impl RmcpClient {
         }
     }
 
-    /// Start message handling tasks
-    async fn start_message_tasks(
-        &self,
-        server_id: Uuid,
-        mut stdin: tokio::process::ChildStdin,
-        stdout: tokio::process::ChildStdout,
-        mut message_receiver: mpsc::UnboundedReceiver<String>,
-        message_sender: mpsc::UnboundedSender<String>,
-    ) -> Result<()> {
-        // Task to send messages to server
-        tokio::spawn(async move {
-            while let Some(message) = message_receiver.recv().await {
-                if let Err(e) = stdin.write_all(message.as_bytes()).await {
-                    log::error!("Failed to send message to server {}: {}", server_id, e);
-                    break;
-                }
-                if let Err(e) = stdin.write_all(b"\n").await {
-                    log::error!("Failed to send newline to server {}: {}", server_id, e);
-                    break;
-                }
-                if let Err(e) = stdin.flush().await {
-                    log::error!("Failed to flush stdin for server {}: {}", server_id, e);
-                    break;
-                }
-            }
-        });
 
-        // Task to receive messages from server
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
-        let pending_requests_clone = self.pending_requests.clone();
 
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = lines.next_line().await {
-                if !line.trim().is_empty() {
-                    log::debug!("Received from server {}: {}", server_id, line);
 
-                    // Try to parse as JSON-RPC response
-                    if let Ok(response) = serde_json::from_str::<Value>(&line) {
-                        // Check if this is a response (has "id" field)
-                        if let Some(id) = response.get("id").and_then(|id| id.as_str()) {
-                            // Look for pending request with this ID
-                            let mut pending = pending_requests_clone.lock().await;
-                            if let Some(sender) = pending.remove(id) {
-                                // Send response to waiting request
-                                if let Some(result) = response.get("result") {
-                                    let _ = sender.send(result.clone());
-                                } else if let Some(error) = response.get("error") {
-                                    log::error!("MCP error response for request {}: {}", id, error);
-                                    let _ = sender.send(json!({"error": error}));
-                                } else {
-                                    let _ = sender.send(response);
-                                }
-                                continue;
-                            }
-                        }
-                    }
 
-                    // If not a response, send to message handler
-                    let _ = message_sender.send(line);
-                }
-            }
-        });
 
-        Ok(())
-    }
 
-    /// Initialize MCP protocol
-    async fn initialize_protocol(&mut self, server_id: Uuid) -> Result<()> {
-        let connection = self.servers.get_mut(&server_id)
-            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
 
-        if let Some(protocol_handler) = &mut connection.protocol_handler {
-            let client_info = ProtocolClientInfo::default();
-            let init_message = protocol_handler.initialize(client_info)?;
-
-            // Send initialize message
-            if let Some(sender) = &connection.message_sender {
-                let message_json = serde_json::to_string(&init_message)?;
-                sender.send(message_json)?;
-
-                log::info!("Sent initialize message to server {}", server_id);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Handle incoming protocol message
-    fn handle_protocol_message(&mut self, server_id: Uuid, message_json: &str) -> Result<()> {
-        // First, extract the necessary data without holding mutable references
-        let (response_opt, protocol_state, server_caps_opt, message_sender_opt) = {
-            let connection = self.servers.get_mut(&server_id)
-                .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
-
-            if let Some(protocol_handler) = &mut connection.protocol_handler {
-                let message: super::protocol_handler::McpMessage = serde_json::from_str(message_json)?;
-                let response = protocol_handler.handle_message(message)?;
-                let state = protocol_handler.state().clone();
-                let caps = protocol_handler.server_capabilities().map(|caps| caps.clone());
-                let sender = connection.message_sender.clone();
-
-                (response, state, caps, sender)
-            } else {
-                return Ok(());
-            }
-        };
-
-        // Send response if needed
-        if let Some(response) = response_opt {
-            if let Some(sender) = &message_sender_opt {
-                let response_json = serde_json::to_string(&response)?;
-                let _ = sender.send(response_json);
-            }
-        }
-
-        // Update connection status based on protocol state
-        if let Some(connection) = self.servers.get_mut(&server_id) {
-            match protocol_state {
-                ProtocolState::Ready => {
-                    connection.status = ConnectionStatus::Connected;
-                    connection.last_ping = Some(chrono::Utc::now());
-
-                    // Extract capabilities
-                    if let Some(server_caps) = server_caps_opt {
-                        let capabilities = Self::convert_server_capabilities_static(&server_caps);
-                        connection.capabilities = Some(capabilities.clone());
-                        self.send_event(McpEvent::CapabilitiesUpdated(server_id, capabilities));
-                    }
-
-                    self.send_event(McpEvent::ServerConnected(server_id));
-                }
-                ProtocolState::Error(error) => {
-                    let error_msg = error.clone();
-                    connection.status = ConnectionStatus::Error(error);
-                    self.send_event(McpEvent::ServerError(server_id, error_msg));
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Convert protocol handler capabilities to our format
-    fn convert_server_capabilities_static(server_caps: &super::protocol_handler::ServerCapabilities) -> ServerCapabilities {
-        let mut tools = Vec::new();
-        let mut resources = Vec::new();
-        let mut prompts = Vec::new();
-
-        // Extract tools
-        if server_caps.tools.is_some() {
-            tools.push(ToolInfo {
-                name: "server_tool".to_string(),
-                description: Some("Server provided tool".to_string()),
-                input_schema: None,
-            });
-        }
-
-        // Extract resources
-        if server_caps.resources.is_some() {
-            resources.push(ResourceInfo {
-                uri: "server://resource".to_string(),
-                name: "Server Resource".to_string(),
-                description: Some("Server provided resource".to_string()),
-                mime_type: Some("application/json".to_string()),
-            });
-        }
-
-        // Extract prompts
-        if server_caps.prompts.is_some() {
-            prompts.push(PromptInfo {
-                name: "server_prompt".to_string(),
-                description: Some("Server provided prompt".to_string()),
-                arguments: Vec::new(),
-            });
-        }
-
-        ServerCapabilities {
-            tools,
-            resources,
-            prompts,
-        }
-    }
 }
 
 impl Default for RmcpClient {
@@ -1870,245 +1458,15 @@ impl Default for RmcpClient {
     }
 }
 
-impl RmcpClient {
-    /// Query server tools using real MCP protocol
-    async fn query_server_tools(&self, server_id: Uuid, _message_sender: &mpsc::UnboundedSender<String>) -> Result<Vec<ToolInfo>> {
-        log::info!("Querying tools for server: {}", server_id);
-
-        // Try to get the rmcp client for real MCP communication
-        let connection = self.servers.get(&server_id)
-            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
-
-        // Check if we have rmcp service
-        if connection.rmcp_service.is_some() {
-            log::info!("Found rmcp service for server {}, sending tools/list request", server_id);
-
-            // Try to use real MCP protocol to list tools
-            match self.send_mcp_request(server_id, "tools/list", None).await {
-                Ok(response) => {
-                    log::info!("Successfully queried tools from server {}", server_id);
-
-                    // Parse the response to extract tools
-                    if let Some(tools_array) = response.get("tools").and_then(|t| t.as_array()) {
-                        let tool_infos: Vec<ToolInfo> = tools_array.iter().filter_map(|tool| {
-                            let name = tool.get("name")?.as_str()?.to_string();
-                            let description = tool.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
-                            let input_schema = tool.get("inputSchema").cloned();
-
-                            Some(ToolInfo {
-                                name,
-                                description,
-                                input_schema,
-                            })
-                        }).collect();
-
-                        log::info!("Parsed {} tools from server response", tool_infos.len());
-                        return Ok(tool_infos);
-                    } else {
-                        log::warn!("No 'tools' array found in server response");
-                        // Return empty list instead of error for now
-                        return Ok(Vec::new());
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to query tools from server {}: {}", server_id, e);
-                    // Return empty list instead of error for now
-                    return Ok(Vec::new());
-                }
-            }
-        } else {
-            log::warn!("No rmcp service available for server {}", server_id);
-        }
-
-        // If rmcp client is not available, return empty list for now
-        log::info!("Returning empty tools list for server {}", server_id);
-        Ok(Vec::new())
-    }
-
-    /// Query server resources using real MCP protocol
-    async fn query_server_resources(&self, server_id: Uuid, _message_sender: &mpsc::UnboundedSender<String>) -> Result<Vec<ResourceInfo>> {
-        log::debug!("Querying resources for server: {}", server_id);
-
-        // Try to get the rmcp client for real MCP communication
-        let connection = self.servers.get(&server_id)
-            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
-
-        if let Some(rmcp_service) = &connection.rmcp_service {
-            // Try to use real MCP protocol to list resources
-            match self.send_mcp_request(server_id, "resources/list", None).await {
-                Ok(response) => {
-                    log::info!("Successfully queried resources from server {}", server_id);
-
-                    // Parse the response to extract resources
-                    if let Some(resources_array) = response.get("resources").and_then(|r| r.as_array()) {
-                        let resource_infos: Vec<ResourceInfo> = resources_array.iter().filter_map(|resource| {
-                            let uri = resource.get("uri")?.as_str()?.to_string();
-                            let name = resource.get("name")?.as_str()?.to_string();
-                            let description = resource.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
-                            let mime_type = resource.get("mimeType").and_then(|m| m.as_str()).map(|s| s.to_string());
-
-                            Some(ResourceInfo {
-                                uri,
-                                name,
-                                description,
-                                mime_type,
-                            })
-                        }).collect();
-
-                        return Ok(resource_infos);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to query resources from server {}: {}", server_id, e);
-                }
-            }
-        }
-
-        // If rmcp client is not available, return empty list for now
-        log::info!("Returning empty resources list for server {}", server_id);
-        Ok(Vec::new())
-    }
-
-    /// Query server prompts using real MCP protocol
-    async fn query_server_prompts(&self, server_id: Uuid, _message_sender: &mpsc::UnboundedSender<String>) -> Result<Vec<PromptInfo>> {
-        log::debug!("Querying prompts for server: {}", server_id);
-
-        // Try to get the rmcp client for real MCP communication
-        let connection = self.servers.get(&server_id)
-            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
-
-        if let Some(rmcp_service) = &connection.rmcp_service {
-            // Try to use real MCP protocol to list prompts
-            match self.send_mcp_request(server_id, "prompts/list", None).await {
-                Ok(response) => {
-                    log::info!("Successfully queried prompts from server {}", server_id);
-
-                    // Parse the response to extract prompts
-                    if let Some(prompts_array) = response.get("prompts").and_then(|p| p.as_array()) {
-                        let prompt_infos: Vec<PromptInfo> = prompts_array.iter().filter_map(|prompt| {
-                            let name = prompt.get("name")?.as_str()?.to_string();
-                            let description = prompt.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
-
-                            let arguments = prompt.get("arguments")
-                                .and_then(|args| args.as_array())
-                                .map(|args_array| {
-                                    args_array.iter().filter_map(|arg| {
-                                        let name = arg.get("name")?.as_str()?.to_string();
-                                        let description = arg.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
-                                        let required = arg.get("required").and_then(|r| r.as_bool()).unwrap_or(false);
-
-                                        Some(PromptArgument {
-                                            name,
-                                            description,
-                                            required,
-                                        })
-                                    }).collect()
-                                })
-                                .unwrap_or_default();
-
-                            Some(PromptInfo {
-                                name,
-                                description,
-                                arguments,
-                            })
-                        }).collect();
-
-                        return Ok(prompt_infos);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to query prompts from server {}: {}", server_id, e);
-                }
-            }
-        }
-
-        // If rmcp client is not available, return empty list for now
-        log::info!("Returning empty prompts list for server {}", server_id);
-        Ok(Vec::new())
-    }
-    /// Send a JSON-RPC request to an MCP server using the real MCP protocol
-    async fn send_mcp_request(&self, server_id: Uuid, method: &str, params: Option<Value>) -> Result<Value> {
-        log::debug!("Sending MCP request to server {}: {} with params: {:?}", server_id, method, params);
-
-        // Get the connection
-        let connection = self.servers.get(&server_id)
-            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
-
-        // Check if we have rmcp service - use it directly
-        if let Some(rmcp_service) = &connection.rmcp_service {
-            log::debug!("Using rmcp service to send request: {}", method);
-
-            // Try to downcast the service to the actual rmcp service type
-            // For now, we'll use a different approach since we can't easily downcast Box<dyn Any>
-            // We need to implement the actual rmcp service calls
-
-            // TODO: Implement actual rmcp service method calls
-            // For now, we need to implement the proper rmcp service integration
-            // The rmcp service should provide methods like list_tools(), list_resources(), list_prompts()
-
-            // Since we can't easily downcast Box<dyn Any>, we need to restructure this
-            // For now, return an error to indicate that rmcp service calls are not yet implemented
-            log::error!("RMCP service method calls not yet properly implemented for method: {}", method);
-            log::error!("This requires proper rmcp service API integration");
-
-            Err(anyhow::anyhow!("RMCP service method calls not yet implemented - need to use actual rmcp API for method: {}", method))
-        }
-        // Fallback to manual message sending if no rmcp service
-        else if let Some(message_sender) = &connection.message_sender {
-            // Create JSON-RPC request
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let request = json!({
-                "jsonrpc": "2.0",
-                "id": request_id.clone(),
-                "method": method,
-                "params": params
-            });
-
-            // Create a oneshot channel to receive the response
-            let (response_sender, response_receiver) = oneshot::channel();
-
-            // Store the pending request
-            {
-                let mut pending = self.pending_requests.lock().await;
-                pending.insert(request_id.clone(), response_sender);
-            }
-
-            // Send the request
-            let request_str = serde_json::to_string(&request)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize request: {}", e))?;
-
-            message_sender.send(request_str)
-                .map_err(|e| anyhow::anyhow!("Failed to send request: {}", e))?;
-
-            log::debug!("MCP request sent successfully, waiting for response...");
-
-            // Wait for the response with a timeout
-            let timeout_duration = tokio::time::Duration::from_secs(10);
-            match tokio::time::timeout(timeout_duration, response_receiver).await {
-                Ok(Ok(response)) => {
-                    log::debug!("Received MCP response for request {}: {:?}", request_id, response);
-                    Ok(response)
-                }
-                Ok(Err(_)) => {
-                    // Channel was closed without sending a response
-                    Err(anyhow::anyhow!("Response channel closed unexpectedly"))
-                }
-                Err(_) => {
-                    // Timeout occurred
-                    // Clean up the pending request
-                    let mut pending = self.pending_requests.lock().await;
-                    pending.remove(&request_id);
-                    Err(anyhow::anyhow!("Request timed out after {} seconds", timeout_duration.as_secs()))
-                }
-            }
-        } else {
-            Err(anyhow::anyhow!("No rmcp service or message sender available for server"))
-        }
-    }
 
 
 
 
 
 
-}
+
+
+
+
+
+

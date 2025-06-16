@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use anyhow::Result;
 use tokio::sync::mpsc;
 
-use super::rmcp_client::{RmcpClient, ConnectionStatus, ServerCapabilities, McpEvent};
+use super::rmcp_client::{RmcpClient, ConnectionStatus, ServerCapabilities, McpEvent, ServerHealthStatus, TestResult};
 
 /// MCP Server Manager for managing server configurations and connections
 #[derive(Debug)]
@@ -66,8 +66,11 @@ pub struct McpServerInfo {
     pub name: String,
     pub description: Option<String>,
     pub status: ConnectionStatus,
+    pub health_status: ServerHealthStatus,
     pub capabilities: Option<ServerCapabilities>,
     pub last_ping: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_test_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub test_results: Vec<TestResult>,
 }
 
 /// Server directory information
@@ -297,9 +300,8 @@ impl McpServerManager {
             .or_insert_with(Vec::new)
             .push(updated_config.clone());
 
-        // Update in client
-        self.client.remove_server_config(server_id)?;
-        self.client.add_server_config(updated_config);
+        // Update in client (this will reset health status to Red)
+        self.client.update_server_config(updated_config)?;
 
         // Save configuration
         self.save_configuration().await?;
@@ -366,6 +368,11 @@ impl McpServerManager {
         self.client.call_tool(server_id, tool_name, arguments).await
     }
 
+    /// Call a tool on a specific server for testing purposes (bypasses health status check)
+    pub async fn call_tool_for_testing(&mut self, server_id: Uuid, tool_name: &str, arguments: serde_json::Value) -> Result<serde_json::Value> {
+        self.client.call_tool_for_testing(server_id, tool_name, arguments).await
+    }
+
     /// Read a resource from a specific server
     pub async fn read_resource(&mut self, server_id: Uuid, uri: &str) -> Result<serde_json::Value> {
         self.client.read_resource(server_id, uri).await
@@ -374,6 +381,26 @@ impl McpServerManager {
     /// Get a prompt from a specific server
     pub async fn get_prompt(&mut self, server_id: Uuid, prompt_name: &str, arguments: Option<serde_json::Value>) -> Result<serde_json::Value> {
         self.client.get_prompt(server_id, prompt_name, arguments).await
+    }
+
+    /// Test server functionality and update health status
+    pub async fn test_server_functionality(&mut self, server_id: Uuid) -> Result<TestResult> {
+        self.client.test_server_functionality(server_id).await
+    }
+
+    /// Check if server is ready for operations (Green health status)
+    pub fn is_server_ready(&self, server_id: Uuid) -> Result<bool> {
+        self.client.is_server_ready(server_id)
+    }
+
+    /// Get server health status
+    pub fn get_server_health_status(&self, server_id: Uuid) -> Option<ServerHealthStatus> {
+        self.client.get_server_health_status(server_id)
+    }
+
+    /// Get server test results
+    pub fn get_server_test_results(&self, server_id: Uuid) -> Option<Vec<TestResult>> {
+        self.client.get_server_test_results(server_id)
     }
 
     /// Ensure server is connected and ready for operations
