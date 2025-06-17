@@ -6,7 +6,7 @@ use aiAssist;
 pub fn render_right_sidebar(ui: &mut egui::Ui, app: &mut SeeUApp) {
     // Header
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("🤖 AI助手").strong());
+        ui.label(egui::RichText::new("👁️ AI助手").strong());
     });
 
     ui.separator();

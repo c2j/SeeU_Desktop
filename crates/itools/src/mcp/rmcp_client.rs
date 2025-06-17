@@ -3,6 +3,7 @@ use uuid::Uuid;
 use serde_json::Value;
 use anyhow::Result;
 use tokio::sync::mpsc;
+use serde::{Serialize, Deserialize};
 
 // Real rmcp integration for MCP protocol
 use rmcp::{
@@ -226,8 +227,8 @@ pub struct RmcpClient {
     /// Server configurations
     server_configs: HashMap<Uuid, McpServerConfig>,
 
-    /// Event sender for UI updates
-    event_sender: Option<mpsc::UnboundedSender<McpEvent>>,
+    /// Event senders for UI updates (支持多个接收器)
+    event_senders: Vec<mpsc::UnboundedSender<McpEvent>>,
 }
 
 /// Connection to an MCP server using rmcp
@@ -253,7 +254,7 @@ pub enum ConnectionStatus {
 }
 
 /// Server health status (traffic light system)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerHealthStatus {
     /// Red light: Server configuration added/modified but not tested
     Red,
@@ -330,13 +331,20 @@ impl RmcpClient {
         Self {
             servers: HashMap::new(),
             server_configs: HashMap::new(),
-            event_sender: None,
+            event_senders: Vec::new(),
         }
     }
 
     /// Set event sender for UI updates
     pub fn set_event_sender(&mut self, sender: mpsc::UnboundedSender<McpEvent>) {
-        self.event_sender = Some(sender);
+        // 清除现有的发送器并添加新的
+        self.event_senders.clear();
+        self.event_senders.push(sender);
+    }
+
+    /// Add event sender for UI updates (支持多个接收器)
+    pub fn add_event_sender(&mut self, sender: mpsc::UnboundedSender<McpEvent>) {
+        self.event_senders.push(sender);
     }
 
     /// Add a server configuration
@@ -344,21 +352,25 @@ impl RmcpClient {
         let server_id = config.id;
         self.server_configs.insert(server_id, config.clone());
 
+        // 恢复之前保存的状态，如果有的话
+        let health_status = config.last_health_status.clone().unwrap_or(ServerHealthStatus::Red);
+        let last_test_time = config.last_test_time;
+
         let connection = ServerConnection {
             server_id,
             config,
             status: ConnectionStatus::Disconnected,
-            health_status: ServerHealthStatus::Red, // New servers start with red status
+            health_status: health_status.clone(),
             capabilities: None,
-            last_test_time: None,
+            last_test_time,
             test_results: Vec::new(),
             rmcp_service: None,
         };
 
         self.servers.insert(server_id, connection);
 
-        // Notify UI of the new server's health status
-        self.send_event(McpEvent::HealthStatusChanged(server_id, ServerHealthStatus::Red));
+        // Notify UI of the server's health status
+        self.send_event(McpEvent::HealthStatusChanged(server_id, health_status));
 
         server_id
     }
@@ -919,6 +931,11 @@ impl RmcpClient {
         self.servers.get(&server_id).map(|conn| conn.health_status.clone())
     }
 
+    /// Get server capabilities
+    pub fn get_server_capabilities(&self, server_id: Uuid) -> Option<ServerCapabilities> {
+        self.servers.get(&server_id).and_then(|conn| conn.capabilities.clone())
+    }
+
     /// Get server test results
     pub fn get_server_test_results(&self, server_id: Uuid) -> Option<Vec<TestResult>> {
         self.servers.get(&server_id).map(|conn| conn.test_results.clone())
@@ -934,6 +951,11 @@ impl RmcpClient {
         } else {
             Err(anyhow::anyhow!("Server not connected with rmcp service"))
         }
+    }
+
+    /// Get all server configurations (with updated status)
+    pub fn get_all_server_configs(&self) -> Vec<McpServerConfig> {
+        self.server_configs.values().cloned().collect()
     }
 
     /// List resources for a specific server
@@ -1235,7 +1257,8 @@ impl RmcpClient {
 
         // Update server health status and test results
         if let Some(connection) = self.servers.get_mut(&server_id) {
-            connection.last_test_time = Some(chrono::Utc::now());
+            let test_time = chrono::Utc::now();
+            connection.last_test_time = Some(test_time);
             connection.test_results.push(test_result.clone());
 
             // Update health status based on test result
@@ -1247,7 +1270,14 @@ impl RmcpClient {
 
             if connection.health_status != new_health_status {
                 connection.health_status = new_health_status.clone();
-                self.send_event(McpEvent::HealthStatusChanged(server_id, new_health_status));
+                self.send_event(McpEvent::HealthStatusChanged(server_id, new_health_status.clone()));
+            }
+
+            // 更新配置中的状态信息以便持久化
+            if let Some(config) = self.server_configs.get_mut(&server_id) {
+                config.last_health_status = Some(new_health_status);
+                config.last_test_time = Some(test_time);
+                config.last_test_success = Some(test_result.success);
             }
         }
 
@@ -1296,7 +1326,11 @@ impl RmcpClient {
                 test_stdout.push_str(&format!("✅ Server info: {:#?}\n", server_info));
                 log::info!("✅ Server info retrieved: {:#?}", server_info);
 
-                // Test 2: List tools (like git_stdio.rs)
+                // Track if critical tests pass
+                let mut critical_tests_passed = true;
+                let mut critical_error_msg = None;
+
+                // Test 2: List tools (CRITICAL - must succeed for green light)
                 match service.list_tools(Default::default()).await {
                     Ok(tools) => {
                         test_stdout.push_str(&format!("✅ Available tools: {:#?}\n", tools));
@@ -1306,6 +1340,8 @@ impl RmcpClient {
                         let error_msg = format!("❌ Failed to list tools: {}", e);
                         test_stderr.push_str(&format!("{}\n", error_msg));
                         log::error!("{}", error_msg);
+                        critical_tests_passed = false;
+                        critical_error_msg = Some(error_msg);
                     }
                 }
 
@@ -1340,11 +1376,23 @@ impl RmcpClient {
                     log::warn!("Failed to cancel test service: {}", e);
                 }
 
-                TestResult {
-                    success: true,
-                    stdout: test_stdout,
-                    stderr: test_stderr,
-                    error_message: None,
+                // Determine final test result based on critical tests
+                if critical_tests_passed {
+                    log::info!("🟢 All critical tests passed - server ready for green light");
+                    TestResult {
+                        success: true,
+                        stdout: test_stdout,
+                        stderr: test_stderr,
+                        error_message: None,
+                    }
+                } else {
+                    log::warn!("🟡 Critical tests failed - server stays yellow");
+                    TestResult {
+                        success: false,
+                        stdout: test_stdout,
+                        stderr: test_stderr,
+                        error_message: critical_error_msg,
+                    }
                 }
             }
             Err(e) => {
@@ -1436,10 +1484,10 @@ impl RmcpClient {
         Err(anyhow::anyhow!("Capability refresh not yet implemented - awaiting rmcp integration"))
     }
 
-    /// Send event to UI
+    /// Send event to all registered receivers
     fn send_event(&self, event: McpEvent) {
-        if let Some(sender) = &self.event_sender {
-            let _ = sender.send(event);
+        for sender in &self.event_senders {
+            let _ = sender.send(event.clone());
         }
     }
 

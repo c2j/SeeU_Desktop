@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use futures::stream::StreamExt;
 use reqwest::{Client, header};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 use bytes::Bytes;
 use crate::state::{AISettings, MessageRole};
@@ -32,6 +33,10 @@ pub struct ApiService {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// 聊天请求 (OpenAI compatible)
@@ -42,6 +47,10 @@ pub struct ChatRequest {
     pub stream: bool,
     pub temperature: f32,
     pub max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
 }
 
 /// Models list request response (OpenAI compatible)
@@ -59,15 +68,17 @@ pub struct Model {
 }
 
 /// 聊天响应消息
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChatResponseMessage {
     pub role: Option<String>,  // 可选，某些服务可能不返回
-    pub content: String,  // 必需，这是最重要的字段
+    pub content: Option<String>,  // 可选，当有tool_calls时可能为空
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 /// 聊天响应 (OpenAI compatible)
 /// 为了增强兼容性，只有choices字段是必需的，其他字段都是可选的
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChatResponse {
     pub id: Option<String>,
     pub object: Option<String>,
@@ -77,14 +88,14 @@ pub struct ChatResponse {
     pub usage: Option<Usage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Choice {
     pub index: Option<u32>,  // 可选，某些服务可能不返回
     pub message: ChatResponseMessage,  // 必需
     pub finish_reason: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -113,6 +124,40 @@ pub struct StreamChoice {
 pub struct Delta {
     pub role: Option<String>,
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+/// Tool definition for Function Calling (OpenAI compatible)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tool {
+    #[serde(rename = "type")]
+    pub tool_type: String,  // "function"
+    pub function: FunctionDefinition,
+}
+
+/// Function definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionDefinition {
+    pub name: String,
+    pub description: Option<String>,
+    pub parameters: Option<Value>,  // JSON Schema
+}
+
+/// Tool call from LLM response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,  // "function"
+    pub function: FunctionCall,
+}
+
+/// Function call details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,  // JSON string
 }
 
 impl ApiService {
@@ -151,8 +196,8 @@ impl ApiService {
         Ok(models)
     }
 
-    /// 发送聊天请求 (OpenAI compatible)
-    pub async fn send_chat(&self, settings: &AISettings, messages: Vec<(MessageRole, String)>) -> Result<String> {
+    /// 发送聊天请求并返回完整响应 (包括tool_calls)
+    pub async fn send_chat_with_tools_full_response(&self, settings: &AISettings, messages: Vec<(MessageRole, String)>, tools: Option<Vec<Tool>>) -> Result<ChatResponse> {
         // 转换消息格式
         let chat_messages = messages.iter().map(|(role, content)| {
             ChatMessage {
@@ -160,9 +205,11 @@ impl ApiService {
                     MessageRole::User => "user".to_string(),
                     MessageRole::Assistant => "assistant".to_string(),
                     MessageRole::System => "system".to_string(),
-                    MessageRole::SlashCommand => "user".to_string(), // Slash指令作为用户消息处理（虽然实际上不应该到达这里）
+                    MessageRole::SlashCommand => "user".to_string(),
                 },
                 content: content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
             }
         }).collect::<Vec<_>>();
 
@@ -176,6 +223,86 @@ impl ApiService {
             stream: false,
             temperature: settings.temperature,
             max_tokens: settings.max_tokens,
+            tools,
+            tool_choice: None,
+        };
+
+        let mut request_builder = self.client.post(&url)
+            .header(header::CONTENT_TYPE, "application/json");
+
+        // 添加Authorization头
+        if !settings.api_key.is_empty() {
+            request_builder = request_builder.header("Authorization", format!("Bearer {}", settings.api_key));
+        }
+
+        let response = request_builder.json(&request).send().await?;
+
+        // 检查响应状态
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow!(ApiError::ApiResponseError(error_text)));
+        }
+
+        // 解析响应
+        let chat_response: ChatResponse = response.json().await?;
+
+        // 检查并警告缺失的字段
+        if chat_response.id.is_none() {
+            log::warn!("Response missing 'id' field");
+        }
+        if chat_response.object.is_none() {
+            log::warn!("Response missing 'object' field");
+        }
+        if chat_response.created.is_none() {
+            log::warn!("Response missing 'created' field");
+        }
+        if chat_response.model.is_none() {
+            log::warn!("Response missing 'model' field");
+        } else {
+            log::info!("Response from model: {}", chat_response.model.as_ref().unwrap());
+        }
+
+        if chat_response.choices.is_empty() {
+            return Err(anyhow!(ApiError::ApiResponseError("No choices in response".to_string())));
+        }
+
+        Ok(chat_response)
+    }
+
+    /// 发送聊天请求 (OpenAI compatible)
+    pub async fn send_chat(&self, settings: &AISettings, messages: Vec<(MessageRole, String)>) -> Result<String> {
+        self.send_chat_with_tools(settings, messages, None).await
+    }
+
+    /// 发送聊天请求，支持工具调用 (OpenAI compatible)
+    pub async fn send_chat_with_tools(&self, settings: &AISettings, messages: Vec<(MessageRole, String)>, tools: Option<Vec<Tool>>) -> Result<String> {
+        // 转换消息格式
+        let chat_messages = messages.iter().map(|(role, content)| {
+            ChatMessage {
+                role: match role {
+                    MessageRole::User => "user".to_string(),
+                    MessageRole::Assistant => "assistant".to_string(),
+                    MessageRole::System => "system".to_string(),
+                    MessageRole::SlashCommand => "user".to_string(), // Slash指令作为用户消息处理（虽然实际上不应该到达这里）
+                },
+                content: content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+            }
+        }).collect::<Vec<_>>();
+
+        let url = settings.get_chat_url();
+        log::info!("Sending request to: {}", url);
+
+        // 创建请求
+        let request = ChatRequest {
+            model: settings.model.clone(),
+            messages: chat_messages,
+            stream: false,
+            temperature: settings.temperature,
+            max_tokens: settings.max_tokens,
+            tools,
+            tool_choice: None,
         };
 
         let mut request_builder = self.client.post(&url)
@@ -224,7 +351,7 @@ impl ApiService {
                 log::warn!("Message missing 'role' field");
             }
 
-            Ok(choice.message.content.clone())
+            Ok(choice.message.content.clone().unwrap_or_default())
         } else {
             Err(anyhow!(ApiError::ApiResponseError("No choices in response".to_string())))
         }
@@ -247,6 +374,8 @@ impl ApiService {
                     MessageRole::SlashCommand => "user".to_string(), // Slash指令作为用户消息处理（虽然实际上不应该到达这里）
                 },
                 content: content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
             }
         }).collect::<Vec<_>>();
 
@@ -260,6 +389,8 @@ impl ApiService {
             stream: true,
             temperature: settings.temperature,
             max_tokens: settings.max_tokens,
+            tools: None,
+            tool_choice: None,
         };
 
         let mut request_builder = self.client.post(&url)

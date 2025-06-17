@@ -173,7 +173,21 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                     if is_user {
                                         // 用户消息右对齐
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                                            ui.label(egui::RichText::new("用户: ").strong().color(text_color));
+                                            ui.horizontal(|ui| {
+                                                // 时间戳
+                                                ui.label(egui::RichText::new(message.format_timestamp())
+                                                    .size(10.0)
+                                                    .color(egui::Color32::GRAY));
+
+                                                // 用户头像 - 尝试加载图片，失败则显示emoji
+                                                if ui.ctx().try_load_texture("file://assets/icons/u.png", Default::default(), egui::SizeHint::default()).is_ok() {
+                                                    ui.add(egui::Image::from_uri("file://assets/icons/u.png").max_size(egui::Vec2::splat(16.0)));
+                                                } else {
+                                                    ui.label("👤");
+                                                }
+
+                                                ui.label(egui::RichText::new("用户: ").strong().color(text_color));
+                                            });
                                         });
 
                                         // 用户消息内容
@@ -214,7 +228,21 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                                         // AI消息左对齐
                                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                                            ui.label(egui::RichText::new("SeeU AI: ").strong().color(text_color));
+                                            ui.horizontal(|ui| {
+                                                // AI头像 - 尝试加载图片，失败则显示emoji
+                                                if ui.ctx().try_load_texture("file://assets/icons/c-see.png", Default::default(), egui::SizeHint::default()).is_ok() {
+                                                    ui.add(egui::Image::from_uri("file://assets/icons/c-see.png").max_size(egui::Vec2::splat(16.0)));
+                                                } else {
+                                                    ui.label("👁️");
+                                                }
+
+                                                ui.label(egui::RichText::new("SeeU AI: ").strong().color(text_color));
+
+                                                // 时间戳
+                                                ui.label(egui::RichText::new(message.format_timestamp())
+                                                    .size(10.0)
+                                                    .color(egui::Color32::GRAY));
+                                            });
                                         });
 
                                         // AI消息内容
@@ -417,6 +445,56 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                 }
                             }
                         }
+
+                        // MCP服务器选择器
+                        ui.separator();
+                        ui.label("MCP:");
+
+                        let selected_text = if let Some(server_id) = state.selected_mcp_server {
+                            // 尝试从server_names中获取服务器名称
+                            if let Some(server_name) = state.server_names.get(&server_id) {
+                                format!("🟢 {}", server_name)
+                            } else if let Some(_capabilities) = state.mcp_server_capabilities.get(&server_id) {
+                                format!("🟢 服务器 {}", server_id.to_string().chars().take(8).collect::<String>())
+                            } else {
+                                format!("服务器 {}", server_id.to_string().chars().take(8).collect::<String>())
+                            }
+                        } else {
+                            "无".to_string()
+                        };
+
+                        egui::ComboBox::from_label("")
+                            .selected_text(selected_text)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut state.selected_mcp_server, None, "无");
+
+                                // 只显示有capabilities的服务器（表示已测试通过的绿灯服务器）
+                                for (server_id, capabilities) in &state.mcp_server_capabilities {
+                                    let tool_count = capabilities.tools.len();
+                                    let resource_count = capabilities.resources.len();
+                                    let prompt_count = capabilities.prompts.len();
+
+                                    // 获取服务器名称，如果没有则使用UUID前8位
+                                    let server_name = state.server_names.get(server_id)
+                                        .cloned()
+                                        .unwrap_or_else(|| format!("服务器 {}", server_id.to_string().chars().take(8).collect::<String>()));
+
+                                    let server_display = format!(
+                                        "🟢 {} (工具:{} 资源:{} 提示:{})",
+                                        server_name,
+                                        tool_count,
+                                        resource_count,
+                                        prompt_count
+                                    );
+
+                                    ui.selectable_value(&mut state.selected_mcp_server, Some(*server_id), server_display);
+                                }
+
+                                // 如果没有可用的MCP服务器，显示提示
+                                if state.mcp_server_capabilities.is_empty() {
+                                    ui.colored_label(egui::Color32::GRAY, "💡 请在iTools中配置并测试MCP服务器");
+                                }
+                            });
                     });
                 });
             });
@@ -441,6 +519,14 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
     if state.show_slash_commands {
         render_slash_commands(ui.ctx(), state);
     }
+
+    // 显示工具调用确认对话框
+    if state.show_tool_call_confirmation {
+        render_tool_call_confirmation(ui.ctx(), state);
+    }
+
+    // 显示MCP状态信息面板
+    render_mcp_status_panel(ui, state);
 }
 
 /// Render AI settings dialog
@@ -710,6 +796,211 @@ fn render_slash_commands(ctx: &egui::Context, state: &mut AIAssistState) {
 
     if !open {
         state.show_slash_commands = false;
+    }
+}
+
+/// 渲染工具调用确认对话框
+fn render_tool_call_confirmation(ctx: &egui::Context, state: &mut AIAssistState) {
+    let mut open = true;
+
+    let response = egui::Window::new("MCP 工具调用确认")
+        .open(&mut open)
+        .resizable(true)
+        .default_width(600.0)
+        .default_height(400.0)
+        .show(ctx, |ui| {
+            ui.heading("AI 助手请求执行以下工具:");
+            ui.separator();
+
+            if let Some(batch) = &state.current_tool_call_batch {
+                ui.label(format!("共 {} 个工具调用请求", batch.tool_calls.len()));
+                ui.add_space(10.0);
+
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (index, pending_call) in batch.tool_calls.iter().enumerate() {
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("{}. 工具:", index + 1)).strong());
+                                    ui.label(egui::RichText::new(&pending_call.tool_call.function.name).color(egui::Color32::BLUE));
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("服务器:");
+                                    ui.label(&pending_call.server_name);
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("参数:");
+                                    ui.label(&pending_call.tool_call.function.arguments);
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("类型:");
+                                    let call_type = match pending_call.mcp_info.call_type {
+                                        crate::mcp_tools::McpCallType::CallTool => "工具调用",
+                                        crate::mcp_tools::McpCallType::ReadResource => "读取资源",
+                                        crate::mcp_tools::McpCallType::GetPrompt => "获取提示",
+                                    };
+                                    ui.label(call_type);
+                                });
+                            });
+                        });
+                        ui.add_space(5.0);
+                    }
+                });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("⚠️ 警告:").color(egui::Color32::YELLOW));
+                    ui.label("执行这些工具可能会修改系统状态或访问敏感信息。请仔细检查后再确认。");
+                });
+
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button(egui::RichText::new("✅ 确认执行").color(egui::Color32::GREEN)).clicked() {
+                        state.approve_tool_calls();
+                    }
+
+                    if ui.button(egui::RichText::new("❌ 拒绝执行").color(egui::Color32::RED)).clicked() {
+                        state.reject_tool_calls();
+                    }
+
+                    ui.separator();
+                    if ui.button("取消").clicked() {
+                        state.show_tool_call_confirmation = false;
+                    }
+                });
+            } else {
+                ui.label("没有待处理的工具调用");
+            }
+        });
+
+    if !open {
+        state.show_tool_call_confirmation = false;
+    }
+}
+
+/// 渲染MCP状态面板
+fn render_mcp_status_panel(ui: &mut egui::Ui, state: &AIAssistState) {
+    if let Some(server_id) = state.selected_mcp_server {
+        if let Some(capabilities) = state.mcp_server_capabilities.get(&server_id) {
+            ui.separator();
+
+            // 获取服务器名称
+            let server_name = state.server_names.get(&server_id)
+                .cloned()
+                .unwrap_or_else(|| format!("服务器 {}", server_id.to_string().chars().take(8).collect::<String>()));
+
+            egui::CollapsingHeader::new(format!("🟢 MCP服务器状态 - {}", server_name))
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("服务器名称:");
+                        ui.colored_label(egui::Color32::BLUE, &server_name);
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("服务器ID:");
+                        ui.monospace(server_id.to_string().chars().take(8).collect::<String>());
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("状态:");
+                        ui.colored_label(egui::Color32::GREEN, "🟢 已测试通过，可用于工具调用");
+                    });
+
+                    ui.separator();
+
+                    // 工具统计
+                    ui.horizontal(|ui| {
+                        ui.label("可用工具:");
+                        ui.colored_label(egui::Color32::BLUE, format!("{} 个", capabilities.tools.len()));
+
+                        ui.separator();
+
+                        ui.label("资源:");
+                        ui.colored_label(egui::Color32::BLUE, format!("{} 个", capabilities.resources.len()));
+
+                        ui.separator();
+
+                        ui.label("提示:");
+                        ui.colored_label(egui::Color32::BLUE, format!("{} 个", capabilities.prompts.len()));
+                    });
+
+                    // 工具详情
+                    if !capabilities.tools.is_empty() {
+                        ui.separator();
+                        ui.label(egui::RichText::new("工具列表:").strong());
+
+                        egui::ScrollArea::vertical()
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                for (index, tool) in capabilities.tools.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{}.", index + 1));
+                                        ui.label(egui::RichText::new(&tool.name).color(egui::Color32::BLUE));
+                                        if let Some(desc) = &tool.description {
+                                            ui.label(format!("- {}", desc));
+                                        }
+                                    });
+                                }
+                            });
+                    }
+
+                    // 资源详情
+                    if !capabilities.resources.is_empty() {
+                        ui.separator();
+                        ui.label(egui::RichText::new("资源列表:").strong());
+
+                        egui::ScrollArea::vertical()
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                for (index, resource) in capabilities.resources.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{}.", index + 1));
+                                        ui.label(egui::RichText::new(&resource.name).color(egui::Color32::BLUE));
+                                        if let Some(desc) = &resource.description {
+                                            ui.label(format!("- {}", desc));
+                                        }
+                                    });
+                                }
+                            });
+                    }
+
+                    // 提示详情
+                    if !capabilities.prompts.is_empty() {
+                        ui.separator();
+                        ui.label(egui::RichText::new("提示列表:").strong());
+
+                        egui::ScrollArea::vertical()
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                for (index, prompt) in capabilities.prompts.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{}.", index + 1));
+                                        ui.label(egui::RichText::new(&prompt.name).color(egui::Color32::BLUE));
+                                        if let Some(desc) = &prompt.description {
+                                            ui.label(format!("- {}", desc));
+                                        }
+                                    });
+                                }
+                            });
+                    }
+
+                    ui.separator();
+                    ui.colored_label(
+                        egui::Color32::GRAY,
+                        "💡 提示: 发送消息时，AI助手可以调用上述工具来帮助您完成任务。"
+                    );
+                });
+        }
+    } else if !state.mcp_server_capabilities.is_empty() {
+        ui.separator();
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "⚠️ 有可用的MCP服务器，请在上方选择一个以启用工具调用功能。"
+        );
     }
 }
 

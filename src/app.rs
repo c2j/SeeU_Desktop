@@ -18,14 +18,18 @@ use crate::config::{StartupConfig, StartupMetrics};
 use inote::db_state::DbINoteState;
 use isearch::ISearchState;
 use aiAssist::state::AIAssistState;
+use aiAssist::mcp_integration::McpIntegrationManager;
 use itools::IToolsState;
 use iterminal::ITerminalState;
+use itools::mcp::rmcp_client::McpEvent;
 
 /// Main application state
 pub struct SeeUApp {
     // Global state
     pub active_module: Module,
     pub show_right_sidebar: bool,
+    /// 跟踪右侧边栏的上一次状态，用于检测打开事件
+    pub prev_show_right_sidebar: bool,
 
     // Search state
     pub search_query: String,
@@ -42,6 +46,9 @@ pub struct SeeUApp {
     // Services
     pub system_service: SystemService,
 
+    // MCP Integration
+    pub mcp_integration: McpIntegrationManager,
+
     // Theme
     pub theme: Theme,
 
@@ -50,6 +57,9 @@ pub struct SeeUApp {
 
     // Command channel
     slash_command_receiver: Option<std::sync::mpsc::Receiver<AppCommand>>,
+
+    // MCP event channel
+    mcp_event_receiver: Option<tokio::sync::mpsc::UnboundedReceiver<McpEvent>>,
 
     // Startup state
     pub startup_complete: bool,
@@ -239,6 +249,7 @@ impl SeeUApp {
         let mut app = Self {
             active_module: Module::Home,
             show_right_sidebar: false,
+            prev_show_right_sidebar: false,
             search_query: String::new(),
             global_search_results: GlobalSearchResults::default(),
             inote_state,
@@ -248,9 +259,11 @@ impl SeeUApp {
             iterminal_state,
             settings_state: crate::ui::settings::SettingsState::default(),
             system_service: SystemService::new(),
+            mcp_integration: McpIntegrationManager::new(),
             theme,
             app_settings: AppSettings::default(),
             slash_command_receiver: None,
+            mcp_event_receiver: None,
             startup_complete: false, // Always show startup progress to avoid blocking
             startup_progress: 0.0,
             startup_message: "正在初始化应用程序...".to_string(),
@@ -433,8 +446,14 @@ impl SeeUApp {
         // 初始化工具模块（轻量级操作）
         self.itools_state.initialize();
 
+        // 设置MCP事件通道
+        self.setup_mcp_event_channel();
+
         // 启动笔记模块的后台数据加载
         self.start_background_data_loading();
+
+        // 执行初始MCP同步
+        self.sync_mcp_servers_to_ai_assistant_force();
 
         log::info!("Module initialization completed");
     }
@@ -461,6 +480,244 @@ impl SeeUApp {
 
             log::info!("Background data loading completed");
         });
+    }
+
+    /// 设置MCP事件通道
+    fn setup_mcp_event_channel(&mut self) {
+        // 创建MCP事件通道
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.mcp_event_receiver = Some(rx);
+
+        // 将发送端添加到MCP服务器管理器（不覆盖UI的事件接收器）
+        if let Some(manager) = self.itools_state.get_mcp_server_manager_mut() {
+            manager.add_event_sender(tx);
+            log::info!("MCP事件通道已添加到主应用");
+        } else {
+            log::warn!("无法获取MCP服务器管理器来添加事件通道");
+        }
+    }
+
+    /// 同步MCP服务器信息到AI助手
+    pub fn sync_mcp_servers_to_ai_assistant(&mut self) {
+        self.sync_mcp_servers_to_ai_assistant_internal(false);
+    }
+
+    pub fn sync_mcp_servers_to_ai_assistant_force(&mut self) {
+        self.sync_mcp_servers_to_ai_assistant_internal(true);
+    }
+
+    fn sync_mcp_servers_to_ai_assistant_internal(&mut self, force_refresh: bool) {
+        // 获取可用的MCP服务器
+        let servers = self.itools_state.get_available_mcp_servers();
+
+        // 记录当前AI助手中的服务器数量，用于检测变化
+        let prev_ai_server_count = self.ai_assist_state.mcp_server_capabilities.len();
+
+        if force_refresh {
+            log::info!("🔄 强制刷新MCP服务器同步: 发现 {} 个服务器", servers.len());
+        } else {
+            log::debug!("Syncing MCP servers to AI assistant: found {} servers", servers.len());
+        }
+
+        // 添加调试信息：检查MCP服务器管理器状态
+        if let Some(manager) = self.itools_state.get_mcp_server_manager() {
+            let directories = manager.get_server_directories();
+            if force_refresh {
+                log::debug!("MCP manager has {} directories", directories.len());
+                for dir in &directories {
+                    log::debug!("Directory '{}' has {} servers", dir.name, dir.servers.len());
+                    for server in &dir.servers {
+                        if let Some(health_status) = manager.get_server_health_status(server.id) {
+                            log::debug!("  - Server '{}' ({}): {:?}", server.name, server.id, health_status);
+                        } else {
+                            log::debug!("  - Server '{}' ({}): No health status", server.name, server.id);
+                        }
+                    }
+                }
+            }
+        } else {
+            log::warn!("No MCP server manager available during sync");
+        }
+
+        // 如果是强制刷新，先清空AI助手中的MCP服务器状态
+        if force_refresh {
+            log::info!("🧹 清空AI助手中的MCP服务器状态，准备重新加载");
+            self.ai_assist_state.mcp_server_capabilities.clear();
+            self.ai_assist_state.server_names.clear();
+            self.ai_assist_state.selected_mcp_server = None;
+        }
+
+        // 更新MCP集成管理器中的服务器名称
+        for (server_id, server_name) in &servers {
+            self.mcp_integration.update_server_name(*server_id, server_name.clone());
+        }
+
+        // 只同步绿灯状态（已测试通过）的MCP服务器到AI助手
+        let mut synced_count = 0;
+        let mut total_checked = 0;
+        for (server_id, server_name) in &servers {
+            total_checked += 1;
+            // 检查服务器健康状态
+            if let Some(manager) = self.itools_state.get_mcp_server_manager() {
+                if let Some(health_status) = manager.get_server_health_status(*server_id) {
+                    log::debug!("Server '{}' ({}) has status: {:?}", server_name, server_id, health_status);
+                    // 只有绿灯状态的服务器才同步到AI助手
+                    if matches!(health_status, itools::mcp::rmcp_client::ServerHealthStatus::Green) {
+                        if let Some(capabilities) = self.itools_state.get_mcp_server_capabilities(*server_id) {
+                            // 转换MCP服务器能力为AI助手格式
+                            let ai_capabilities = self.convert_mcp_capabilities_to_ai_format(&capabilities);
+                            self.mcp_integration.update_server_capabilities(
+                                &mut self.ai_assist_state,
+                                *server_id,
+                                ai_capabilities,
+                            );
+                            synced_count += 1;
+                            log::info!("✅ Synced green-status MCP server '{}' to AI assistant (tools: {}, resources: {}, prompts: {})",
+                                server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+                        } else {
+                            log::warn!("Green server '{}' has no capabilities available", server_name);
+                        }
+                    } else {
+                        // 如果服务器状态不是绿灯，从AI助手中移除
+                        self.ai_assist_state.mcp_server_capabilities.remove(server_id);
+                        self.ai_assist_state.server_names.remove(server_id);
+                        log::debug!("Removed non-green MCP server '{}' from AI assistant (status: {:?})", server_name, health_status);
+                    }
+                } else {
+                    log::warn!("Server '{}' has no health status available", server_name);
+                }
+            } else {
+                log::warn!("No MCP server manager available for sync");
+            }
+        }
+
+        if force_refresh {
+            log::info!("🎯 MCP强制刷新完成: 检查了 {} 个服务器, 同步了 {} 个绿灯服务器, AI助手现在有 {} 个可用服务器",
+                total_checked, synced_count, self.ai_assist_state.mcp_server_capabilities.len());
+
+            // 列出所有可用的服务器
+            if !self.ai_assist_state.mcp_server_capabilities.is_empty() {
+                let server_list: Vec<String> = self.ai_assist_state.server_names.values().cloned().collect();
+                log::info!("📋 可用的MCP服务器: {}", server_list.join(", "));
+            } else {
+                log::warn!("⚠️ 没有找到可用的绿灯MCP服务器");
+            }
+        } else {
+            let current_ai_server_count = self.ai_assist_state.mcp_server_capabilities.len();
+
+            // 检测状态变化
+            if current_ai_server_count != prev_ai_server_count {
+                log::info!("🔄 MCP服务器状态发生变化: AI助手中的服务器数量从 {} 变为 {}",
+                    prev_ai_server_count, current_ai_server_count);
+
+                if current_ai_server_count > prev_ai_server_count {
+                    log::info!("✅ 新增了 {} 个可用的MCP服务器", current_ai_server_count - prev_ai_server_count);
+                } else if current_ai_server_count < prev_ai_server_count {
+                    log::info!("❌ 移除了 {} 个MCP服务器", prev_ai_server_count - current_ai_server_count);
+                }
+            }
+
+            log::debug!("MCP sync completed: checked {} servers, synced {} green servers, AI assistant now has {} servers",
+                total_checked, synced_count, current_ai_server_count);
+
+            if synced_count > 0 {
+                log::info!("Synced {} green-status MCP servers to AI assistant", synced_count);
+            }
+        }
+    }
+
+    /// 处理MCP事件
+    fn process_mcp_events(&mut self) {
+        // 收集所有待处理的事件
+        let mut events = Vec::new();
+        if let Some(receiver) = &mut self.mcp_event_receiver {
+            while let Ok(event) = receiver.try_recv() {
+                events.push(event);
+            }
+        }
+
+        // 处理收集到的事件
+        let mut needs_sync = false;
+        for event in events {
+            match event {
+                McpEvent::HealthStatusChanged(server_id, status) => {
+                    log::info!("🔄 收到MCP服务器状态变化事件: {} -> {:?}", server_id, status);
+                    needs_sync = true;
+                }
+                McpEvent::ServerConnected(server_id) => {
+                    log::info!("🔗 MCP服务器已连接: {}", server_id);
+                    needs_sync = true;
+                }
+                McpEvent::ServerDisconnected(server_id) => {
+                    log::info!("🔌 MCP服务器已断开: {}", server_id);
+                    needs_sync = true;
+                }
+                McpEvent::CapabilitiesUpdated(server_id, _capabilities) => {
+                    log::info!("🔧 MCP服务器能力已更新: {}", server_id);
+                    needs_sync = true;
+                }
+                McpEvent::TestCompleted(server_id, test_result) => {
+                    log::info!("🧪 MCP服务器测试完成: {} (成功: {})", server_id, test_result.success);
+                    needs_sync = true;
+                }
+                McpEvent::ServerError(server_id, error) => {
+                    log::warn!("❌ MCP服务器错误: {} - {}", server_id, error);
+                    needs_sync = true;
+                }
+            }
+        }
+
+        // 如果有任何事件需要同步，执行一次同步
+        if needs_sync {
+            self.sync_mcp_servers_to_ai_assistant();
+        }
+    }
+
+    /// 转换MCP服务器能力为AI助手格式
+    fn convert_mcp_capabilities_to_ai_format(
+        &self,
+        capabilities: &itools::mcp::rmcp_client::ServerCapabilities,
+    ) -> aiAssist::mcp_tools::McpServerCapabilities {
+        use aiAssist::mcp_tools::{McpServerCapabilities, McpToolInfo, McpResourceInfo, McpPromptInfo, McpPromptArgument};
+
+        let tools = capabilities.tools.iter().map(|tool| {
+            McpToolInfo {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                input_schema: tool.input_schema.clone(),
+            }
+        }).collect();
+
+        let resources = capabilities.resources.iter().map(|resource| {
+            McpResourceInfo {
+                uri: resource.uri.clone(),
+                name: resource.name.clone(),
+                description: resource.description.clone(),
+                mime_type: resource.mime_type.clone(),
+            }
+        }).collect();
+
+        let prompts = capabilities.prompts.iter().map(|prompt| {
+            let arguments = prompt.arguments.iter().map(|arg| {
+                McpPromptArgument {
+                    name: arg.name.clone(),
+                    description: arg.description.clone(),
+                    required: arg.required,
+                }
+            }).collect();
+
+            McpPromptInfo {
+                name: prompt.name.clone(),
+                description: prompt.description.clone(),
+                arguments,
+            }
+        }).collect();
+
+        McpServerCapabilities {
+            tools,
+            resources,
+            prompts,
+        }
     }
 
     /// Adjust window state for DPI scaling
@@ -1241,6 +1498,18 @@ impl eframe::App for SeeUApp {
 
         // 更新 iTools 模块
         itools::update_itools(&mut self.itools_state);
+
+        // 处理MCP事件（事件驱动的同步）
+        self.process_mcp_events();
+
+        // 检测右侧边栏打开事件，立即同步MCP服务器
+        if self.show_right_sidebar && !self.prev_show_right_sidebar {
+            log::info!("🎯 AI助手侧边栏已打开，立即强制刷新MCP服务器状态");
+            self.sync_mcp_servers_to_ai_assistant_force();
+        }
+
+        // 更新右侧边栏状态跟踪
+        self.prev_show_right_sidebar = self.show_right_sidebar;
 
         // 更新 iTerminal 模块
         iterminal::update_iterminal(&mut self.iterminal_state);

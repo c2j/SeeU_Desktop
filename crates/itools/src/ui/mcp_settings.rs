@@ -375,15 +375,15 @@ impl McpSettingsUi {
                         }
                     }
 
-                    // Functionality test button
-                    if ui.small_button("🧪").on_hover_text("测试服务器功能").clicked() {
+                    // Functionality test button (for health status)
+                    if ui.small_button("🧪").on_hover_text("测试服务器功能 (影响健康状态)").clicked() {
                         if let Some(server_id) = self.find_server_id_by_config(config) {
-                            self.test_server_tools(server_id, config);
+                            self.test_server_functionality(server_id);
                         }
                     }
 
-                    // Tool testing button (always enabled for testing purposes)
-                    if ui.small_button("🔧").on_hover_text("测试工具").clicked() {
+                    // Tool testing button (for individual tool testing)
+                    if ui.small_button("🔧").on_hover_text("测试工具 (不影响健康状态)").clicked() {
                         if let Some(server_id) = self.find_server_id_by_config(config) {
                             self.test_server_tools(server_id, config);
                         }
@@ -887,6 +887,9 @@ impl McpSettingsUi {
                 self.new_server_config.directory.clone()
             },
             metadata: HashMap::new(),
+            last_health_status: None,
+            last_test_time: None,
+            last_test_success: None,
         })
     }
 
@@ -1473,6 +1476,71 @@ impl McpSettingsUi {
 
             ui.separator();
         });
+    }
+
+    /// Test server functionality and update health status
+    fn test_server_functionality(&mut self, server_id: Uuid) {
+        // Clear previous messages and outputs for this server
+        self.ui_state.server_status_messages.remove(&server_id);
+        self.ui_state.server_error_messages.remove(&server_id);
+        self.ui_state.server_test_outputs.remove(&server_id);
+
+        // Get server name for better logging
+        let server_name = self.server_manager.get_server_directories()
+            .iter()
+            .flat_map(|dir| &dir.servers)
+            .find(|server| server.id == server_id)
+            .map(|server| server.name.clone())
+            .unwrap_or_else(|| format!("Server {}", server_id));
+
+        log::info!("Starting functionality test for MCP server: {}", server_name);
+
+        let start_time = std::time::Instant::now();
+        let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(self.server_manager.test_server_functionality(server_id))
+                .map_err(|e| e.to_string())
+        } else {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    rt.block_on(self.server_manager.test_server_functionality(server_id))
+                        .map_err(|e| e.to_string())
+                }
+                Err(e) => Err(format!("无法创建异步运行时: {}", e))
+            }
+        };
+
+        let test_duration = start_time.elapsed();
+
+        match result {
+            Ok(test_result) => {
+                // Store the detailed output for debugging
+                self.ui_state.server_test_outputs.insert(server_id, (test_result.stdout.clone(), test_result.stderr.clone()));
+
+                if test_result.success {
+                    let success_msg = format!("功能测试成功 - 服务器已变为绿灯 🟢 (耗时: {:.2}秒)", test_duration.as_secs_f64());
+                    log::info!("Server '{}' functionality test completed successfully - server should now be green", server_name);
+
+                    self.ui_state.server_status_messages.insert(server_id, success_msg);
+                } else {
+                    let failure_msg = if let Some(error_msg) = &test_result.error_message {
+                        format!("功能测试失败: {} (耗时: {:.2}秒)", error_msg, test_duration.as_secs_f64())
+                    } else {
+                        format!("功能测试失败 - 服务器保持黄灯 🟡 (耗时: {:.2}秒)", test_duration.as_secs_f64())
+                    };
+                    log::error!("Server '{}' functionality test failed - server remains yellow", server_name);
+
+                    self.ui_state.server_error_messages.insert(server_id, failure_msg);
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("功能测试错误: {} (耗时: {:.2}秒)", e, test_duration.as_secs_f64());
+                log::error!("Server '{}' functionality test encountered an error", server_name);
+
+                self.ui_state.server_error_messages.insert(server_id, error_msg);
+                // Store empty outputs for consistency
+                self.ui_state.server_test_outputs.insert(server_id, (String::new(), e));
+            }
+        }
     }
 
 
@@ -2226,6 +2294,9 @@ impl Default for McpServerConfig {
             auto_start: false,
             directory: "Custom".to_string(),
             metadata: HashMap::new(),
+            last_health_status: None,
+            last_test_time: None,
+            last_test_success: None,
         }
     }
 }

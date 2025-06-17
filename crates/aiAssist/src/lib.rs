@@ -2,6 +2,8 @@ pub mod state;
 pub mod ui;
 pub mod models;
 pub mod api;
+pub mod mcp_tools;
+pub mod mcp_integration;
 
 use eframe::egui;
 use state::AIAssistState;

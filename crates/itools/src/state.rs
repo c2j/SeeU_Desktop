@@ -240,6 +240,41 @@ impl IToolsState {
 
         self.security_context.audit_log.push(entry);
     }
+
+    /// 获取可用的MCP服务器列表
+    pub fn get_available_mcp_servers(&self) -> Vec<(Uuid, String)> {
+        if let Some(manager) = &self.mcp_server_manager {
+            manager.get_server_directories()
+                .into_iter()
+                .flat_map(|dir| {
+                    dir.servers.into_iter().map(|server| {
+                        (server.id, server.name)
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// 获取MCP服务器的能力信息
+    pub fn get_mcp_server_capabilities(&self, server_id: Uuid) -> Option<crate::mcp::rmcp_client::ServerCapabilities> {
+        if let Some(manager) = &self.mcp_server_manager {
+            manager.get_server_capabilities(server_id)
+        } else {
+            None
+        }
+    }
+
+    /// 获取MCP服务器管理器的引用
+    pub fn get_mcp_server_manager(&self) -> Option<&McpServerManager> {
+        self.mcp_server_manager.as_ref()
+    }
+
+    /// 获取MCP服务器管理器的可变引用
+    pub fn get_mcp_server_manager_mut(&mut self) -> Option<&mut McpServerManager> {
+        self.mcp_server_manager.as_mut()
+    }
 }
 
 impl Default for IToolsState {

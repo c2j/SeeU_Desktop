@@ -32,6 +32,14 @@ pub struct McpServerConfig {
     pub auto_start: bool,
     pub directory: String,
     pub metadata: HashMap<String, String>,
+
+    // 持久化状态信息
+    #[serde(default)]
+    pub last_health_status: Option<ServerHealthStatus>,
+    #[serde(default)]
+    pub last_test_time: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub last_test_success: Option<bool>,
 }
 
 /// Transport configuration for MCP servers
@@ -107,6 +115,11 @@ impl McpServerManager {
         self.client.set_event_sender(sender);
     }
 
+    /// Add event sender for MCP events (支持多个接收器)
+    pub fn add_event_sender(&mut self, sender: mpsc::UnboundedSender<McpEvent>) {
+        self.client.add_event_sender(sender);
+    }
+
     /// Initialize the server manager synchronously (for use in non-async contexts)
     pub fn initialize_sync(&mut self) -> Result<()> {
         // For now, just setup default directories
@@ -156,9 +169,28 @@ impl McpServerManager {
 
         let content = serde_json::to_string_pretty(&all_configs)?;
         tokio::fs::write(&self.config_path, content).await?;
-        
+
         log::info!("Saved {} server configurations", all_configs.len());
         Ok(())
+    }
+
+    /// Save configuration after test (with updated status from client)
+    async fn save_configuration_after_test(&mut self) -> Result<()> {
+        // 从客户端获取更新后的配置
+        let updated_configs = self.client.get_all_server_configs();
+
+        // 更新本地配置
+        self.server_directories.clear();
+        for config in updated_configs {
+            let directory = config.directory.clone();
+            self.server_directories
+                .entry(directory)
+                .or_insert_with(Vec::new)
+                .push(config);
+        }
+
+        // 保存到文件
+        self.save_configuration().await
     }
 
     /// Create default configuration
@@ -178,6 +210,9 @@ impl McpServerManager {
                 auto_start: false,
                 directory: "Examples".to_string(),
                 metadata: HashMap::new(),
+                last_health_status: None,
+                last_test_time: None,
+                last_test_success: None,
             },
             McpServerConfig {
                 id: Uuid::new_v4(),
@@ -192,6 +227,9 @@ impl McpServerManager {
                 auto_start: false,
                 directory: "Examples".to_string(),
                 metadata: HashMap::new(),
+                last_health_status: None,
+                last_test_time: None,
+                last_test_success: None,
             },
         ];
 
@@ -340,12 +378,26 @@ impl McpServerManager {
 
     /// Test server connection
     pub async fn test_server(&mut self, server_id: Uuid) -> Result<bool> {
-        self.client.test_server(server_id).await
+        let result = self.client.test_server(server_id).await?;
+
+        // 测试完成后自动保存配置以持久化状态
+        if let Err(e) = self.save_configuration_after_test().await {
+            log::warn!("Failed to save configuration after test: {}", e);
+        }
+
+        Ok(result)
     }
 
     /// Test server connection with detailed output
     pub async fn test_server_detailed(&mut self, server_id: Uuid) -> Result<crate::mcp::rmcp_client::TestResult> {
-        self.client.test_server_detailed(server_id).await
+        let result = self.client.test_server_detailed(server_id).await?;
+
+        // 测试完成后自动保存配置以持久化状态
+        if let Err(e) = self.save_configuration_after_test().await {
+            log::warn!("Failed to save configuration after test: {}", e);
+        }
+
+        Ok(result)
     }
 
     /// Get server information
@@ -385,7 +437,14 @@ impl McpServerManager {
 
     /// Test server functionality and update health status
     pub async fn test_server_functionality(&mut self, server_id: Uuid) -> Result<TestResult> {
-        self.client.test_server_functionality(server_id).await
+        let result = self.client.test_server_functionality(server_id).await?;
+
+        // 测试完成后自动保存配置以持久化状态
+        if let Err(e) = self.save_configuration_after_test().await {
+            log::warn!("Failed to save configuration after test: {}", e);
+        }
+
+        Ok(result)
     }
 
     /// Check if server is ready for operations (Green health status)
@@ -396,6 +455,11 @@ impl McpServerManager {
     /// Get server health status
     pub fn get_server_health_status(&self, server_id: Uuid) -> Option<ServerHealthStatus> {
         self.client.get_server_health_status(server_id)
+    }
+
+    /// Get server capabilities
+    pub fn get_server_capabilities(&self, server_id: Uuid) -> Option<super::rmcp_client::ServerCapabilities> {
+        self.client.get_server_capabilities(server_id)
     }
 
     /// Get server test results
