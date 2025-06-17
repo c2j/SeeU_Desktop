@@ -33,6 +33,10 @@ pub struct McpServerConfig {
     pub directory: String,
     pub metadata: HashMap<String, String>,
 
+    // 静态能力信息（从配置文件中读取）
+    #[serde(default)]
+    pub capabilities: Option<serde_json::Value>,
+
     // 持久化状态信息
     #[serde(default)]
     pub last_health_status: Option<ServerHealthStatus>,
@@ -122,9 +126,47 @@ impl McpServerManager {
 
     /// Initialize the server manager synchronously (for use in non-async contexts)
     pub fn initialize_sync(&mut self) -> Result<()> {
-        // For now, just setup default directories
-        // Configuration loading will be done later when needed
+        // Setup default directories first
         self.setup_default_directories();
+
+        // Load configuration synchronously
+        self.load_configuration_sync()?;
+
+        Ok(())
+    }
+
+    /// Load server configurations from file synchronously
+    fn load_configuration_sync(&mut self) -> Result<()> {
+        if !self.config_path.exists() {
+            log::info!("Configuration file not found: {:?}", self.config_path);
+            return Ok(());
+        }
+
+        let content = std::fs::read_to_string(&self.config_path)?;
+        let configs: Vec<McpServerConfig> = serde_json::from_str(&content)?;
+
+        // Clear existing data to avoid duplicates
+        self.server_directories.clear();
+        self.setup_default_directories();
+
+        // Organize configs by directory and ensure they have IDs
+        for mut config in configs {
+            // Ensure config has an ID (for backward compatibility)
+            if config.id == Uuid::nil() {
+                config.id = Uuid::new_v4();
+            }
+
+            let directory = config.directory.clone();
+            self.server_directories
+                .entry(directory)
+                .or_insert_with(Vec::new)
+                .push(config.clone());
+
+            // Also add to client
+            self.client.add_server_config(config);
+        }
+
+        log::info!("Loaded {} server configurations from {:?}", self.get_total_server_count(), self.config_path);
         Ok(())
     }
 
@@ -195,54 +237,8 @@ impl McpServerManager {
 
     /// Create default configuration
     async fn create_default_configuration(&mut self) -> Result<()> {
-        // Add some example server configurations
-        let examples = vec![
-            McpServerConfig {
-                id: Uuid::new_v4(),
-                name: "Everything Server".to_string(),
-                description: Some("MCP server with everything capabilities".to_string()),
-                transport: TransportConfig::Command {
-                    command: "npx".to_string(),
-                    args: vec!["-y".to_string(), "@modelcontextprotocol/server-everything".to_string()],
-                    env: HashMap::new(),
-                },
-                enabled: false,
-                auto_start: false,
-                directory: "Examples".to_string(),
-                metadata: HashMap::new(),
-                last_health_status: None,
-                last_test_time: None,
-                last_test_success: None,
-            },
-            McpServerConfig {
-                id: Uuid::new_v4(),
-                name: "File System Server".to_string(),
-                description: Some("MCP server for file system operations".to_string()),
-                transport: TransportConfig::Command {
-                    command: "npx".to_string(),
-                    args: vec!["-y".to_string(), "@modelcontextprotocol/server-filesystem".to_string()],
-                    env: HashMap::new(),
-                },
-                enabled: false,
-                auto_start: false,
-                directory: "Examples".to_string(),
-                metadata: HashMap::new(),
-                last_health_status: None,
-                last_test_time: None,
-                last_test_success: None,
-            },
-        ];
-
-        for config in examples {
-            let directory = config.directory.clone();
-            self.server_directories
-                .entry(directory)
-                .or_insert_with(Vec::new)
-                .push(config.clone());
-
-            // Also add to client
-            self.client.add_server_config(config);
-        }
+        // Create empty configuration - no default servers
+        // Users can add servers through the UI or import configurations
 
         self.save_configuration().await?;
         Ok(())

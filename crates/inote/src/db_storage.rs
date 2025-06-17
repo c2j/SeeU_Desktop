@@ -9,6 +9,7 @@ use log;
 use crate::notebook::Notebook;
 use crate::note::Note;
 use crate::tag::Tag;
+use crate::mcp_server::McpServerRecord;
 
 /// Database schema version
 const DB_VERSION: i32 = 1;
@@ -908,6 +909,26 @@ impl DbStorageManager {
             [],
         )?;
 
+        // Create mcp_servers table for storing green-status MCP servers
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS mcp_servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                transport_type TEXT NOT NULL,
+                transport_config TEXT NOT NULL,
+                directory TEXT NOT NULL,
+                capabilities TEXT,
+                health_status TEXT NOT NULL DEFAULT 'Red',
+                last_test_time TEXT,
+                last_test_success INTEGER DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
         // Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON", [])?;
 
@@ -997,6 +1018,18 @@ impl DbStorageManager {
             [],
         )?;
 
+        // Index on mcp_servers.health_status for faster green server queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mcp_servers_health_status ON mcp_servers(health_status)",
+            [],
+        )?;
+
+        // Index on mcp_servers.enabled for faster enabled server queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled)",
+            [],
+        )?;
+
         // Full-text search index on notes content and title
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -1033,6 +1066,190 @@ impl DbStorageManager {
         )?;
 
         log::info!("Database indexes created successfully");
+        Ok(())
+    }
+
+    /// Save an MCP server record
+    pub fn save_mcp_server(&self, server: &McpServerRecord) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO mcp_servers (id, name, description, transport_type, transport_config, directory, capabilities, health_status, last_test_time, last_test_success, enabled, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                server.id,
+                server.name,
+                server.description,
+                server.transport_type,
+                server.transport_config,
+                server.directory,
+                server.capabilities,
+                server.health_status,
+                server.last_test_time.map(|t| t.to_rfc3339()),
+                if server.last_test_success { 1 } else { 0 },
+                if server.enabled { 1 } else { 0 },
+                server.created_at.to_rfc3339(),
+                server.updated_at.to_rfc3339()
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Load an MCP server record
+    pub fn load_mcp_server(&self, id: &str) -> Result<McpServerRecord, Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+
+        let server = conn.query_row(
+            "SELECT id, name, description, transport_type, transport_config, directory, capabilities, health_status, last_test_time, last_test_success, enabled, created_at, updated_at
+             FROM mcp_servers WHERE id = ?",
+            params![id],
+            |row| {
+                let last_test_time_str: Option<String> = row.get(8)?;
+                let last_test_time = last_test_time_str
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc));
+
+                let created_at_str: String = row.get(11)?;
+                let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                    .map_err(|e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
+                    .with_timezone(&Utc);
+
+                let updated_at_str: String = row.get(12)?;
+                let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
+                    .map_err(|e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                    .with_timezone(&Utc);
+
+                Ok(McpServerRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    transport_type: row.get(3)?,
+                    transport_config: row.get(4)?,
+                    directory: row.get(5)?,
+                    capabilities: row.get(6)?,
+                    health_status: row.get(7)?,
+                    last_test_time,
+                    last_test_success: row.get::<_, i32>(9)? != 0,
+                    enabled: row.get::<_, i32>(10)? != 0,
+                    created_at,
+                    updated_at,
+                })
+            },
+        )?;
+
+        Ok(server)
+    }
+
+    /// List all MCP servers
+    pub fn list_mcp_servers(&self) -> Result<Vec<McpServerRecord>, Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, transport_type, transport_config, directory, capabilities, health_status, last_test_time, last_test_success, enabled, created_at, updated_at
+             FROM mcp_servers ORDER BY name"
+        )?;
+
+        let server_iter = stmt.query_map([], |row| {
+            let last_test_time_str: Option<String> = row.get(8)?;
+            let last_test_time = last_test_time_str
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+
+            let created_at_str: String = row.get(11)?;
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&Utc);
+
+            let updated_at_str: String = row.get(12)?;
+            let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
+                .map_err(|e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&Utc);
+
+            Ok(McpServerRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                transport_type: row.get(3)?,
+                transport_config: row.get(4)?,
+                directory: row.get(5)?,
+                capabilities: row.get(6)?,
+                health_status: row.get(7)?,
+                last_test_time,
+                last_test_success: row.get::<_, i32>(9)? != 0,
+                enabled: row.get::<_, i32>(10)? != 0,
+                created_at,
+                updated_at,
+            })
+        })?;
+
+        let mut servers = Vec::new();
+        for server in server_iter {
+            servers.push(server?);
+        }
+
+        Ok(servers)
+    }
+
+    /// List green (ready) MCP servers
+    pub fn list_green_mcp_servers(&self) -> Result<Vec<McpServerRecord>, Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, transport_type, transport_config, directory, capabilities, health_status, last_test_time, last_test_success, enabled, created_at, updated_at
+             FROM mcp_servers WHERE health_status = 'Green' AND enabled = 1 ORDER BY name"
+        )?;
+
+        let server_iter = stmt.query_map([], |row| {
+            let last_test_time_str: Option<String> = row.get(8)?;
+            let last_test_time = last_test_time_str
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+
+            let created_at_str: String = row.get(11)?;
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&Utc);
+
+            let updated_at_str: String = row.get(12)?;
+            let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
+                .map_err(|e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&Utc);
+
+            Ok(McpServerRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                transport_type: row.get(3)?,
+                transport_config: row.get(4)?,
+                directory: row.get(5)?,
+                capabilities: row.get(6)?,
+                health_status: row.get(7)?,
+                last_test_time,
+                last_test_success: row.get::<_, i32>(9)? != 0,
+                enabled: row.get::<_, i32>(10)? != 0,
+                created_at,
+                updated_at,
+            })
+        })?;
+
+        let mut servers = Vec::new();
+        for server in server_iter {
+            servers.push(server?);
+        }
+
+        Ok(servers)
+    }
+
+    /// Delete an MCP server record
+    pub fn delete_mcp_server(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+
+        conn.execute(
+            "DELETE FROM mcp_servers WHERE id = ?",
+            params![id],
+        )?;
+
         Ok(())
     }
 }

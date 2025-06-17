@@ -12,6 +12,8 @@ pub mod db_ui_import;
 pub mod tree_ui;
 pub mod markdown;
 pub mod siyuan_import;
+pub mod mcp_server;
+pub mod mcp_sync;
 
 use eframe::egui;
 use notebook::Notebook;

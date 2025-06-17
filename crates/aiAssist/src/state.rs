@@ -27,6 +27,9 @@ pub type SlashCommandCallback = Box<dyn FnMut(SlashCommand) + Send + 'static>;
 /// Type for insert to note callback
 pub type InsertToNoteCallback = Box<dyn FnMut(String) + Send + 'static>;
 
+/// Type for MCP refresh callback
+pub type McpRefreshCallback = Box<dyn FnMut() + Send + 'static>;
+
 /// Command menu state for smart command suggestions
 #[derive(Debug, Clone)]
 pub struct CommandMenuState {
@@ -91,6 +94,7 @@ pub struct AIAssistState {
     pub current_request_id: Option<Uuid>,
     pub slash_command_callback: Option<SlashCommandCallback>,
     pub insert_to_note_callback: Option<InsertToNoteCallback>,
+    pub mcp_refresh_callback: Option<McpRefreshCallback>,
 
     // 标记当前是否处于笔记视图且有打开的笔记
     pub can_insert_to_note: bool,
@@ -150,6 +154,7 @@ impl Default for AIAssistState {
             current_request_id: None,
             slash_command_callback: None,
             insert_to_note_callback: None,
+            mcp_refresh_callback: None,
             can_insert_to_note: false,
             show_at_commands: false,
             show_slash_commands: false,
@@ -702,6 +707,14 @@ impl AIAssistState {
         self.insert_to_note_callback = Some(Box::new(callback));
     }
 
+    /// Set the MCP refresh callback
+    pub fn set_mcp_refresh_callback<F>(&mut self, callback: F)
+    where
+        F: FnMut() + Send + 'static,
+    {
+        self.mcp_refresh_callback = Some(Box::new(callback));
+    }
+
     /// Add a search result reference to the current chat
     pub fn add_search_reference(&mut self, query: &str, result_count: usize) {
         // 存储最近的搜索查询
@@ -1016,6 +1029,20 @@ impl AIAssistState {
     /// 获取MCP服务器能力
     pub fn get_mcp_server_capabilities(&self, server_id: Uuid) -> Option<&McpServerCapabilities> {
         self.mcp_server_capabilities.get(&server_id)
+    }
+
+    /// 移除MCP服务器
+    pub fn remove_mcp_server(&mut self, server_id: Uuid) {
+        self.mcp_server_capabilities.remove(&server_id);
+        self.server_names.remove(&server_id);
+
+        // 如果当前选中的服务器被删除，清除选择
+        if self.selected_mcp_server == Some(server_id) {
+            self.selected_mcp_server = None;
+            log::info!("🔄 当前选中的MCP服务器已被删除，已清除选择: {}", server_id);
+        }
+
+        log::info!("🗑️ 已从AI助手中移除MCP服务器: {}", server_id);
     }
 
     /// 处理工具调用确认

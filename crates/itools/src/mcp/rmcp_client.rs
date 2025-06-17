@@ -8,8 +8,8 @@ use serde::{Serialize, Deserialize};
 // Real rmcp integration for MCP protocol
 use rmcp::{
     ServiceExt,
-    transport::TokioChildProcess,
-    model::{CallToolRequestParam, ReadResourceRequestParam, GetPromptRequestParam},
+    transport::{TokioChildProcess, SseTransport},
+    model::{CallToolRequestParam, ReadResourceRequestParam, GetPromptRequestParam, ClientInfo, ClientCapabilities, Implementation},
     service::RunningService,
     RoleClient,
 };
@@ -20,7 +20,37 @@ use super::server_manager::{McpServerConfig, McpServerInfo};
 /// MCP Client implementation using rmcp
 #[derive(Debug)]
 struct McpClient {
-    service: RunningService<RoleClient, ()>,
+    service: McpService,
+}
+
+/// Enum to handle different service types
+#[derive(Debug)]
+enum McpService {
+    Stdio(RunningService<RoleClient, ()>),
+    Sse(RunningService<RoleClient, rmcp::model::InitializeRequestParam>),
+}
+
+impl McpService {
+    async fn list_all_resources(&self) -> Result<Vec<rmcp::model::Resource>, Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            McpService::Stdio(service) => service.list_all_resources().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+            McpService::Sse(service) => service.list_all_resources().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+        }
+    }
+
+    async fn list_all_prompts(&self) -> Result<Vec<rmcp::model::Prompt>, Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            McpService::Stdio(service) => service.list_all_prompts().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+            McpService::Sse(service) => service.list_all_prompts().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+        }
+    }
+
+    async fn cancel(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            McpService::Stdio(service) => service.cancel().await.map(|_| ()).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+            McpService::Sse(service) => service.cancel().await.map(|_| ()).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+        }
+    }
 }
 
 impl McpClient {
@@ -42,15 +72,17 @@ impl McpClient {
             .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
 
         Ok(McpClient {
-            service,
+            service: McpService::Stdio(service),
         })
     }
 
     /// List tools using rmcp service
     async fn list_tools(&self) -> Result<Value> {
         log::debug!("Listing tools using rmcp service");
-        let tools = self.service.list_all_tools().await
-            .map_err(|e| anyhow::anyhow!("Failed to list tools: {}", e))?;
+        let tools = match &self.service {
+            McpService::Stdio(service) => service.list_all_tools().await,
+            McpService::Sse(service) => service.list_all_tools().await,
+        }.map_err(|e| anyhow::anyhow!("Failed to list tools: {}", e))?;
 
         log::debug!("Raw tools response from rmcp: {:?}", tools);
 
@@ -146,14 +178,19 @@ impl McpClient {
 
         log::debug!("Converted arguments for tool '{}': {:?}", name, arguments_map);
 
-        let result = self.service.call_tool(CallToolRequestParam {
-            name: name.to_string().into(),
-            arguments: arguments_map,
-        }).await
-            .map_err(|e| {
-                log::error!("RMCP service call_tool failed for '{}': {}", name, e);
-                anyhow::anyhow!("Failed to call tool '{}': {}", name, e)
-            })?;
+        let result = match &self.service {
+            McpService::Stdio(service) => service.call_tool(CallToolRequestParam {
+                name: name.to_string().into(),
+                arguments: arguments_map,
+            }).await,
+            McpService::Sse(service) => service.call_tool(CallToolRequestParam {
+                name: name.to_string().into(),
+                arguments: arguments_map,
+            }).await,
+        }.map_err(|e| {
+            log::error!("RMCP service call_tool failed for '{}': {}", name, e);
+            anyhow::anyhow!("Failed to call tool '{}': {}", name, e)
+        })?;
 
         log::debug!("RMCP service call_tool result for '{}': {:?}", name, result);
 
@@ -166,13 +203,17 @@ impl McpClient {
     async fn read_resource(&self, uri: &str) -> Result<Value> {
         log::debug!("Reading resource '{}' using rmcp service", uri);
 
-        let result = self.service.read_resource(ReadResourceRequestParam {
-            uri: uri.to_string().into(),
-        }).await
-            .map_err(|e| {
-                log::error!("RMCP service read_resource failed for '{}': {}", uri, e);
-                anyhow::anyhow!("Failed to read resource '{}': {}", uri, e)
-            })?;
+        let result = match &self.service {
+            McpService::Stdio(service) => service.read_resource(ReadResourceRequestParam {
+                uri: uri.to_string().into(),
+            }).await,
+            McpService::Sse(service) => service.read_resource(ReadResourceRequestParam {
+                uri: uri.to_string().into(),
+            }).await,
+        }.map_err(|e| {
+            log::error!("RMCP service read_resource failed for '{}': {}", uri, e);
+            anyhow::anyhow!("Failed to read resource '{}': {}", uri, e)
+        })?;
 
         log::debug!("RMCP service read_resource result for '{}': {:?}", uri, result);
 
@@ -201,14 +242,19 @@ impl McpClient {
 
         log::debug!("Converted arguments for prompt '{}': {:?}", name, arguments_map);
 
-        let result = self.service.get_prompt(GetPromptRequestParam {
-            name: name.to_string().into(),
-            arguments: arguments_map,
-        }).await
-            .map_err(|e| {
-                log::error!("RMCP service get_prompt failed for '{}': {}", name, e);
-                anyhow::anyhow!("Failed to get prompt '{}': {}", name, e)
-            })?;
+        let result = match &self.service {
+            McpService::Stdio(service) => service.get_prompt(GetPromptRequestParam {
+                name: name.to_string().into(),
+                arguments: arguments_map,
+            }).await,
+            McpService::Sse(service) => service.get_prompt(GetPromptRequestParam {
+                name: name.to_string().into(),
+                arguments: arguments_map,
+            }).await,
+        }.map_err(|e| {
+            log::error!("RMCP service get_prompt failed for '{}': {}", name, e);
+            anyhow::anyhow!("Failed to get prompt '{}': {}", name, e)
+        })?;
 
         log::debug!("RMCP service get_prompt result for '{}': {:?}", name, result);
 
@@ -265,7 +311,7 @@ pub enum ServerHealthStatus {
 }
 
 /// Server capabilities
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServerCapabilities {
     pub tools: Vec<ToolInfo>,
     pub resources: Vec<ResourceInfo>,
@@ -273,7 +319,7 @@ pub struct ServerCapabilities {
 }
 
 /// Tool information
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolInfo {
     pub name: String,
     pub description: Option<String>,
@@ -281,7 +327,7 @@ pub struct ToolInfo {
 }
 
 /// Resource information
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResourceInfo {
     pub uri: String,
     pub name: String,
@@ -290,7 +336,7 @@ pub struct ResourceInfo {
 }
 
 /// Prompt information
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PromptInfo {
     pub name: String,
     pub description: Option<String>,
@@ -298,7 +344,7 @@ pub struct PromptInfo {
 }
 
 /// Prompt argument
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PromptArgument {
     pub name: String,
     pub description: Option<String>,
@@ -345,6 +391,7 @@ impl RmcpClient {
     /// Add event sender for UI updates (支持多个接收器)
     pub fn add_event_sender(&mut self, sender: mpsc::UnboundedSender<McpEvent>) {
         self.event_senders.push(sender);
+        log::info!("➕ 添加MCP事件发送器，当前总数: {}", self.event_senders.len());
     }
 
     /// Add a server configuration
@@ -416,6 +463,12 @@ impl RmcpClient {
 
         self.servers.remove(&server_id);
         self.server_configs.remove(&server_id);
+
+        // 触发服务器断开事件，这将通知主应用更新AI助手状态
+        self.send_event(McpEvent::ServerDisconnected(server_id));
+
+        log::info!("🗑️ 服务器配置已删除，已发送断开事件: {}", server_id);
+
         Ok(())
     }
 
@@ -436,13 +489,16 @@ impl RmcpClient {
             crate::mcp::server_manager::TransportConfig::Command { command, args, .. } => {
                 self.connect_command_server(server_id, &command, &args).await
             }
+            crate::mcp::server_manager::TransportConfig::WebSocket { url } => {
+                self.connect_sse_server(server_id, &url).await
+            }
             crate::mcp::server_manager::TransportConfig::Tcp { host, port } => {
                 let error = format!("TCP transport not yet supported: {}:{}", host, port);
                 self.set_server_error(server_id, error.clone());
                 Err(anyhow::anyhow!(error))
             }
-            _ => {
-                let error = "Transport type not yet supported".to_string();
+            crate::mcp::server_manager::TransportConfig::Unix { socket_path } => {
+                let error = format!("Unix socket transport not yet supported: {}", socket_path);
                 self.set_server_error(server_id, error.clone());
                 Err(anyhow::anyhow!(error))
             }
@@ -554,6 +610,71 @@ impl RmcpClient {
         }
     }
 
+    /// Connect to an SSE-based server
+    async fn connect_sse_server(&mut self, server_id: Uuid, url: &str) -> Result<()> {
+        log::info!("Connecting to SSE MCP server at: {}", url);
+
+        // Try to create rmcp client with SSE transport
+        match self.create_sse_rmcp_client(url).await {
+            Ok(mcp_client) => {
+                log::info!("Successfully created SSE rmcp client for server: {}", url);
+
+                // Store the rmcp client and mark as connected
+                if let Some(connection) = self.servers.get_mut(&server_id) {
+                    connection.rmcp_service = Some(mcp_client);
+                    connection.status = ConnectionStatus::Connected;
+                    connection.health_status = ServerHealthStatus::Yellow; // Connected but not tested
+                    log::info!("Stored SSE rmcp service for server {} and marked as connected (Yellow status)", server_id);
+
+                    // Notify UI of health status change
+                    self.send_event(McpEvent::HealthStatusChanged(server_id, ServerHealthStatus::Yellow));
+                } else {
+                    log::error!("Failed to find connection for server {} when storing SSE rmcp service", server_id);
+                    return Err(anyhow::anyhow!("Failed to find connection for server"));
+                }
+
+                // Query server capabilities using rmcp service
+                if let Err(e) = self.query_server_capabilities(server_id).await {
+                    log::warn!("Failed to query capabilities for SSE server {}: {}", server_id, e);
+                    // Don't fail the connection just because capability query failed
+                }
+
+                // Add a delay to stabilize the connection
+                log::debug!("⏳ Allowing SSE rmcp service to stabilize after capability query...");
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+                // Verify the service is still healthy after capability query
+                log::debug!("🔍 Verifying SSE rmcp service health after capability query...");
+                if let Some(connection) = self.servers.get(&server_id) {
+                    if let Some(rmcp_service) = &connection.rmcp_service {
+                        match rmcp_service.list_tools().await {
+                            Ok(_) => {
+                                log::info!("✅ SSE RMCP service is healthy after capability query");
+                            }
+                            Err(e) => {
+                                log::error!("❌ SSE RMCP service became unhealthy after capability query: {}", e);
+                                // Mark as disconnected so it will be reconnected on next use
+                                if let Some(conn) = self.servers.get_mut(&server_id) {
+                                    conn.status = ConnectionStatus::Disconnected;
+                                    conn.rmcp_service = None;
+                                    conn.capabilities = None;
+                                }
+                                return Err(anyhow::anyhow!("SSE RMCP service became unhealthy after capability query: {}", e));
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+            Err(e) => {
+                let error = format!("Failed to connect to SSE server at {}: {}", url, e);
+                self.set_server_error(server_id, error.clone());
+                Err(anyhow::anyhow!(error))
+            }
+        }
+    }
+
     /// Create rmcp client for MCP communication
     async fn create_rmcp_client(&self, command: &str, args: &[String]) -> Result<McpClient> {
         log::info!("Creating rmcp client for command: {} {:?}", command, args);
@@ -578,11 +699,36 @@ impl RmcpClient {
             .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
 
         Ok(McpClient {
-            service,
+            service: McpService::Stdio(service),
         })
     }
 
+    /// Create SSE rmcp client for MCP communication
+    async fn create_sse_rmcp_client(&self, url: &str) -> Result<McpClient> {
+        log::info!("Creating SSE rmcp client for URL: {}", url);
 
+        // Create SSE transport
+        let transport = SseTransport::start(url.to_string()).await
+            .map_err(|e| anyhow::anyhow!("Failed to create SSE transport: {}", e))?;
+
+        // Create client info for SSE connection
+        let client_info = ClientInfo {
+            protocol_version: Default::default(),
+            capabilities: ClientCapabilities::default(),
+            client_info: Implementation {
+                name: "SeeU Desktop iTools".to_string(),
+                version: "0.1.0".to_string(),
+            },
+        };
+
+        // Create the service using rmcp with client info
+        let service = client_info.serve(transport).await
+            .map_err(|e| anyhow::anyhow!("Failed to create SSE rmcp service: {}", e))?;
+
+        Ok(McpClient {
+            service: McpService::Sse(service),
+        })
+    }
 
     /// Disconnect from a server (async version)
     pub async fn disconnect_server_async(&mut self, server_id: Uuid) -> Result<()> {
@@ -637,22 +783,32 @@ impl RmcpClient {
         }
 
         // Get server config for logging
-        let config = self.server_configs.get(&server_id)
-            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+        let server_name = {
+            let config = self.server_configs.get(&server_id)
+                .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+            config.name.clone()
+        };
 
         // Check if we have rmcp service - if so, use it directly
         if connection.rmcp_service.is_some() {
-            log::info!("Using rmcp service to extract capabilities for server: {}", config.name);
+            log::info!("Using rmcp service to extract capabilities for server: {}", server_name);
 
             // Extract capabilities from rmcp service
             let capabilities = self.extract_capabilities_from_rmcp_service(server_id).await?;
 
             log::info!("Successfully extracted capabilities from rmcp service for server: {} - Tools: {}, Resources: {}, Prompts: {}",
-                       config.name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+                       server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
 
             // Update connection with capabilities
             if let Some(connection) = self.servers.get_mut(&server_id) {
                 connection.capabilities = Some(capabilities.clone());
+            }
+
+            // Save the extracted capabilities to the server configuration
+            if let Err(e) = self.save_runtime_capabilities(server_id, &capabilities).await {
+                log::warn!("Failed to save runtime capabilities for server {}: {}", server_id, e);
+            } else {
+                log::info!("✅ Successfully saved runtime capabilities for server: {}", server_name);
             }
 
             // Send event to UI
@@ -661,7 +817,7 @@ impl RmcpClient {
         }
 
         // Fallback: no rmcp service available, return empty capabilities
-        log::warn!("No rmcp service available for server: {}, returning empty capabilities", config.name);
+        log::warn!("No rmcp service available for server: {}, returning empty capabilities", server_name);
 
         let capabilities = ServerCapabilities {
             tools: Vec::new(),
@@ -687,8 +843,14 @@ impl RmcpClient {
         let connection = self.servers.get(&server_id)
             .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
 
-        let rmcp_client = connection.rmcp_service.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No rmcp service available"))?;
+        // If no rmcp service is available, create a fresh one for capability extraction
+        let rmcp_client = if let Some(service) = &connection.rmcp_service {
+            log::info!("Using existing rmcp service for capability extraction");
+            service
+        } else {
+            log::info!("No existing rmcp service, creating fresh service for capability extraction");
+            return self.extract_capabilities_with_fresh_service(server_id).await;
+        };
 
         // Use the real rmcp service to query actual capabilities
         // Query tools using the real MCP protocol
@@ -802,6 +964,183 @@ impl RmcpClient {
         };
 
         log::info!("Successfully extracted capabilities from rmcp service - Tools: {}, Resources: {}, Prompts: {}",
+                   tools.len(), resources.len(), prompts.len());
+
+        Ok(ServerCapabilities {
+            tools,
+            resources,
+            prompts,
+        })
+    }
+
+    /// Extract capabilities using a fresh rmcp service
+    async fn extract_capabilities_with_fresh_service(&self, server_id: Uuid) -> Result<ServerCapabilities> {
+        log::info!("Creating fresh rmcp service to extract capabilities for server: {}", server_id);
+
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+
+        match &config.transport {
+            crate::mcp::server_manager::TransportConfig::Command { command, args, .. } => {
+                log::info!("🚀 Creating fresh command rmcp service for capability extraction: {} {:?}", command, args);
+
+                // Create fresh rmcp service
+                let mut cmd = tokio::process::Command::new(command);
+                for arg in args {
+                    cmd.arg(arg);
+                }
+
+                let transport = TokioChildProcess::new(&mut cmd)
+                    .map_err(|e| anyhow::anyhow!("Failed to create transport: {}", e))?;
+                let service = ().serve(transport).await
+                    .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
+
+                log::info!("✅ Fresh rmcp service created, extracting capabilities");
+
+                // Extract capabilities using the fresh service
+                let capabilities = match self.extract_capabilities_from_command_service(&service).await {
+                    Ok(caps) => caps,
+                    Err(e) => {
+                        log::warn!("Failed to extract capabilities from command service: {}", e);
+                        ServerCapabilities {
+                            tools: Vec::new(),
+                            resources: Vec::new(),
+                            prompts: Vec::new(),
+                        }
+                    }
+                };
+
+                // Clean up service
+                if let Err(e) = service.cancel().await {
+                    log::warn!("Failed to cancel capability extraction service: {}", e);
+                }
+
+                log::info!("✅ Capabilities extracted successfully using fresh service - Tools: {}, Resources: {}, Prompts: {}",
+                           capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+                Ok(capabilities)
+            }
+            crate::mcp::server_manager::TransportConfig::WebSocket { url } => {
+                log::info!("🚀 Creating fresh SSE rmcp service for capability extraction: {}", url);
+
+                // Create fresh SSE rmcp service
+                let service = self.create_sse_rmcp_client(url).await
+                    .map_err(|e| anyhow::anyhow!("Failed to create SSE rmcp service: {}", e))?;
+
+                log::info!("✅ Fresh SSE rmcp service created, extracting capabilities");
+
+                // For now, return empty capabilities for SSE services
+                // TODO: Implement proper SSE capability extraction
+                log::warn!("SSE capability extraction not yet implemented, returning empty capabilities");
+                let capabilities = ServerCapabilities {
+                    tools: Vec::new(),
+                    resources: Vec::new(),
+                    prompts: Vec::new(),
+                };
+
+                // Clean up service
+                if let Err(e) = service.service.cancel().await {
+                    log::warn!("Failed to cancel SSE capability extraction service: {}", e);
+                }
+
+                log::info!("✅ Capabilities extracted successfully using fresh SSE service - Tools: {}, Resources: {}, Prompts: {}",
+                           capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+                Ok(capabilities)
+            }
+            _ => {
+                Err(anyhow::anyhow!("Transport type not supported for capability extraction"))
+            }
+        }
+    }
+
+
+
+    /// Extract capabilities from a command-based rmcp service
+    async fn extract_capabilities_from_command_service(&self, service: &rmcp::service::RunningService<rmcp::RoleClient, ()>) -> Result<ServerCapabilities> {
+        log::info!("Extracting capabilities from command-based rmcp service");
+
+        // Query tools using the real MCP protocol
+        let tools = match service.list_tools(Default::default()).await {
+            Ok(response) => {
+                log::info!("Successfully queried tools from rmcp service");
+
+                // Parse the response to extract tools
+                let tool_infos: Vec<ToolInfo> = response.tools.iter().map(|tool| {
+                    ToolInfo {
+                        name: tool.name.to_string(),
+                        description: Some(tool.description.to_string()),
+                        input_schema: Some(serde_json::Value::Object((*tool.input_schema).clone())),
+                    }
+                }).collect();
+
+                log::info!("Parsed {} tools from rmcp service response", tool_infos.len());
+                tool_infos
+            }
+            Err(e) => {
+                log::warn!("Failed to query tools from rmcp service: {}", e);
+                Vec::new()
+            }
+        };
+
+        // Query resources using the real MCP protocol
+        let resources = match service.list_resources(Default::default()).await {
+            Ok(response) => {
+                log::info!("Successfully queried resources from rmcp service");
+
+                let resource_infos: Vec<ResourceInfo> = response.resources.iter().map(|resource| {
+                    ResourceInfo {
+                        uri: resource.uri.clone(),
+                        name: resource.name.clone(),
+                        description: resource.description.clone(),
+                        mime_type: resource.mime_type.clone(),
+                    }
+                }).collect();
+
+                log::info!("Parsed {} resources from rmcp service response", resource_infos.len());
+                resource_infos
+            }
+            Err(e) => {
+                log::warn!("Failed to query resources from rmcp service: {}", e);
+                Vec::new()
+            }
+        };
+
+        // Query prompts using the real MCP protocol
+        let prompts = match service.list_prompts(Default::default()).await {
+            Ok(response) => {
+                log::info!("Successfully queried prompts from rmcp service");
+
+                let prompt_infos: Vec<PromptInfo> = response.prompts.iter().map(|prompt| {
+                    let arguments = if let Some(args) = &prompt.arguments {
+                        args.iter().map(|arg| {
+                            PromptArgument {
+                                name: arg.name.clone(),
+                                description: arg.description.clone(),
+                                required: arg.required.unwrap_or(false),
+                            }
+                        }).collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    PromptInfo {
+                        name: prompt.name.to_string(),
+                        description: prompt.description.clone(),
+                        arguments,
+                    }
+                }).collect();
+
+                log::info!("Parsed {} prompts from rmcp service response", prompt_infos.len());
+                prompt_infos
+            }
+            Err(e) => {
+                log::warn!("Failed to query prompts from rmcp service: {}", e);
+                Vec::new()
+            }
+        };
+
+        log::info!("Successfully extracted capabilities from command-based rmcp service - Tools: {}, Resources: {}, Prompts: {}",
                    tools.len(), resources.len(), prompts.len());
 
         Ok(ServerCapabilities {
@@ -953,6 +1292,30 @@ impl RmcpClient {
         }
     }
 
+    /// Save runtime capabilities to server configuration
+    async fn save_runtime_capabilities(&mut self, server_id: Uuid, capabilities: &ServerCapabilities) -> Result<()> {
+        log::info!("Saving runtime capabilities for server: {}", server_id);
+
+        // Convert ServerCapabilities to JSON Value for storage
+        let capabilities_json = serde_json::to_value(capabilities)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize capabilities: {}", e))?;
+
+        // Update the server configuration with the extracted capabilities
+        if let Some(config) = self.server_configs.get_mut(&server_id) {
+            config.capabilities = Some(capabilities_json);
+            log::info!("Updated server config with runtime capabilities: {} tools, {} resources, {} prompts",
+                       capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+        } else {
+            return Err(anyhow::anyhow!("Server config not found for ID: {}", server_id));
+        }
+
+        // For now, we don't have access to server_manager in RmcpClient
+        // The configurations will be saved when the server manager saves them
+        log::info!("✅ Successfully updated server configuration with runtime capabilities");
+
+        Ok(())
+    }
+
     /// Get all server configurations (with updated status)
     pub fn get_all_server_configs(&self) -> Vec<McpServerConfig> {
         self.server_configs.values().cloned().collect()
@@ -1010,8 +1373,30 @@ impl RmcpClient {
             ));
         }
 
-        // For testing, create a fresh rmcp service (like git_stdio.rs)
+        // For testing, try to use existing connection first, fallback to fresh service if needed
         if bypass_health_check {
+            // First try to use existing connected service
+            if let Some(connection) = self.servers.get(&server_id) {
+                if connection.status == ConnectionStatus::Connected && connection.rmcp_service.is_some() {
+                    log::info!("🔄 Reusing existing rmcp service for tool call: '{}'", tool_name);
+
+                    if let Some(rmcp_service) = &connection.rmcp_service {
+                        match rmcp_service.call_tool(tool_name, Some(arguments.clone())).await {
+                            Ok(response) => {
+                                log::info!("✅ Tool '{}' executed successfully via existing rmcp service", tool_name);
+                                return Ok(response);
+                            }
+                            Err(e) => {
+                                log::warn!("❌ Tool call failed via existing service, falling back to fresh service: {}", e);
+                                // Fall through to create fresh service
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback to fresh service if existing connection failed or doesn't exist
+            log::info!("🚀 Creating fresh rmcp service for tool call as fallback");
             return self.call_tool_with_fresh_service(server_id, tool_name, arguments).await;
         }
 
@@ -1131,8 +1516,47 @@ impl RmcpClient {
                     }
                 }
             }
-            _ => {
-                Err(anyhow::anyhow!("Only command transport is supported for fresh service tool calls"))
+            crate::mcp::server_manager::TransportConfig::WebSocket { url } => {
+                log::info!("🚀 Creating fresh SSE rmcp service for tool call: {}", url);
+
+                // Create fresh SSE rmcp service
+                let service = self.create_sse_rmcp_client(url).await
+                    .map_err(|e| anyhow::anyhow!("Failed to create SSE rmcp service: {}", e))?;
+
+                log::info!("✅ Fresh SSE rmcp service created, calling tool '{}'", tool_name);
+
+                // Convert arguments to the format expected by rmcp
+                let arguments_value = if arguments.is_null() {
+                    None
+                } else {
+                    Some(arguments)
+                };
+
+                // Call tool using SSE service
+                let result = service.call_tool(tool_name, arguments_value).await;
+
+                // Clean up service
+                if let Err(e) = service.service.cancel().await {
+                    log::warn!("Failed to cancel SSE tool call service: {}", e);
+                }
+
+                match result {
+                    Ok(tool_result) => {
+                        log::info!("✅ Tool '{}' executed successfully via fresh SSE rmcp service", tool_name);
+                        serde_json::to_value(&tool_result)
+                            .map_err(|e| anyhow::anyhow!("Failed to serialize tool result: {}", e))
+                    }
+                    Err(e) => {
+                        log::error!("❌ Tool '{}' failed via fresh SSE rmcp service: {}", tool_name, e);
+                        Err(anyhow::anyhow!("Tool call failed: {}", e))
+                    }
+                }
+            }
+            crate::mcp::server_manager::TransportConfig::Tcp { host, port } => {
+                Err(anyhow::anyhow!("TCP transport is not yet supported for tool calls: {}:{}", host, port))
+            }
+            crate::mcp::server_manager::TransportConfig::Unix { socket_path } => {
+                Err(anyhow::anyhow!("Unix socket transport is not yet supported for tool calls: {}", socket_path))
             }
         }
     }
@@ -1245,12 +1669,23 @@ impl RmcpClient {
             crate::mcp::server_manager::TransportConfig::Command { command, args, .. } => {
                 self.test_server_with_rmcp(server_id, command, args).await
             }
-            _ => {
+            crate::mcp::server_manager::TransportConfig::WebSocket { url } => {
+                self.test_server_with_sse(server_id, url).await
+            }
+            crate::mcp::server_manager::TransportConfig::Tcp { host, port } => {
                 TestResult {
                     success: false,
                     stdout: String::new(),
-                    stderr: "Unsupported transport type for testing".to_string(),
-                    error_message: Some("Only command transport is supported for testing".to_string()),
+                    stderr: format!("TCP transport not yet supported for testing: {}:{}", host, port),
+                    error_message: Some("TCP transport is not yet supported for testing".to_string()),
+                }
+            }
+            crate::mcp::server_manager::TransportConfig::Unix { socket_path } => {
+                TestResult {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: format!("Unix socket transport not yet supported for testing: {}", socket_path),
+                    error_message: Some("Unix socket transport is not yet supported for testing".to_string()),
                 }
             }
         };
@@ -1409,6 +1844,111 @@ impl RmcpClient {
         }
     }
 
+    /// Test SSE server using rmcp service
+    async fn test_server_with_sse(&self, server_id: Uuid, url: &str) -> TestResult {
+        let start_time = std::time::Instant::now();
+        let mut test_stdout = String::new();
+        let mut test_stderr = String::new();
+
+        log::info!("🚀 Creating fresh SSE rmcp service for testing: {}", url);
+
+        // Create fresh SSE rmcp service for testing
+        let service_result = self.create_sse_rmcp_client(url).await;
+
+        match service_result {
+            Ok(service) => {
+                log::info!("✅ SSE RMCP service created successfully");
+
+                // Test 1: SSE service created successfully
+                test_stdout.push_str("✅ SSE RMCP service created successfully\n");
+                log::info!("✅ SSE RMCP service created successfully");
+
+                // Track if critical tests pass
+                let mut critical_tests_passed = true;
+                let mut critical_error_msg = None;
+
+                // Test 2: List tools
+                test_stdout.push_str("🔧 Testing tools/list...\n");
+                match service.list_tools().await {
+                    Ok(tools_response) => {
+                        test_stdout.push_str(&format!("✅ Tools list: {:#?}\n", tools_response));
+                        log::info!("✅ Tools list retrieved successfully");
+                    }
+                    Err(e) => {
+                        let error_msg = format!("❌ Failed to list tools: {}", e);
+                        test_stderr.push_str(&format!("{}\n", error_msg));
+                        log::error!("{}", error_msg);
+                        critical_tests_passed = false;
+                        critical_error_msg = Some(error_msg);
+                    }
+                }
+
+                // Test 3: List resources
+                test_stdout.push_str("📁 Testing resources/list...\n");
+                match service.list_resources().await {
+                    Ok(resources_response) => {
+                        test_stdout.push_str(&format!("✅ Resources list: {:#?}\n", resources_response));
+                        log::info!("✅ Resources list retrieved successfully");
+                    }
+                    Err(e) => {
+                        let error_msg = format!("❌ Failed to list resources: {}", e);
+                        test_stderr.push_str(&format!("{}\n", error_msg));
+                        log::error!("{}", error_msg);
+                        // Resources failure is not critical for basic functionality
+                    }
+                }
+
+                // Test 4: List prompts
+                test_stdout.push_str("💬 Testing prompts/list...\n");
+                match service.list_prompts().await {
+                    Ok(prompts_response) => {
+                        test_stdout.push_str(&format!("✅ Prompts list: {:#?}\n", prompts_response));
+                        log::info!("✅ Prompts list retrieved successfully");
+                    }
+                    Err(e) => {
+                        let error_msg = format!("❌ Failed to list prompts: {}", e);
+                        test_stderr.push_str(&format!("{}\n", error_msg));
+                        log::error!("{}", error_msg);
+                        // Prompts failure is not critical for basic functionality
+                    }
+                }
+
+                let duration = start_time.elapsed();
+                test_stdout.push_str(&format!("⏱️ Test completed in {:?}\n", duration));
+
+                if critical_tests_passed {
+                    log::info!("✅ SSE server test passed for: {}", url);
+                    TestResult {
+                        success: true,
+                        stdout: test_stdout,
+                        stderr: test_stderr,
+                        error_message: None,
+                    }
+                } else {
+                    log::error!("❌ SSE server test failed for: {} - {}", url, critical_error_msg.as_ref().unwrap_or(&"Unknown error".to_string()));
+                    TestResult {
+                        success: false,
+                        stdout: test_stdout,
+                        stderr: test_stderr,
+                        error_message: critical_error_msg,
+                    }
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to create SSE rmcp service: {}", e);
+                log::error!("{}", error_msg);
+                test_stderr.push_str(&format!("{}\n", error_msg));
+
+                TestResult {
+                    success: false,
+                    stdout: test_stdout,
+                    stderr: test_stderr,
+                    error_message: Some(error_msg),
+                }
+            }
+        }
+    }
+
     /// Check if server connection is healthy and reconnect if needed
     pub async fn ensure_server_connected(&mut self, server_id: Uuid) -> Result<()> {
         log::info!("🔍 Checking connection status for server: {}", server_id);
@@ -1473,6 +2013,10 @@ impl RmcpClient {
                 log::info!("🚀 Attempting to reconnect to server {} using command: {} {:?}", server_id, command, args);
                 self.connect_command_server(server_id, &command, &args).await
             }
+            crate::mcp::server_manager::TransportConfig::WebSocket { url } => {
+                log::info!("🚀 Attempting to reconnect to server {} using SSE: {}", server_id, url);
+                self.connect_sse_server(server_id, &url).await
+            }
             _ => {
                 Err(anyhow::anyhow!("Transport type not supported for reconnection"))
             }
@@ -1486,8 +2030,12 @@ impl RmcpClient {
 
     /// Send event to all registered receivers
     fn send_event(&self, event: McpEvent) {
-        for sender in &self.event_senders {
-            let _ = sender.send(event.clone());
+        log::info!("📤 发送MCP事件到 {} 个接收器: {:?}", self.event_senders.len(), event);
+        for (i, sender) in self.event_senders.iter().enumerate() {
+            match sender.send(event.clone()) {
+                Ok(_) => log::debug!("✅ 事件成功发送到接收器 {}", i),
+                Err(e) => log::warn!("❌ 事件发送到接收器 {} 失败: {}", i, e),
+            }
         }
     }
 

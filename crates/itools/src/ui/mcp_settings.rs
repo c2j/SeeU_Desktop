@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
-use egui::{Context, Ui, RichText, Color32, Button, TextEdit, ComboBox};
+use egui::{Context, Ui, RichText, Color32, Button, TextEdit, ComboBox, ScrollArea};
 use tokio::sync::mpsc;
+
 
 use crate::mcp::{
     McpServerManager, McpServerConfig,
@@ -96,10 +97,16 @@ struct McpUiState {
 
     /// Tool testing dialog state
     tool_test_dialog: Option<ToolTestDialog>,
+
+    /// Show delete confirmation dialog
+    show_delete_confirmation: bool,
+
+    /// Server to be deleted (for confirmation)
+    server_to_delete: Option<Uuid>,
 }
 
 /// Dialog for testing MCP server tools
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ToolTestDialog {
     server_id: Uuid,
     server_name: String,
@@ -111,7 +118,10 @@ struct ToolTestDialog {
     parameter_inputs: HashMap<String, String>,
     test_result: Option<ToolTestResult>,
     is_testing: bool,
-
+    /// Test execution frame counter to prevent UI blocking
+    test_frame_counter: u32,
+    /// Current active tab in the result display
+    active_tab: TestResultTab,
 }
 
 /// Categories of testable items
@@ -122,25 +132,30 @@ enum TestCategory {
     Prompts,
 }
 
+/// Tabs for displaying test results
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TestResultTab {
+    Summary,
+    Request,
+    Response,
+}
+
 
 
 /// Result of tool testing
 #[derive(Debug, Clone)]
 struct ToolTestResult {
     success: bool,
-    output: String,
     error: Option<String>,
     duration: std::time::Duration,
-    /// STDIN content sent to the MCP server
-    stdin: Option<String>,
-    /// STDOUT content received from the MCP server
-    stdout: Option<String>,
-    /// STDERR content received from the MCP server
-    stderr: Option<String>,
+    /// Summary of the test result
+    summary: String,
     /// Raw MCP request sent
-    mcp_request: Option<String>,
+    request: Option<String>,
     /// Raw MCP response received
-    mcp_response: Option<String>,
+    response: Option<String>,
+    /// Additional debug information
+    debug_info: Option<String>,
 }
 
 impl McpSettingsUi {
@@ -171,8 +186,8 @@ impl McpSettingsUi {
         let (sender, receiver) = mpsc::unbounded_channel();
         self.event_receiver = Some(receiver);
 
-        // Set event sender in server manager
-        self.server_manager.set_event_sender(sender);
+        // Add event sender in server manager (不覆盖现有的发送器)
+        self.server_manager.add_event_sender(sender);
 
         log::info!("MCP settings UI initialized synchronously with event channel");
         Ok(())
@@ -266,6 +281,7 @@ impl McpSettingsUi {
         self.render_edit_server_dialog(ctx);
         self.render_import_dialog(ctx);
         self.render_export_dialog(ctx);
+        self.render_delete_confirmation_dialog(ctx);
 
         self.render_tool_test_dialog(ctx);
     }
@@ -701,11 +717,82 @@ impl McpSettingsUi {
                             }
                         }
 
+                        ui.separator();
+
+                        // Delete button with warning color
+                        if ui.add(Button::new("🗑️ 删除服务器").fill(Color32::from_rgb(200, 100, 100))).clicked() {
+                            if let Some(server_id) = self.selected_server {
+                                self.ui_state.server_to_delete = Some(server_id);
+                                self.ui_state.show_delete_confirmation = true;
+                            }
+                        }
+
                         if ui.button("取消").clicked() {
                             self.ui_state.show_edit_server = false;
                             self.ui_state.edit_server_json_text.clear();
                         }
                     });
+                });
+            });
+    }
+
+    /// Render delete confirmation dialog
+    fn render_delete_confirmation_dialog(&mut self, ctx: &Context) {
+        if !self.ui_state.show_delete_confirmation {
+            return;
+        }
+
+        egui::Window::new("确认删除")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(10.0);
+
+                    // Warning icon and message
+                    ui.horizontal(|ui| {
+                        ui.colored_label(Color32::RED, "⚠️");
+                        ui.label(RichText::new("确认删除服务器").strong().color(Color32::RED));
+                    });
+
+                    ui.add_space(10.0);
+
+                    // Get server name for confirmation
+                    let server_name = if let Some(server_id) = self.ui_state.server_to_delete {
+                        self.get_server_name_by_id(server_id).unwrap_or("未知服务器".to_string())
+                    } else {
+                        "未知服务器".to_string()
+                    };
+
+                    ui.label(format!("您确定要删除服务器 \"{}\" 吗？", server_name));
+                    ui.colored_label(Color32::YELLOW, "⚠️ 此操作无法撤销！");
+
+                    ui.add_space(15.0);
+
+                    // Buttons
+                    ui.horizontal(|ui| {
+                        // Delete button (red)
+                        if ui.add(Button::new("🗑️ 确认删除").fill(Color32::from_rgb(200, 50, 50))).clicked() {
+                            if let Some(server_id) = self.ui_state.server_to_delete {
+                                self.delete_server(server_id);
+                            }
+                            self.ui_state.show_delete_confirmation = false;
+                            self.ui_state.server_to_delete = None;
+                            self.ui_state.show_edit_server = false;
+                            self.ui_state.edit_server_json_text.clear();
+                        }
+
+                        ui.add_space(10.0);
+
+                        // Cancel button (gray)
+                        if ui.add(Button::new("取消").fill(Color32::from_rgb(120, 120, 120))).clicked() {
+                            self.ui_state.show_delete_confirmation = false;
+                            self.ui_state.server_to_delete = None;
+                        }
+                    });
+
+                    ui.add_space(10.0);
                 });
             });
     }
@@ -786,9 +873,14 @@ impl McpSettingsUi {
         ui.separator();
 
         // Example JSON
-        if ui.button("📋 插入示例 JSON").clicked() {
-            self.ui_state.add_server_json_text = self.get_example_json();
-        }
+        ui.horizontal(|ui| {
+            if ui.button("📋 stdio 示例").clicked() {
+                self.ui_state.add_server_json_text = self.get_example_json();
+            }
+            if ui.button("🌐 SSE 示例").clicked() {
+                self.ui_state.add_server_json_text = self.get_sse_example_json();
+            }
+        });
 
         ui.collapsing("JSON 格式说明", |ui| {
             ui.label("支持两种 JSON 格式:");
@@ -797,9 +889,17 @@ impl McpSettingsUi {
             ui.label("1. 标准 MCP 格式 (推荐):");
             ui.label("• mcpServers: 服务器配置对象 (必填)");
             ui.label("  • 服务器名称: 服务器配置 (必填)");
-            ui.label("    • command: 启动命令 (必填)");
-            ui.label("    • args: 命令参数数组 (可选)");
-            ui.label("    • env: 环境变量对象 (可选)");
+
+            ui.label("    stdio 传输类型:");
+            ui.label("      • command: 启动命令 (必填)");
+            ui.label("      • args: 命令参数数组 (可选)");
+            ui.label("      • env: 环境变量对象 (可选)");
+
+            ui.label("    SSE 传输类型:");
+            ui.label("      • transport: \"sse\" (必填)");
+            ui.label("      • url: SSE 端点 URL (必填)");
+            ui.label("      • env: 环境变量对象 (可选)");
+
             ui.label("• 目录、描述、启用状态通过上方表单字段设置");
 
             ui.separator();
@@ -849,9 +949,14 @@ impl McpSettingsUi {
 
         #[derive(serde::Deserialize)]
         struct StandardServerConfig {
-            command: String,
+            // stdio transport
+            command: Option<String>,
             args: Option<Vec<String>>,
             env: Option<std::collections::HashMap<String, String>>,
+
+            // sse transport
+            transport: Option<String>,
+            url: Option<String>,
         }
 
         let standard_config: StandardMcpConfig = serde_json::from_str(&self.ui_state.add_server_json_text)
@@ -867,11 +972,42 @@ impl McpSettingsUi {
 
         let (server_name, server_config) = standard_config.mcp_servers.into_iter().next().unwrap();
 
-        // Convert to internal format
-        let transport_config = TransportConfig::Command {
-            command: server_config.command,
-            args: server_config.args.unwrap_or_default(),
-            env: server_config.env.unwrap_or_default(),
+        // Determine transport type and create appropriate config
+        let transport_config = if let Some(transport) = &server_config.transport {
+            match transport.as_str() {
+                "sse" => {
+                    if let Some(url) = &server_config.url {
+                        TransportConfig::WebSocket {
+                            url: url.clone(),
+                        }
+                    } else {
+                        return Err("SSE 传输类型需要提供 url 字段".to_string());
+                    }
+                }
+                "stdio" => {
+                    if let Some(command) = &server_config.command {
+                        TransportConfig::Command {
+                            command: command.clone(),
+                            args: server_config.args.unwrap_or_default(),
+                            env: server_config.env.unwrap_or_default(),
+                        }
+                    } else {
+                        return Err("stdio 传输类型需要提供 command 字段".to_string());
+                    }
+                }
+                _ => {
+                    return Err(format!("不支持的传输类型: {}。支持的类型: stdio, sse", transport));
+                }
+            }
+        } else if let Some(command) = &server_config.command {
+            // Backward compatibility: if no transport specified but command exists, assume stdio
+            TransportConfig::Command {
+                command: command.clone(),
+                args: server_config.args.unwrap_or_default(),
+                env: server_config.env.unwrap_or_default(),
+            }
+        } else {
+            return Err("必须指定 transport 字段或提供 command 字段".to_string());
         };
 
         Ok(McpServerConfig {
@@ -887,6 +1023,7 @@ impl McpSettingsUi {
                 self.new_server_config.directory.clone()
             },
             metadata: HashMap::new(),
+            capabilities: None,
             last_health_status: None,
             last_test_time: None,
             last_test_success: None,
@@ -895,6 +1032,7 @@ impl McpSettingsUi {
 
     /// Get example JSON configuration
     fn get_example_json(&self) -> String {
+        // Provide examples for both stdio and SSE transport types
         serde_json::to_string_pretty(&serde_json::json!({
             "mcpServers": {
                 "filesystem": {
@@ -904,7 +1042,25 @@ impl McpSettingsUi {
                         "@modelcontextprotocol/server-filesystem",
                         "/Users/username/Desktop",
                         "/Users/username/Downloads"
-                    ]
+                    ],
+                    "env": {
+                        "NODE_ENV": "production"
+                    }
+                }
+            }
+        })).unwrap_or_default()
+    }
+
+    /// Get SSE example JSON configuration
+    fn get_sse_example_json(&self) -> String {
+        serde_json::to_string_pretty(&serde_json::json!({
+            "mcpServers": {
+                "photos": {
+                    "transport": "sse",
+                    "url": "http://localhost:3001/sse",
+                    "env": {
+                        "TRANSPORT": "sse"
+                    }
                 }
             }
         })).unwrap_or_default()
@@ -912,7 +1068,7 @@ impl McpSettingsUi {
 
     /// Render transport configuration editor
     fn render_transport_config_editor(&mut self, ui: &mut Ui) {
-        let transport_types = ["命令行", "TCP", "Unix Socket", "WebSocket"];
+        let transport_types = ["命令行 (stdio)", "TCP", "Unix Socket", "SSE"];
         let mut current_type = match &self.new_server_config.transport {
             TransportConfig::Command { .. } => 0,
             TransportConfig::Tcp { .. } => 1,
@@ -934,8 +1090,8 @@ impl McpSettingsUi {
         // Render appropriate editor based on type
         match current_type {
             0 => {
-                // Command transport
-                if let TransportConfig::Command { command, args, .. } = &mut self.new_server_config.transport {
+                // Command transport (stdio)
+                if let TransportConfig::Command { command, args, env } = &mut self.new_server_config.transport {
                     ui.horizontal(|ui| {
                         ui.label("命令:");
                         ui.add(TextEdit::singleline(command).desired_width(200.0));
@@ -948,6 +1104,51 @@ impl McpSettingsUi {
                         if args_input != args_text {
                             *args = args_input.split_whitespace().map(|s| s.to_string()).collect();
                         }
+                    });
+
+                    // Environment variables editor
+                    ui.collapsing("环境变量", |ui| {
+                        let mut env_to_remove = Vec::new();
+                        let mut env_to_update = Vec::new();
+                        let mut env_entries: Vec<_> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        env_entries.sort_by_key(|(k, _)| k.clone());
+
+                        for (key, value) in env_entries {
+                            ui.horizontal(|ui| {
+                                ui.label(&key);
+                                ui.label("=");
+                                let mut value_clone = value.clone();
+                                ui.add(TextEdit::singleline(&mut value_clone).desired_width(150.0));
+                                if value_clone != value {
+                                    env_to_update.push((key.clone(), value_clone));
+                                }
+                                if ui.button("🗑").clicked() {
+                                    env_to_remove.push(key.clone());
+                                }
+                            });
+                        }
+
+                        // Apply updates
+                        for (key, value) in env_to_update {
+                            env.insert(key, value);
+                        }
+
+                        for key in env_to_remove {
+                            env.remove(&key);
+                        }
+
+                        // Add new environment variable
+                        ui.horizontal(|ui| {
+                            ui.label("添加环境变量:");
+                            let mut new_key = String::new();
+                            let mut new_value = String::new();
+                            ui.add(TextEdit::singleline(&mut new_key).hint_text("变量名").desired_width(100.0));
+                            ui.label("=");
+                            ui.add(TextEdit::singleline(&mut new_value).hint_text("值").desired_width(100.0));
+                            if ui.button("➕").clicked() && !new_key.is_empty() {
+                                env.insert(new_key, new_value);
+                            }
+                        });
                     });
                 } else {
                     self.new_server_config.transport = TransportConfig::Command {
@@ -989,15 +1190,16 @@ impl McpSettingsUi {
                 }
             }
             3 => {
-                // WebSocket transport
+                // SSE transport
                 if let TransportConfig::WebSocket { url } = &mut self.new_server_config.transport {
                     ui.horizontal(|ui| {
-                        ui.label("URL:");
+                        ui.label("SSE URL:");
                         ui.add(TextEdit::singleline(url).desired_width(200.0));
                     });
+                    ui.label("💡 提示: SSE URL 通常以 /sse 结尾，例如 http://localhost:3001/sse");
                 } else {
                     self.new_server_config.transport = TransportConfig::WebSocket {
-                        url: String::new(),
+                        url: "http://localhost:3001/sse".to_string(),
                     };
                 }
             }
@@ -1590,7 +1792,8 @@ impl McpSettingsUi {
                         parameter_inputs: HashMap::new(),
                         test_result: None,
                         is_testing: false,
-
+                        test_frame_counter: 0,
+                        active_tab: TestResultTab::Summary,
                     };
                     self.ui_state.tool_test_dialog = Some(dialog);
 
@@ -1657,6 +1860,8 @@ impl McpSettingsUi {
                                             for (index, tool) in dialog.capabilities.tools.iter().enumerate() {
                                                 if ui.selectable_label(dialog.selected_tool_index == Some(index), &tool.name).clicked() {
                                                     dialog.selected_tool_index = Some(index);
+                                                    // Clear parameter inputs when tool changes
+                                                    dialog.parameter_inputs.clear();
                                                 }
                                             }
                                         });
@@ -1678,6 +1883,8 @@ impl McpSettingsUi {
                                             for (index, resource) in dialog.capabilities.resources.iter().enumerate() {
                                                 if ui.selectable_label(dialog.selected_resource_index == Some(index), &resource.name).clicked() {
                                                     dialog.selected_resource_index = Some(index);
+                                                    // Clear parameter inputs when resource changes
+                                                    dialog.parameter_inputs.clear();
                                                 }
                                             }
                                         });
@@ -1699,11 +1906,174 @@ impl McpSettingsUi {
                                             for (index, prompt) in dialog.capabilities.prompts.iter().enumerate() {
                                                 if ui.selectable_label(dialog.selected_prompt_index == Some(index), &prompt.name).clicked() {
                                                     dialog.selected_prompt_index = Some(index);
+                                                    // Clear parameter inputs when prompt changes
+                                                    dialog.parameter_inputs.clear();
                                                 }
                                             }
                                         });
                                 } else {
                                     ui.colored_label(Color32::GRAY, "该服务器没有可用的提示");
+                                }
+                            }
+                        }
+
+                        // Parameter input section
+                        match dialog.selected_category {
+                            TestCategory::Tools => {
+                                if let Some(selected_tool_index) = dialog.selected_tool_index {
+                                    if let Some(tool) = dialog.capabilities.tools.get(selected_tool_index) {
+                                        ui.separator();
+                                        ui.label(RichText::new("参数设置:").strong());
+
+                                        // Parse inputSchema to generate parameter inputs
+                                        if let Some(schema_value) = &tool.input_schema {
+                                            if let Some(schema) = schema_value.as_object() {
+                                                if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                                                let required_fields = schema.get("required")
+                                                    .and_then(|r| r.as_array())
+                                                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<std::collections::HashSet<_>>())
+                                                    .unwrap_or_default();
+
+                                                for (param_name, param_schema) in properties {
+                                                    // Inline parameter input rendering to avoid borrowing issues
+                                                    ui.horizontal(|ui| {
+                                                        let is_required = required_fields.contains(param_name.as_str());
+                                                        let label_text = if is_required {
+                                                            format!("{}*:", param_name)
+                                                        } else {
+                                                            format!("{}:", param_name)
+                                                        };
+
+                                                        ui.label(label_text);
+
+                                                        // Get current value or default
+                                                        let current_value = dialog.parameter_inputs.get(param_name).cloned().unwrap_or_default();
+                                                        let mut input_value = current_value.clone();
+
+                                                        // Generate input field based on parameter type
+                                                        let param_type = param_schema.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+                                                        let description = param_schema.get("description").and_then(|d| d.as_str()).unwrap_or("");
+
+                                                        match param_type {
+                                                            "boolean" => {
+                                                                let mut bool_value = input_value == "true";
+                                                                if ui.checkbox(&mut bool_value, "").changed() {
+                                                                    input_value = bool_value.to_string();
+                                                                }
+                                                            }
+                                                            "integer" | "number" => {
+                                                                ui.add(TextEdit::singleline(&mut input_value)
+                                                                    .hint_text(description)
+                                                                    .desired_width(150.0));
+                                                            }
+                                                            "array" => {
+                                                                ui.add(TextEdit::singleline(&mut input_value)
+                                                                    .hint_text("JSON数组格式，如: [\"item1\", \"item2\"]")
+                                                                    .desired_width(200.0));
+                                                            }
+                                                            "object" => {
+                                                                ui.add(TextEdit::singleline(&mut input_value)
+                                                                    .hint_text("JSON对象格式，如: {\"key\": \"value\"}")
+                                                                    .desired_width(200.0));
+                                                            }
+                                                            _ => { // string or default
+                                                                ui.add(TextEdit::singleline(&mut input_value)
+                                                                    .hint_text(description)
+                                                                    .desired_width(150.0));
+                                                            }
+                                                        }
+
+                                                        // Update parameter inputs if changed
+                                                        if input_value != current_value {
+                                                            dialog.parameter_inputs.insert(param_name.clone(), input_value);
+                                                        }
+
+                                                        // Show required indicator
+                                                        if is_required {
+                                                            ui.colored_label(Color32::RED, "*");
+                                                        }
+                                                    });
+
+                                                    // Show parameter description if available
+                                                    let description = param_schema.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                                                    if !description.is_empty() {
+                                                        ui.indent("param_desc", |ui| {
+                                                            ui.colored_label(Color32::GRAY, format!("💡 {}", description));
+                                                        });
+                                                    }
+                                                }
+                                                } else {
+                                                    ui.colored_label(Color32::GRAY, "该工具无需参数");
+                                                }
+                                            } else {
+                                                ui.colored_label(Color32::GRAY, "该工具无需参数");
+                                            }
+                                        } else {
+                                            ui.colored_label(Color32::GRAY, "该工具无需参数");
+                                        }
+                                    }
+                                }
+                            }
+                            TestCategory::Prompts => {
+                                if let Some(selected_prompt_index) = dialog.selected_prompt_index {
+                                    if let Some(prompt) = dialog.capabilities.prompts.get(selected_prompt_index) {
+                                        let arguments = &prompt.arguments;
+                                        if !arguments.is_empty() {
+                                                ui.separator();
+                                                ui.label(RichText::new("参数设置:").strong());
+
+                                                for arg in arguments {
+                                                    ui.horizontal(|ui| {
+                                                        let is_required = arg.required;
+                                                        let label_text = if is_required {
+                                                            format!("{}*:", arg.name)
+                                                        } else {
+                                                            format!("{}:", arg.name)
+                                                        };
+
+                                                        ui.label(label_text);
+
+                                                        // Get current value or default
+                                                        let current_value = dialog.parameter_inputs.get(&arg.name).cloned().unwrap_or_default();
+                                                        let mut input_value = current_value.clone();
+
+                                                        let hint_text = arg.description.as_deref().unwrap_or("");
+                                                        ui.add(TextEdit::singleline(&mut input_value)
+                                                            .hint_text(hint_text)
+                                                            .desired_width(200.0));
+
+                                                        // Update parameter inputs if changed
+                                                        if input_value != current_value {
+                                                            dialog.parameter_inputs.insert(arg.name.clone(), input_value);
+                                                        }
+
+                                                        // Show required indicator
+                                                        if is_required {
+                                                            ui.colored_label(Color32::RED, "*");
+                                                        }
+                                                    });
+
+                                                    // Show parameter description if available
+                                                    if let Some(desc) = &arg.description {
+                                                        if !desc.is_empty() {
+                                                            ui.indent("param_desc", |ui| {
+                                                                ui.colored_label(Color32::GRAY, format!("💡 {}", desc));
+                                                            });
+                                                        }
+                                                    }
+                                                }
+                                        } else {
+                                            ui.separator();
+                                            ui.colored_label(Color32::GRAY, "该提示无需参数");
+                                        }
+                                    }
+                                }
+                            }
+                            TestCategory::Resources => {
+                                // Resources typically don't need parameters, but we can add support if needed
+                                if dialog.selected_resource_index.is_some() {
+                                    ui.separator();
+                                    ui.colored_label(Color32::GRAY, "资源访问通常无需额外参数");
                                 }
                             }
                         }
@@ -1734,20 +2104,79 @@ impl McpSettingsUi {
                             });
                         });
 
-                        // Simple test result display
+                        // Tab-based test result display
                         if let Some(result) = &dialog.test_result {
                             ui.separator();
                             ui.label(RichText::new("测试结果:").strong());
+
+                            // Status indicator
                             let status_color = if result.success { Color32::GREEN } else { Color32::RED };
                             let status_text = if result.success { "✅ 成功" } else { "❌ 失败" };
                             ui.colored_label(status_color, status_text);
 
-                            if !result.output.is_empty() {
-                                ui.label("输出:");
-                                ui.add(TextEdit::multiline(&mut result.output.as_str())
-                                    .desired_rows(5)
-                                    .desired_width(f32::INFINITY));
-                            }
+                            // Tab buttons
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(dialog.active_tab == TestResultTab::Summary, "概要").clicked() {
+                                    dialog.active_tab = TestResultTab::Summary;
+                                }
+                                if ui.selectable_label(dialog.active_tab == TestResultTab::Request, "Request").clicked() {
+                                    dialog.active_tab = TestResultTab::Request;
+                                }
+                                if ui.selectable_label(dialog.active_tab == TestResultTab::Response, "Response").clicked() {
+                                    dialog.active_tab = TestResultTab::Response;
+                                }
+                            });
+
+                            ui.separator();
+
+                            // Tab content with scrollable area
+                            ScrollArea::vertical()
+                                .max_height(300.0)
+                                .show(ui, |ui| {
+                                    match dialog.active_tab {
+                                        TestResultTab::Summary => {
+                                            ui.label(RichText::new("概要信息:").strong());
+                                            ui.label(&result.summary);
+
+                                            if let Some(error) = &result.error {
+                                                ui.colored_label(Color32::RED, format!("错误: {}", error));
+                                            }
+
+                                            ui.label(format!("执行时间: {:?}", result.duration));
+
+                                            if let Some(debug_info) = &result.debug_info {
+                                                ui.separator();
+                                                ui.label(RichText::new("调试信息:").strong());
+                                                ui.add(TextEdit::multiline(&mut debug_info.as_str())
+                                                    .desired_rows(8)
+                                                    .desired_width(f32::INFINITY)
+                                                    .code_editor());
+                                            }
+                                        }
+                                        TestResultTab::Request => {
+                                            ui.label(RichText::new("MCP 请求:").strong());
+                                            if let Some(request) = &result.request {
+                                                ui.add(TextEdit::multiline(&mut request.as_str())
+                                                    .desired_rows(15)
+                                                    .desired_width(f32::INFINITY)
+                                                    .code_editor());
+                                            } else {
+                                                ui.label("无请求数据");
+                                            }
+                                        }
+                                        TestResultTab::Response => {
+                                            ui.label(RichText::new("MCP 响应:").strong());
+                                            if let Some(response) = &result.response {
+                                                ui.add(TextEdit::multiline(&mut response.as_str())
+                                                    .desired_rows(15)
+                                                    .desired_width(f32::INFINITY)
+                                                    .code_editor());
+                                            } else {
+                                                ui.label("无响应数据");
+                                            }
+                                        }
+                                    }
+                                });
                         }
                     });
                 });
@@ -1771,28 +2200,60 @@ impl McpSettingsUi {
             };
 
             if let Some((server_id, selected_category, selected_tool_index, selected_resource_index, selected_prompt_index, capabilities, parameter_inputs)) = test_data {
-                // Set testing state
+                // Set testing state and start frame-based test execution
                 if let Some(dialog) = &mut self.ui_state.tool_test_dialog {
                     dialog.is_testing = true;
                     dialog.test_result = None;
+                    dialog.test_frame_counter = 0;
                 }
+            }
+        }
 
-                // Execute the test with cloned data
-                let result = self.execute_tool_test_with_data(
-                    server_id,
-                    selected_category,
-                    selected_tool_index,
-                    selected_resource_index,
-                    selected_prompt_index,
-                    &capabilities,
-                    &parameter_inputs
-                );
+        // Execute test in chunks to avoid UI blocking
+        let test_execution_data = if let Some(dialog) = &mut self.ui_state.tool_test_dialog {
+            if dialog.is_testing && dialog.test_frame_counter < 5 {
+                dialog.test_frame_counter += 1;
 
-                // Update the dialog with the result
-                if let Some(dialog) = &mut self.ui_state.tool_test_dialog {
-                    dialog.test_result = Some(result);
-                    dialog.is_testing = false;
+                // Execute test after a few frames to allow UI to update
+                if dialog.test_frame_counter >= 3 {
+                    // Clone the dialog data we need for the test
+                    Some((
+                        dialog.server_id,
+                        dialog.selected_category,
+                        dialog.selected_tool_index,
+                        dialog.selected_resource_index,
+                        dialog.selected_prompt_index,
+                        dialog.capabilities.clone(),
+                        dialog.parameter_inputs.clone(),
+                    ))
+                } else {
+                    None
                 }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Execute test outside of the dialog borrow
+        if let Some(test_data) = test_execution_data {
+            // Execute the test with cloned data
+            let result = self.execute_tool_test_with_data(
+                test_data.0,
+                test_data.1,
+                test_data.2,
+                test_data.3,
+                test_data.4,
+                &test_data.5,
+                &test_data.6
+            );
+
+            // Update the dialog with the result
+            if let Some(dialog) = &mut self.ui_state.tool_test_dialog {
+                dialog.test_result = Some(result);
+                dialog.is_testing = false;
+                dialog.test_frame_counter = 0;
             }
         }
 
@@ -1800,6 +2261,12 @@ impl McpSettingsUi {
             self.ui_state.tool_test_dialog = None;
         }
     }
+
+
+
+
+
+
 
 
 
@@ -1827,27 +2294,23 @@ impl McpSettingsUi {
                     } else {
                         ToolTestResult {
                             success: false,
-                            output: String::new(),
                             error: Some("工具不存在".to_string()),
                             duration: start_time.elapsed(),
-                            stdin: None,
-                            stdout: None,
-                            stderr: None,
-                            mcp_request: None,
-                            mcp_response: None,
+                            summary: "工具不存在".to_string(),
+                            request: None,
+                            response: None,
+                            debug_info: None,
                         }
                     }
                 } else {
                     ToolTestResult {
                         success: false,
-                        output: String::new(),
                         error: Some("未选择工具".to_string()),
                         duration: start_time.elapsed(),
-                        stdin: None,
-                        stdout: None,
-                        stderr: None,
-                        mcp_request: None,
-                        mcp_response: None,
+                        summary: "未选择工具".to_string(),
+                        request: None,
+                        response: None,
+                        debug_info: None,
                     }
                 }
             }
@@ -1858,27 +2321,23 @@ impl McpSettingsUi {
                     } else {
                         ToolTestResult {
                             success: false,
-                            output: String::new(),
                             error: Some("资源不存在".to_string()),
                             duration: start_time.elapsed(),
-                            stdin: None,
-                            stdout: None,
-                            stderr: None,
-                            mcp_request: None,
-                            mcp_response: None,
+                            summary: "资源不存在".to_string(),
+                            request: None,
+                            response: None,
+                            debug_info: None,
                         }
                     }
                 } else {
                     ToolTestResult {
                         success: false,
-                        output: String::new(),
                         error: Some("未选择资源".to_string()),
                         duration: start_time.elapsed(),
-                        stdin: None,
-                        stdout: None,
-                        stderr: None,
-                        mcp_request: None,
-                        mcp_response: None,
+                        summary: "未选择资源".to_string(),
+                        request: None,
+                        response: None,
+                        debug_info: None,
                     }
                 }
             }
@@ -1889,30 +2348,102 @@ impl McpSettingsUi {
                     } else {
                         ToolTestResult {
                             success: false,
-                            output: String::new(),
                             error: Some("提示不存在".to_string()),
                             duration: start_time.elapsed(),
-                            stdin: None,
-                            stdout: None,
-                            stderr: None,
-                            mcp_request: None,
-                            mcp_response: None,
+                            summary: "提示不存在".to_string(),
+                            request: None,
+                            response: None,
+                            debug_info: None,
                         }
                     }
                 } else {
                     ToolTestResult {
                         success: false,
-                        output: String::new(),
                         error: Some("未选择提示".to_string()),
                         duration: start_time.elapsed(),
-                        stdin: None,
-                        stdout: None,
-                        stderr: None,
-                        mcp_request: None,
-                        mcp_response: None,
+                        summary: "未选择提示".to_string(),
+                        request: None,
+                        response: None,
+                        debug_info: None,
                     }
                 }
             }
+        }
+    }
+
+    /// Render parameter input field based on schema
+    fn render_parameter_input(
+        &self,
+        ui: &mut egui::Ui,
+        parameter_inputs: &mut HashMap<String, String>,
+        param_name: &str,
+        param_schema: &serde_json::Value,
+        required_fields: &std::collections::HashSet<&str>
+    ) {
+        ui.horizontal(|ui| {
+            let is_required = required_fields.contains(param_name);
+            let label_text = if is_required {
+                format!("{}*:", param_name)
+            } else {
+                format!("{}:", param_name)
+            };
+
+            ui.label(label_text);
+
+            // Get current value or default
+            let current_value = parameter_inputs.get(param_name).cloned().unwrap_or_default();
+            let mut input_value = current_value.clone();
+
+            // Generate input field based on parameter type
+            let param_type = param_schema.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+            let description = param_schema.get("description").and_then(|d| d.as_str()).unwrap_or("");
+
+            match param_type {
+                "boolean" => {
+                    let mut bool_value = input_value == "true";
+                    if ui.checkbox(&mut bool_value, "").changed() {
+                        input_value = bool_value.to_string();
+                    }
+                }
+                "integer" | "number" => {
+                    ui.add(TextEdit::singleline(&mut input_value)
+                        .hint_text(description)
+                        .desired_width(150.0));
+                }
+                "array" => {
+                    ui.add(TextEdit::singleline(&mut input_value)
+                        .hint_text("JSON数组格式，如: [\"item1\", \"item2\"]")
+                        .desired_width(200.0));
+                }
+                "object" => {
+                    ui.add(TextEdit::singleline(&mut input_value)
+                        .hint_text("JSON对象格式，如: {\"key\": \"value\"}")
+                        .desired_width(200.0));
+                }
+                _ => { // string or default
+                    ui.add(TextEdit::singleline(&mut input_value)
+                        .hint_text(description)
+                        .desired_width(150.0));
+                }
+            }
+
+            // Update parameter inputs if changed
+            if input_value != current_value {
+                parameter_inputs.insert(param_name.to_string(), input_value);
+            }
+
+            // Show required indicator
+            if is_required {
+                ui.colored_label(Color32::RED, "*");
+            }
+        });
+
+        // Show parameter description if available
+        let description = param_schema.get("description").and_then(|d| d.as_str()).unwrap_or("");
+        if !description.is_empty() {
+            ui.indent("param_desc", |ui| {
+                ui.colored_label(Color32::GRAY, format!("💡 {}", description));
+            });
         }
     }
 
@@ -2035,16 +2566,20 @@ impl McpSettingsUi {
             }
         };
 
+        let summary = if success {
+            format!("✅ 工具 '{}' 执行成功 (耗时: {:?})", tool_name, start_time.elapsed())
+        } else {
+            format!("❌ 工具 '{}' 执行失败 (耗时: {:?})", tool_name, start_time.elapsed())
+        };
+
         ToolTestResult {
             success,
-            output: output.clone(),
             error,
             duration: start_time.elapsed(),
-            stdin: Some(request_str),
-            stdout: Some(stdout_content),
-            stderr: None,
-            mcp_request: Some(serde_json::to_string_pretty(&mcp_request).unwrap_or_default()),
-            mcp_response: Some(output),
+            summary,
+            request: Some(request_str),
+            response: Some(output),
+            debug_info: Some(stdout_content),
         }
     }
 
@@ -2126,16 +2661,20 @@ impl McpSettingsUi {
         // Log the response
         log::debug!("MCP Response STDOUT: {}", stdout_content);
 
+        let summary = if success {
+            format!("✅ 资源 '{}' 访问成功 (耗时: {:?})", uri, start_time.elapsed())
+        } else {
+            format!("❌ 资源 '{}' 访问失败 (耗时: {:?})", uri, start_time.elapsed())
+        };
+
         ToolTestResult {
             success,
-            output: output.clone(),
             error,
             duration: start_time.elapsed(),
-            stdin: Some(request_str),
-            stdout: Some(stdout_content),
-            stderr: None,
-            mcp_request: Some(serde_json::to_string_pretty(&mcp_request).unwrap_or_default()),
-            mcp_response: Some(output),
+            summary,
+            request: Some(request_str),
+            response: Some(output),
+            debug_info: Some(stdout_content),
         }
     }
 
@@ -2239,17 +2778,69 @@ impl McpSettingsUi {
         // Log the response
         log::debug!("MCP Response STDOUT: {}", stdout_content);
 
+        let summary = if success {
+            format!("✅ 提示 '{}' 执行成功 (耗时: {:?})", prompt_name, start_time.elapsed())
+        } else {
+            format!("❌ 提示 '{}' 执行失败 (耗时: {:?})", prompt_name, start_time.elapsed())
+        };
+
         ToolTestResult {
             success,
-            output: output.clone(),
             error,
             duration: start_time.elapsed(),
-            stdin: Some(request_str),
-            stdout: Some(stdout_content),
-            stderr: None,
-            mcp_request: Some(serde_json::to_string_pretty(&mcp_request).unwrap_or_default()),
-            mcp_response: Some(output),
+            summary,
+            request: Some(request_str),
+            response: Some(output),
+            debug_info: Some(stdout_content),
         }
+    }
+
+    /// Delete a server
+    fn delete_server(&mut self, server_id: Uuid) {
+        let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(self.server_manager.remove_server(server_id))
+                .map_err(|e| e.to_string())
+        } else {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    rt.block_on(self.server_manager.remove_server(server_id))
+                        .map_err(|e| e.to_string())
+                }
+                Err(e) => Err(format!("无法创建异步运行时: {}", e))
+            }
+        };
+
+        match result {
+            Ok(()) => {
+                self.ui_state.status_message = Some("服务器删除成功".to_string());
+                self.ui_state.server_status_messages.remove(&server_id);
+                self.ui_state.server_error_messages.remove(&server_id);
+                self.ui_state.server_test_outputs.remove(&server_id);
+                self.ui_state.error_details_expanded.remove(&server_id);
+
+                log::info!("Server {} deleted successfully", server_id);
+
+                // 触发MCP事件，通知主应用同步AI助手状态
+                // 这将通过事件系统自动触发AI助手的MCP服务器列表更新
+                log::info!("🔄 服务器删除完成，将通过MCP事件系统自动同步AI助手状态");
+            }
+            Err(e) => {
+                self.ui_state.error_message = Some(format!("删除服务器失败: {}", e));
+                log::error!("Failed to delete server {}: {}", server_id, e);
+            }
+        }
+    }
+
+    /// Get server name by ID
+    fn get_server_name_by_id(&self, server_id: Uuid) -> Option<String> {
+        for directory in self.server_manager.get_server_directories() {
+            for server in &directory.servers {
+                if server.id == server_id {
+                    return Some(server.name.clone());
+                }
+            }
+        }
+        None
     }
 }
 
@@ -2275,6 +2866,8 @@ impl Default for McpUiState {
             add_server_json_text: String::new(),
             use_real_rmcp: false,
             tool_test_dialog: None,
+            show_delete_confirmation: false,
+            server_to_delete: None,
         }
     }
 }
@@ -2294,6 +2887,7 @@ impl Default for McpServerConfig {
             auto_start: false,
             directory: "Custom".to_string(),
             metadata: HashMap::new(),
+            capabilities: None,
             last_health_status: None,
             last_test_time: None,
             last_test_success: None,

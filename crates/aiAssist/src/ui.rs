@@ -450,6 +450,23 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                         ui.separator();
                         ui.label("MCP:");
 
+                        // 添加调试日志
+                        log::debug!("🔍 AI助手UI渲染 - MCP服务器状态:");
+                        log::debug!("  - mcp_server_capabilities 数量: {}", state.mcp_server_capabilities.len());
+                        log::debug!("  - server_names 数量: {}", state.server_names.len());
+                        log::debug!("  - selected_mcp_server: {:?}", state.selected_mcp_server);
+
+                        for (server_id, capabilities) in &state.mcp_server_capabilities {
+                            let server_name = state.server_names.get(server_id).cloned().unwrap_or_else(|| "未知".to_string());
+                            log::debug!("  - 服务器 {}: {} (工具:{} 资源:{} 提示:{})",
+                                server_id.to_string().chars().take(8).collect::<String>(),
+                                server_name,
+                                capabilities.tools.len(),
+                                capabilities.resources.len(),
+                                capabilities.prompts.len()
+                            );
+                        }
+
                         let selected_text = if let Some(server_id) = state.selected_mcp_server {
                             // 尝试从server_names中获取服务器名称
                             if let Some(server_name) = state.server_names.get(&server_id) {
@@ -463,13 +480,14 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                             "无".to_string()
                         };
 
-                        egui::ComboBox::from_label("")
-                            .selected_text(selected_text)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut state.selected_mcp_server, None, "无");
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_label("")
+                                .selected_text(selected_text)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut state.selected_mcp_server, None, "无");
 
-                                // 只显示有capabilities的服务器（表示已测试通过的绿灯服务器）
-                                for (server_id, capabilities) in &state.mcp_server_capabilities {
+                                    // 只显示有capabilities的服务器（表示已测试通过的绿灯服务器）
+                                    for (server_id, capabilities) in &state.mcp_server_capabilities {
                                     let tool_count = capabilities.tools.len();
                                     let resource_count = capabilities.resources.len();
                                     let prompt_count = capabilities.prompts.len();
@@ -495,6 +513,16 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                     ui.colored_label(egui::Color32::GRAY, "💡 请在iTools中配置并测试MCP服务器");
                                 }
                             });
+
+                            // 添加刷新按钮用于调试
+                            if ui.small_button("🔄").on_hover_text("刷新MCP服务器列表").clicked() {
+                                log::info!("🔄 用户点击刷新MCP服务器列表按钮");
+                                // 通过回调来触发主应用的同步
+                                if let Some(callback) = &mut state.mcp_refresh_callback {
+                                    callback();
+                                }
+                            }
+                        });
                     });
                 });
             });

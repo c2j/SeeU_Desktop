@@ -172,12 +172,23 @@ impl McpIntegrationManager {
         server_id: Uuid,
         capabilities: McpServerCapabilities,
     ) {
+        log::debug!("🔧 MCP集成管理器 - 更新服务器能力:");
+        log::debug!("  - 服务器ID: {}", server_id);
+        log::debug!("  - 工具数量: {}", capabilities.tools.len());
+        log::debug!("  - 资源数量: {}", capabilities.resources.len());
+        log::debug!("  - 提示数量: {}", capabilities.prompts.len());
+
         state.update_mcp_server_capabilities(server_id, capabilities);
 
         // 同时更新服务器名称
         if let Some(server_name) = self.server_names.get(&server_id) {
+            log::debug!("  - 服务器名称: {}", server_name);
             state.server_names.insert(server_id, server_name.clone());
+        } else {
+            log::warn!("⚠️ 服务器 {} 没有找到对应的名称", server_id);
         }
+
+        log::debug!("✅ AI助手状态更新完成 - 当前服务器数量: {}", state.mcp_server_capabilities.len());
     }
 }
 

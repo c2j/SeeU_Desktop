@@ -152,6 +152,42 @@ impl IToolsState {
         self.initialize_mcp_settings_ui();
     }
 
+    /// Initialize the iTools state without loading MCP server configurations
+    pub fn initialize_without_mcp_loading(&mut self) {
+        log::info!("Initializing iTools state (without MCP loading) with session ID: {}", self.security_context.session_id);
+
+        // Initialize plugin manager
+        self.plugin_manager.initialize();
+
+        // Load user preferences
+        self.load_user_preferences();
+
+        // Initialize MCP client
+        self.mcp_client.initialize();
+
+        // Initialize MCP server manager without loading configurations
+        self.initialize_mcp_server_manager_without_loading();
+
+        // Initialize MCP settings UI
+        self.initialize_mcp_settings_ui();
+    }
+
+    /// Load MCP server configurations (called after event channels are set up)
+    pub fn load_mcp_server_configurations(&mut self) {
+        log::info!("Loading MCP server configurations...");
+
+        if let Some(manager) = &mut self.mcp_server_manager {
+            // Now load the configurations with event channels ready
+            if let Err(e) = manager.initialize_sync() {
+                log::warn!("Failed to load MCP server configurations: {}", e);
+            } else {
+                log::info!("MCP server configurations loaded successfully");
+            }
+        } else {
+            log::warn!("MCP server manager not initialized, cannot load configurations");
+        }
+    }
+
     /// Initialize MCP server manager
     pub fn initialize_mcp_server_manager(&mut self) {
         // Get config directory
@@ -174,6 +210,28 @@ impl IToolsState {
             self.mcp_server_manager = Some(manager);
 
             log::info!("MCP server manager initialized");
+        } else {
+            log::warn!("Could not determine config directory for MCP server manager");
+        }
+    }
+
+    /// Initialize MCP server manager without loading configurations
+    pub fn initialize_mcp_server_manager_without_loading(&mut self) {
+        // Get config directory
+        if let Some(config_dir) = dirs::config_dir() {
+            let mcp_config_path = config_dir.join("seeu_desktop").join("mcp_servers.json");
+
+            // Create directory if it doesn't exist
+            if let Some(parent) = mcp_config_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            let manager = McpServerManager::new(mcp_config_path);
+            // Don't call initialize_sync() here - configurations will be loaded later
+
+            self.mcp_server_manager = Some(manager);
+
+            log::info!("MCP server manager created (configurations will be loaded later)");
         } else {
             log::warn!("Could not determine config directory for MCP server manager");
         }

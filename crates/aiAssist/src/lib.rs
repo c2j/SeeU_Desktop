@@ -44,6 +44,14 @@ where
     state.set_insert_to_note_callback(callback);
 }
 
+/// Set the MCP refresh callback
+pub fn set_mcp_refresh_callback<F>(state: &mut AIAssistState, callback: F)
+where
+    F: FnMut() + Send + 'static,
+{
+    state.set_mcp_refresh_callback(callback);
+}
+
 /// Add a search result reference to the current chat
 pub fn add_search_reference(state: &mut AIAssistState, query: &str, result_count: usize) {
     state.add_search_reference(query, result_count);
