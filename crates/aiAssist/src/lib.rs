@@ -5,6 +5,9 @@ pub mod api;
 pub mod mcp_tools;
 pub mod mcp_integration;
 
+#[cfg(test)]
+mod tests;
+
 use eframe::egui;
 use state::AIAssistState;
 

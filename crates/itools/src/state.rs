@@ -333,6 +333,20 @@ impl IToolsState {
     pub fn get_mcp_server_manager_mut(&mut self) -> Option<&mut McpServerManager> {
         self.mcp_server_manager.as_mut()
     }
+
+    /// 手动触发MCP服务器能力提取（用于调试和测试）
+    pub async fn force_extract_mcp_server_capabilities(&mut self, server_id: uuid::Uuid) -> Result<(), String> {
+        if let Some(manager) = &mut self.mcp_server_manager {
+            if let Some(rmcp_client) = manager.get_rmcp_client_mut() {
+                rmcp_client.force_extract_capabilities(server_id).await
+                    .map_err(|e| e.to_string())
+            } else {
+                Err("MCP rmcp client not available".to_string())
+            }
+        } else {
+            Err("MCP server manager not available".to_string())
+        }
+    }
 }
 
 impl Default for IToolsState {

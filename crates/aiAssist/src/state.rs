@@ -17,6 +17,8 @@ pub struct StateUpdate {
     pub content: String,
     pub is_complete: bool,
     pub error: Option<String>,
+    pub has_function_calls: bool,
+    pub function_call_response: Option<crate::api::ChatResponse>,
 }
 
 // 移除模型加载状态结构
@@ -114,6 +116,9 @@ pub struct AIAssistState {
     pub show_tool_call_confirmation: bool,
     pub current_tool_call_batch: Option<ToolCallBatch>,
 
+    /// 待处理的Function Call响应
+    pub pending_function_call_response: Option<crate::api::ChatResponse>,
+
     // 存储最近的搜索查询和结果，用于 @search 引用
     pub last_search_query: Option<String>,
     pub last_search_results: Option<String>,
@@ -133,6 +138,8 @@ impl Default for AIAssistState {
                     content: "你好！我是SeeU智能助手，有什么我可以帮助你的吗？".to_string(),
                     timestamp: Utc::now(),
                     attachments: vec![],
+                    tool_calls: None,
+                    tool_call_results: None,
                 }
             ],
         };
@@ -165,6 +172,7 @@ impl Default for AIAssistState {
             pending_tool_calls: Vec::new(),
             show_tool_call_confirmation: false,
             current_tool_call_batch: None,
+            pending_function_call_response: None,
             last_search_query: None,
             last_search_results: None,
         }
@@ -198,6 +206,8 @@ impl AIAssistState {
                         content: self.chat_input.clone(),
                         timestamp: Utc::now(),
                         attachments: vec![],
+                        tool_calls: None,
+                        tool_call_results: None,
                     };
 
                     // Add the message to the current session
@@ -233,6 +243,8 @@ impl AIAssistState {
                         content: self.chat_input.clone(),
                         timestamp: Utc::now(),
                         attachments: vec![],
+                        tool_calls: None,
+                        tool_call_results: None,
                     };
 
                     self.chat_messages.push(clear_message.clone());
@@ -254,6 +266,8 @@ impl AIAssistState {
                         content: self.chat_input.clone(),
                         timestamp: Utc::now(),
                         attachments: vec![],
+                        tool_calls: None,
+                        tool_call_results: None,
                     };
 
                     self.chat_messages.push(new_message.clone());
@@ -275,6 +289,8 @@ impl AIAssistState {
                         content: self.chat_input.clone(),
                         timestamp: Utc::now(),
                         attachments: vec![],
+                        tool_calls: None,
+                        tool_call_results: None,
                     };
 
                     self.chat_messages.push(command_message.clone());
@@ -291,6 +307,8 @@ impl AIAssistState {
                         content: "可用的斜杠命令:\n/search [查询] - 执行搜索\n/clear - 清空当前会话\n/new - 创建新会话\n/help - 显示此帮助信息".to_string(),
                         timestamp: Utc::now(),
                         attachments: vec![],
+                        tool_calls: None,
+                        tool_call_results: None,
                     };
 
                     self.chat_messages.push(help_message.clone());
@@ -314,6 +332,8 @@ impl AIAssistState {
             content: self.chat_input.clone(),
             timestamp: Utc::now(),
             attachments: vec![],
+            tool_calls: None,
+            tool_call_results: None,
         };
 
         // Add the message to the current session
@@ -387,6 +407,8 @@ impl AIAssistState {
             content: "".to_string(),
             timestamp: Utc::now(),
             attachments: vec![],
+            tool_calls: None,
+            tool_call_results: None,
         };
 
         // Add the placeholder to the current chat
@@ -406,6 +428,8 @@ impl AIAssistState {
             content: String::new(),
             is_complete: false,
             error: None,
+            has_function_calls: false,
+            function_call_response: None,
         }));
 
         // 克隆用于UI线程的状态
@@ -428,11 +452,37 @@ impl AIAssistState {
         // 检查是否有选中的MCP服务器，如果有则准备工具
         let tools = if let Some(server_id) = self.selected_mcp_server {
             if let Some(capabilities) = self.mcp_server_capabilities.get(&server_id) {
-                Some(crate::mcp_tools::McpToolConverter::convert_mcp_tools_to_openai(capabilities))
+                let server_name = self.server_names.get(&server_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("服务器 {}", server_id.to_string().chars().take(8).collect::<String>()));
+
+                log::info!("🔧 AI助手 - 选中MCP服务器: {}", server_name);
+                log::info!("📋 MCP服务器能力统计:");
+                log::info!("  - 工具数量: {}", capabilities.tools.len());
+                log::info!("  - 资源数量: {}", capabilities.resources.len());
+                log::info!("  - 提示数量: {}", capabilities.prompts.len());
+
+                if !capabilities.tools.is_empty() {
+                    log::info!("🛠️ 可用工具列表:");
+                    for (index, tool) in capabilities.tools.iter().enumerate() {
+                        log::info!("  {}. {} - {}",
+                            index + 1,
+                            tool.name,
+                            tool.description.as_deref().unwrap_or("无描述")
+                        );
+                    }
+                }
+
+                let converted_tools = crate::mcp_tools::McpToolConverter::convert_mcp_tools_to_openai(capabilities);
+                log::info!("✅ 已将 {} 个MCP工具转换为OpenAI Function Calling格式", converted_tools.len());
+
+                Some(converted_tools)
             } else {
+                log::warn!("⚠️ 选中的MCP服务器 {} 没有找到能力信息", server_id);
                 None
             }
         } else {
+            log::debug!("💡 未选择MCP服务器，将不使用工具调用功能");
             None
         };
 
@@ -450,10 +500,11 @@ impl AIAssistState {
                     // 为闭包创建一个新的Arc克隆
                     let callback_state = state_mutex_clone.clone();
 
-                    // Use streaming API
-                    let result = api_service.send_chat_stream(
+                    // Use streaming API with tools support
+                    let result = api_service.send_chat_stream_with_tools(
                         &ai_settings,
                         messages,
+                        tools,
                         move |content| {
                             // 更新共享状态
                             let mut state = callback_state.lock().unwrap();
@@ -478,25 +529,25 @@ impl AIAssistState {
                                 // 检查是否有工具调用
                                 if let Some(choice) = response.choices.first() {
                                     if let Some(tool_calls) = &choice.message.tool_calls {
-                                        // 有工具调用，创建待处理批次
-                                        log::info!("检测到 {} 个工具调用请求", tool_calls.len());
+                                        // 有工具调用，存储响应以便主线程处理
+                                        log::info!("🎯 LLM响应包含工具调用:");
+                                        log::info!("  - 工具调用数量: {}", tool_calls.len());
 
-                                        // 这里需要通过某种方式通知主线程处理工具调用
-                                        // 由于我们在异步上下文中，暂时先显示消息
+                                        for (index, tool_call) in tool_calls.iter().enumerate() {
+                                            log::info!("  {}. 工具调用ID: {}", index + 1, tool_call.id);
+                                            log::info!("     函数名称: {}", tool_call.function.name);
+                                            log::info!("     函数参数: {}", tool_call.function.arguments);
+                                        }
+
                                         let mut state = state_mutex_clone.lock().unwrap();
-                                        state.content = format!(
-                                            "🔧 AI助手请求调用 {} 个工具，请在确认对话框中查看详情并确认执行。\n\n工具列表:\n{}",
-                                            tool_calls.len(),
-                                            tool_calls.iter()
-                                                .enumerate()
-                                                .map(|(i, call)| format!("{}. {} ({})", i + 1, call.function.name, call.function.arguments))
-                                                .collect::<Vec<_>>()
-                                                .join("\n")
-                                        );
+                                        // 存储完整的响应，包含文本内容和工具调用
+                                        state.content = choice.message.content.clone().unwrap_or_default();
                                         state.is_complete = true;
 
-                                        // 设置待处理的工具调用（这需要在主线程中处理）
-                                        // TODO: 实现跨线程的工具调用处理机制
+                                        // 标记有待处理的Function Call响应
+                                        // 这个标记会在主线程的check_for_updates中被检测到
+                                        state.has_function_calls = true;
+                                        state.function_call_response = Some(response.clone());
                                     } else {
                                         // 普通响应
                                         let mut state = state_mutex_clone.lock().unwrap();
@@ -645,6 +696,13 @@ impl AIAssistState {
                         self.update_streaming_content(format!("错误: {}", error));
                     }
 
+                    // 检查是否有Function Call响应需要处理
+                    if state.has_function_calls {
+                        if let Some(response) = &state.function_call_response {
+                            self.handle_function_call_response(response.clone());
+                        }
+                    }
+
                     // 完成流式输出
                     self.complete_streaming();
                 }
@@ -668,6 +726,8 @@ impl AIAssistState {
                     content: "你好！我是SeeU智能助手，有什么我可以帮助你的吗？".to_string(),
                     timestamp: Utc::now(),
                     attachments: vec![],
+                    tool_calls: None,
+                    tool_call_results: None,
                 }
             ],
         };
@@ -731,6 +791,8 @@ impl AIAssistState {
             },
             timestamp: Utc::now(),
             attachments: vec![],
+            tool_calls: None,
+            tool_call_results: None,
         };
 
         // Add the message to the current chat
@@ -806,6 +868,8 @@ impl AIAssistState {
                 content: "你好！我是SeeU智能助手，有什么我可以帮助你的吗？".to_string(),
                 timestamp: Utc::now(),
                 attachments: vec![],
+                tool_calls: None,
+                tool_call_results: None,
             };
 
             session.messages = vec![initial_message.clone()];
@@ -1013,12 +1077,108 @@ impl AIAssistState {
 
     /// 设置选中的MCP服务器
     pub fn set_selected_mcp_server(&mut self, server_id: Option<Uuid>) {
+        let old_server = self.selected_mcp_server;
         self.selected_mcp_server = server_id;
+
+        // 记录服务器选择变化
+        match (old_server, server_id) {
+            (None, None) => {
+                // 没有变化，不记录
+            },
+            (None, Some(new_id)) => {
+                let server_name = self.server_names.get(&new_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("服务器 {}", new_id.to_string().chars().take(8).collect::<String>()));
+                log::info!("🎯 AI助手 - 选择MCP服务器: {}", server_name);
+
+                if let Some(capabilities) = self.mcp_server_capabilities.get(&new_id) {
+                    log::info!("📋 服务器能力: 工具:{} 资源:{} 提示:{}",
+                        capabilities.tools.len(),
+                        capabilities.resources.len(),
+                        capabilities.prompts.len()
+                    );
+                }
+            },
+            (Some(old_id), None) => {
+                let old_server_name = self.server_names.get(&old_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("服务器 {}", old_id.to_string().chars().take(8).collect::<String>()));
+                log::info!("🚫 AI助手 - 取消选择MCP服务器: {}", old_server_name);
+            },
+            (Some(old_id), Some(new_id)) if old_id != new_id => {
+                let old_server_name = self.server_names.get(&old_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("服务器 {}", old_id.to_string().chars().take(8).collect::<String>()));
+                let new_server_name = self.server_names.get(&new_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("服务器 {}", new_id.to_string().chars().take(8).collect::<String>()));
+                log::info!("🔄 AI助手 - 切换MCP服务器: {} -> {}", old_server_name, new_server_name);
+
+                if let Some(capabilities) = self.mcp_server_capabilities.get(&new_id) {
+                    log::info!("📋 新服务器能力: 工具:{} 资源:{} 提示:{}",
+                        capabilities.tools.len(),
+                        capabilities.resources.len(),
+                        capabilities.prompts.len()
+                    );
+                }
+            },
+            _ => {
+                // 相同服务器，不记录
+            }
+        }
     }
 
     /// 获取选中的MCP服务器
     pub fn get_selected_mcp_server(&self) -> Option<Uuid> {
         self.selected_mcp_server
+    }
+
+    /// 检查并记录MCP服务器选择变化（用于UI更新后调用）
+    pub fn check_mcp_server_selection_change(&mut self, previous_selection: Option<Uuid>) {
+        if previous_selection != self.selected_mcp_server {
+            match (previous_selection, self.selected_mcp_server) {
+                (None, Some(new_id)) => {
+                    let server_name = self.server_names.get(&new_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("服务器 {}", new_id.to_string().chars().take(8).collect::<String>()));
+                    log::info!("🎯 AI助手 - 用户选择MCP服务器: {}", server_name);
+
+                    if let Some(capabilities) = self.mcp_server_capabilities.get(&new_id) {
+                        log::info!("📋 服务器能力: 工具:{} 资源:{} 提示:{}",
+                            capabilities.tools.len(),
+                            capabilities.resources.len(),
+                            capabilities.prompts.len()
+                        );
+                    }
+                },
+                (Some(old_id), None) => {
+                    let old_server_name = self.server_names.get(&old_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("服务器 {}", old_id.to_string().chars().take(8).collect::<String>()));
+                    log::info!("🚫 AI助手 - 用户取消选择MCP服务器: {}", old_server_name);
+                },
+                (Some(old_id), Some(new_id)) if old_id != new_id => {
+                    let old_server_name = self.server_names.get(&old_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("服务器 {}", old_id.to_string().chars().take(8).collect::<String>()));
+                    let new_server_name = self.server_names.get(&new_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("服务器 {}", new_id.to_string().chars().take(8).collect::<String>()));
+                    log::info!("🔄 AI助手 - 用户切换MCP服务器: {} -> {}", old_server_name, new_server_name);
+
+                    if let Some(capabilities) = self.mcp_server_capabilities.get(&new_id) {
+                        log::info!("📋 新服务器能力: 工具:{} 资源:{} 提示:{}",
+                            capabilities.tools.len(),
+                            capabilities.resources.len(),
+                            capabilities.prompts.len()
+                        );
+                    }
+                },
+                _ => {
+                    // 没有实际变化
+                }
+            }
+        }
     }
 
     /// 更新MCP服务器能力
@@ -1049,20 +1209,185 @@ impl AIAssistState {
     pub fn approve_tool_calls(&mut self) {
         if let Some(batch) = &mut self.current_tool_call_batch {
             batch.user_approved = true;
+            log::info!("用户确认执行 {} 个工具调用", batch.tool_calls.len());
+
+            // 开始执行工具调用
+            self.execute_approved_tool_calls();
         }
         self.show_tool_call_confirmation = false;
     }
 
     /// 拒绝工具调用
     pub fn reject_tool_calls(&mut self) {
+        if let Some(batch) = &self.current_tool_call_batch {
+            log::info!("用户拒绝执行 {} 个工具调用", batch.tool_calls.len());
+
+            // 创建拒绝消息并添加到聊天中
+            let reject_message = ChatMessage {
+                id: Uuid::new_v4(),
+                role: MessageRole::System,
+                content: "用户拒绝了工具调用请求。".to_string(),
+                timestamp: Utc::now(),
+                attachments: vec![],
+                tool_calls: None,
+                tool_call_results: None,
+            };
+
+            self.chat_messages.push(reject_message.clone());
+
+            // 添加到当前会话
+            if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                session.messages.push(reject_message);
+            }
+        }
+
         self.current_tool_call_batch = None;
         self.show_tool_call_confirmation = false;
+        self.auto_save_sessions();
+    }
+
+    /// 执行已确认的工具调用
+    fn execute_approved_tool_calls(&mut self) {
+        if let Some(batch) = self.current_tool_call_batch.clone() {
+            if !batch.user_approved {
+                log::warn!("尝试执行未确认的工具调用");
+                return;
+            }
+
+            log::info!("开始执行 {} 个已确认的工具调用", batch.tool_calls.len());
+
+            // 创建执行开始的系统消息
+            let start_message = ChatMessage {
+                id: Uuid::new_v4(),
+                role: MessageRole::System,
+                content: format!("🔧 开始执行 {} 个工具调用...", batch.tool_calls.len()),
+                timestamp: Utc::now(),
+                attachments: vec![],
+                tool_calls: None,
+                tool_call_results: None,
+            };
+
+            self.chat_messages.push(start_message.clone());
+
+            // 添加到当前会话
+            if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                session.messages.push(start_message);
+            }
+
+            // TODO: 实现实际的MCP工具调用执行
+            // 这里需要调用MCP客户端来执行工具
+            // 暂时创建一个占位符消息
+            let placeholder_message = ChatMessage {
+                id: Uuid::new_v4(),
+                role: MessageRole::System,
+                content: "⏳ 工具执行中，请稍候...".to_string(),
+                timestamp: Utc::now(),
+                attachments: vec![],
+                tool_calls: None,
+                tool_call_results: None,
+            };
+
+            self.chat_messages.push(placeholder_message.clone());
+
+            // 添加到当前会话
+            if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                session.messages.push(placeholder_message);
+            }
+
+            // 清理当前批次
+            self.current_tool_call_batch = None;
+            self.auto_save_sessions();
+        }
     }
 
     /// 添加工具调用结果
     pub fn add_tool_call_result(&mut self, tool_call_id: String, result: McpToolCallResult) {
         if let Some(batch) = &mut self.current_tool_call_batch {
             batch.results.insert(tool_call_id, result);
+        }
+    }
+
+    /// 处理Function Call响应
+    pub fn handle_function_call_response(&mut self, response: crate::api::ChatResponse) {
+        log::info!("处理Function Call响应");
+
+        if let Some(choice) = response.choices.first() {
+            if let Some(tool_calls) = &choice.message.tool_calls {
+                log::info!("检测到 {} 个工具调用", tool_calls.len());
+
+                // 更新当前消息，添加tool_calls
+                if let Some(message_id) = self.streaming_message_id {
+                    // 更新chat_messages中的消息
+                    for msg in &mut self.chat_messages {
+                        if msg.id == message_id {
+                            msg.tool_calls = Some(tool_calls.clone());
+                            break;
+                        }
+                    }
+
+                    // 更新chat_sessions中的消息
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        for msg in &mut session.messages {
+                            if msg.id == message_id {
+                                msg.tool_calls = Some(tool_calls.clone());
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // 存储待处理的响应
+                self.pending_function_call_response = Some(response.clone());
+
+                // 创建工具调用批次并显示确认对话框
+                self.create_tool_call_batch_from_response(response);
+            }
+        }
+    }
+
+    /// 从响应创建工具调用批次
+    fn create_tool_call_batch_from_response(&mut self, response: crate::api::ChatResponse) {
+        if let Some(choice) = response.choices.first() {
+            if let Some(tool_calls) = &choice.message.tool_calls {
+                let batch_id = Uuid::new_v4();
+                let mut pending_calls = Vec::new();
+                let tool_calls_len = tool_calls.len(); // 提前获取长度
+
+                for tool_call in tool_calls {
+                    // 解析MCP工具调用信息
+                    if let Some(mcp_info) = crate::mcp_tools::McpToolConverter::parse_mcp_tool_call(tool_call) {
+                        if let Some(server_id) = self.selected_mcp_server {
+                            let server_name = self.server_names
+                                .get(&server_id)
+                                .cloned()
+                                .unwrap_or_else(|| format!("服务器 {}", server_id));
+
+                            pending_calls.push(PendingToolCall {
+                                tool_call: tool_call.clone(),
+                                mcp_info,
+                                server_id,
+                                server_name,
+                            });
+                        }
+                    }
+                }
+
+                if !pending_calls.is_empty() {
+                    // 创建工具调用批次
+                    let batch = ToolCallBatch {
+                        id: batch_id,
+                        tool_calls: pending_calls,
+                        original_response: response,
+                        results: HashMap::new(),
+                        user_approved: false,
+                    };
+
+                    self.current_tool_call_batch = Some(batch);
+                    self.show_tool_call_confirmation = true;
+
+                    log::info!("创建了包含 {} 个工具调用的批次", tool_calls_len);
+                }
+            }
         }
     }
 }
@@ -1075,6 +1400,10 @@ pub struct ChatMessage {
     pub content: String,
     pub timestamp: DateTime<Utc>,
     pub attachments: Vec<Attachment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<crate::api::ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_results: Option<Vec<ToolCallResult>>,
 }
 
 impl ChatMessage {
@@ -1137,6 +1466,15 @@ pub enum AttachmentType {
     Image,
     File,
     CodeSnippet,
+}
+
+/// Tool call result
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolCallResult {
+    pub tool_call_id: String,
+    pub result: String,
+    pub success: bool,
+    pub error: Option<String>,
 }
 
 /// 待处理的工具调用

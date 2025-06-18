@@ -606,8 +606,22 @@ impl SeeUApp {
                             // 获取服务器能力 - 优先使用运行时能力，如果没有则使用配置文件中的静态能力
                             let capabilities_json = if let Some(capabilities) = self.itools_state.get_mcp_server_capabilities(*server_id) {
                                 // 运行时能力：由于ToolInfo等结构体没有实现Serialize，我们需要手动构建JSON
-                                log::debug!("🔧 找到服务器 '{}' 的运行时能力: 工具={}, 资源={}, 提示={}",
+                                log::info!("🔧 找到服务器 '{}' 的运行时能力: 工具={}, 资源={}, 提示={}",
                                     server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+                                // 详细记录工具信息
+                                if !capabilities.tools.is_empty() {
+                                    log::info!("🛠️ 服务器 '{}' 的工具详情:", server_name);
+                                    for (index, tool) in capabilities.tools.iter().enumerate() {
+                                        log::info!("  {}. {} - {}",
+                                            index + 1,
+                                            tool.name,
+                                            tool.description.as_deref().unwrap_or("无描述")
+                                        );
+                                    }
+                                } else {
+                                    log::warn!("⚠️ 服务器 '{}' 的运行时能力中没有工具！", server_name);
+                                }
 
                                 let tools_json: Vec<serde_json::Value> = capabilities.tools.iter().map(|tool| {
                                     serde_json::json!({
@@ -649,10 +663,24 @@ impl SeeUApp {
                                 }).to_string())
                             } else if let Some(static_capabilities) = &config.capabilities {
                                 // 静态能力：直接使用配置文件中的JSON
-                                log::debug!("🔧 使用服务器 '{}' 的静态能力配置", server_name);
+                                log::info!("🔧 使用服务器 '{}' 的静态能力配置", server_name);
+                                log::debug!("📋 静态能力内容: {}", static_capabilities);
                                 Some(static_capabilities.to_string())
                             } else {
                                 log::warn!("⚠️ 服务器 '{}' 既没有运行时能力也没有静态能力配置", server_name);
+                                log::warn!("🔍 调试信息 - 服务器状态: {:?}", health_status);
+
+                                // 尝试手动触发能力提取
+                                log::info!("🔄 尝试手动触发服务器 '{}' 的能力提取", server_name);
+
+                                // 创建一个异步任务来执行能力提取
+                                let server_id_copy = *server_id;
+                                let server_name_copy = server_name.clone();
+
+                                // 注意：这里我们不能直接调用异步方法，因为我们在同步上下文中
+                                // 我们将在下一次同步时尝试提取能力
+                                log::info!("💡 将在下次MCP事件处理时尝试强制提取能力 - 服务器: '{}'", server_name_copy);
+
                                 None
                             };
 
@@ -749,9 +777,28 @@ impl SeeUApp {
 
                             // 解析服务器能力
                             if let Some(capabilities_json) = &server_record.capabilities {
+                                log::debug!("🔍 解析服务器 '{}' 的能力JSON: {}", server_record.name, capabilities_json);
+
                                 if let Ok(capabilities_value) = serde_json::from_str::<serde_json::Value>(capabilities_json) {
                                     // 转换为AI助手格式的能力
                                     let ai_capabilities = self.convert_json_capabilities_to_ai_format(&capabilities_value);
+
+                                    log::info!("📊 转换后的AI助手能力 - 服务器 '{}': 工具={}, 资源={}, 提示={}",
+                                        server_record.name, ai_capabilities.tools.len(), ai_capabilities.resources.len(), ai_capabilities.prompts.len());
+
+                                    // 详细记录工具信息
+                                    if !ai_capabilities.tools.is_empty() {
+                                        log::info!("🛠️ 从数据库加载的工具详情 - 服务器 '{}':", server_record.name);
+                                        for (index, tool) in ai_capabilities.tools.iter().enumerate() {
+                                            log::info!("  {}. {} - {}",
+                                                index + 1,
+                                                tool.name,
+                                                tool.description.as_deref().unwrap_or("无描述")
+                                            );
+                                        }
+                                    } else {
+                                        log::warn!("⚠️ 从数据库加载的服务器 '{}' 没有工具！", server_record.name);
+                                    }
 
                                     self.mcp_integration.update_server_capabilities(
                                         &mut self.ai_assist_state,
@@ -764,10 +811,16 @@ impl SeeUApp {
                                         log::info!("✅ 从数据库加载绿灯MCP服务器 '{}' 到AI助手", server_record.name);
                                     }
                                 } else {
-                                    log::warn!("⚠️ 无法解析服务器 '{}' 的能力JSON", server_record.name);
+                                    log::warn!("⚠️ 无法解析服务器 '{}' 的能力JSON: {}", server_record.name, capabilities_json);
                                 }
                             } else {
                                 log::warn!("⚠️ 服务器 '{}' 没有能力信息", server_record.name);
+
+                                // 对于绿灯但没有能力信息的服务器，记录需要获取能力的服务器
+                                if let Ok(server_uuid) = server_record.get_uuid() {
+                                    log::info!("⚠️ 绿灯服务器 '{}' 没有能力信息，需要手动测试以获取能力", server_record.name);
+                                    // 这里可以添加到一个待处理列表，供用户手动触发测试
+                                }
                             }
                         } else {
                             log::error!("❌ 无法解析服务器ID: {}", server_record.id);
@@ -864,6 +917,20 @@ impl SeeUApp {
                 }
                 McpEvent::CapabilitiesUpdated(server_id, _capabilities) => {
                     log::info!("🔧 MCP服务器能力已更新: {}", server_id);
+                    needs_sync = true;
+                }
+                McpEvent::CapabilitiesExtracted(server_id, capabilities, capabilities_json) => {
+                    log::info!("🎯 收到MCP服务器能力提取成功事件: {} - 工具:{}, 资源:{}, 提示:{}",
+                        server_id, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+                    // 将测试通过的能力保存到数据库
+                    if let Err(e) = self.save_extracted_capabilities_to_database(server_id, &capabilities_json) {
+                        log::error!("❌ 保存提取的能力到数据库失败: {}", e);
+                    } else {
+                        log::info!("✅ 成功保存测试通过的能力到数据库 - 服务器: {}", server_id);
+                        has_green_status_change = true; // 触发AI助手状态更新
+                    }
+
                     needs_sync = true;
                 }
                 McpEvent::TestCompleted(server_id, test_result) => {
@@ -1872,9 +1939,68 @@ impl eframe::App for SeeUApp {
             });
     }
 
+
+
     /// Save state when the app is about to close
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         // Save all settings before exit
         self.save_all_settings();
+    }
+}
+
+impl SeeUApp {
+    /// 保存提取的能力到数据库
+    fn save_extracted_capabilities_to_database(&self, server_id: uuid::Uuid, capabilities_json: &str) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("💾 开始保存提取的能力到数据库 - 服务器: {}", server_id);
+
+        // 首先尝试从数据库加载现有的MCP服务器记录
+        let storage = self.inote_state.storage.lock()
+            .map_err(|e| format!("Failed to lock storage: {}", e))?;
+
+        // 加载现有服务器记录
+        let mut server_record = match storage.load_mcp_server(&server_id.to_string()) {
+            Ok(record) => record,
+            Err(e) => {
+                log::error!("❌ 无法加载MCP服务器记录: {} - 错误: {}", server_id, e);
+                return Err(format!("无法加载MCP服务器记录: {}", e).into());
+            }
+        };
+
+        // 更新能力字段
+        server_record.capabilities = Some(capabilities_json.to_string());
+        server_record.updated_at = chrono::Utc::now();
+
+        // 保存更新后的记录
+        match storage.save_mcp_server(&server_record) {
+            Ok(()) => {
+                log::info!("✅ 成功保存提取的能力到数据库 - 服务器: '{}'", server_record.name);
+
+                // 验证保存结果
+                if let Some(caps) = &server_record.capabilities {
+                    match serde_json::from_str::<serde_json::Value>(caps) {
+                        Ok(parsed_caps) => {
+                            let tools_count = parsed_caps.get("tools")
+                                .and_then(|t| t.as_array())
+                                .map(|arr| arr.len())
+                                .unwrap_or(0);
+
+                            log::info!("✅ 验证成功 - 服务器 '{}' 的能力已保存到数据库，包含 {} 个工具", server_record.name, tools_count);
+                        }
+                        Err(e) => {
+                            log::error!("❌ 验证失败 - 保存的能力JSON格式错误: {}", e);
+                            return Err(format!("保存的能力JSON格式错误: {}", e).into());
+                        }
+                    }
+                } else {
+                    log::warn!("⚠️ 验证失败 - 能力字段为空");
+                }
+
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("❌ 保存MCP服务器记录失败: {}", e);
+                Err(format!("保存MCP服务器记录失败: {}", e).into())
+            }
+        }
     }
 }

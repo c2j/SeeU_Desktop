@@ -29,7 +29,7 @@ pub struct ApiService {
 }
 
 /// 聊天消息请求 (OpenAI compatible)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -214,7 +214,31 @@ impl ApiService {
         }).collect::<Vec<_>>();
 
         let url = settings.get_chat_url();
-        log::info!("Sending request to: {}", url);
+        log::info!("📤 发送请求到: {}", url);
+        log::info!("🤖 使用模型: {}", settings.model);
+        log::info!("💬 消息数量: {}", chat_messages.len());
+
+        // 记录tools信息
+        if let Some(ref tools_vec) = tools {
+            log::info!("🛠️ 发送工具定义给LLM:");
+            log::info!("  - 工具数量: {}", tools_vec.len());
+            for (index, tool) in tools_vec.iter().enumerate() {
+                log::info!("  {}. 工具名称: {}", index + 1, tool.function.name);
+                log::info!("     工具描述: {}", tool.function.description.as_deref().unwrap_or("无描述"));
+                if let Some(params) = &tool.function.parameters {
+                    if let Some(properties) = params.get("properties") {
+                        if let Some(props_obj) = properties.as_object() {
+                            log::info!("     参数数量: {}", props_obj.len());
+                            for (param_name, _) in props_obj.iter() {
+                                log::info!("       - {}", param_name);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            log::info!("🚫 未发送工具定义 (无选中的MCP服务器)");
+        }
 
         // 创建请求
         let request = ChatRequest {
@@ -292,7 +316,31 @@ impl ApiService {
         }).collect::<Vec<_>>();
 
         let url = settings.get_chat_url();
-        log::info!("Sending request to: {}", url);
+        log::info!("📤 发送请求到: {}", url);
+        log::info!("🤖 使用模型: {}", settings.model);
+        log::info!("💬 消息数量: {}", chat_messages.len());
+
+        // 记录tools信息
+        if let Some(ref tools_vec) = tools {
+            log::info!("🛠️ 发送工具定义给LLM:");
+            log::info!("  - 工具数量: {}", tools_vec.len());
+            for (index, tool) in tools_vec.iter().enumerate() {
+                log::info!("  {}. 工具名称: {}", index + 1, tool.function.name);
+                log::info!("     工具描述: {}", tool.function.description.as_deref().unwrap_or("无描述"));
+                if let Some(params) = &tool.function.parameters {
+                    if let Some(properties) = params.get("properties") {
+                        if let Some(props_obj) = properties.as_object() {
+                            log::info!("     参数数量: {}", props_obj.len());
+                            for (param_name, _) in props_obj.iter() {
+                                log::info!("       - {}", param_name);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            log::info!("🚫 未发送工具定义 (无选中的MCP服务器)");
+        }
 
         // 创建请求
         let request = ChatRequest {
@@ -364,6 +412,17 @@ impl ApiService {
         messages: Vec<(MessageRole, String)>,
         callback: impl Fn(String) + Send + Sync + 'static,
     ) -> Result<()> {
+        self.send_chat_stream_with_tools(settings, messages, None, callback).await
+    }
+
+    /// 发送流式聊天请求，支持工具调用 (OpenAI compatible)
+    pub async fn send_chat_stream_with_tools(
+        &self,
+        settings: &AISettings,
+        messages: Vec<(MessageRole, String)>,
+        tools: Option<Vec<Tool>>,
+        callback: impl Fn(String) + Send + Sync + 'static,
+    ) -> Result<()> {
         // 转换消息格式
         let chat_messages = messages.iter().map(|(role, content)| {
             ChatMessage {
@@ -380,18 +439,75 @@ impl ApiService {
         }).collect::<Vec<_>>();
 
         let url = settings.get_chat_url();
-        log::info!("Sending streaming request to: {}", url);
+        log::info!("📤 发送流式请求到: {}", url);
+        log::info!("🤖 使用模型: {}", settings.model);
+        log::info!("💬 消息数量: {}", chat_messages.len());
+
+        // 记录工具信息
+        if let Some(ref tools_vec) = tools {
+            log::info!("🛠️ 发送工具定义给LLM:");
+            log::info!("  - 工具数量: {}", tools_vec.len());
+            for (i, tool) in tools_vec.iter().enumerate() {
+                log::info!("  {}. 工具名称: {}", i + 1, tool.function.name);
+                log::info!("     工具描述: {}", tool.function.description.as_deref().unwrap_or("无描述"));
+                if let Some(params) = &tool.function.parameters {
+                    if let Some(properties) = params.get("properties").and_then(|p| p.as_object()) {
+                        log::info!("     参数数量: {}", properties.len());
+                        for param_name in properties.keys() {
+                            log::info!("       - {}", param_name);
+                        }
+                    }
+                }
+            }
+        } else {
+            log::info!("🚫 未发送工具定义 (无选中的MCP服务器)");
+        }
 
         // 创建请求
         let request = ChatRequest {
             model: settings.model.clone(),
-            messages: chat_messages,
+            messages: chat_messages.clone(),
             stream: true,
             temperature: settings.temperature,
             max_tokens: settings.max_tokens,
-            tools: None,
-            tool_choice: None,
+            tools: tools.clone(),
+            tool_choice: if tools.is_some() { Some("auto".to_string()) } else { None },
         };
+
+        // 打印完整的请求信息
+        log::info!("📋 完整请求信息:");
+        log::info!("  URL: {}", url);
+        log::info!("  Model: {}", request.model);
+        log::info!("  Stream: {}", request.stream);
+        log::info!("  Temperature: {:?}", request.temperature);
+        log::info!("  Max Tokens: {:?}", request.max_tokens);
+        log::info!("  Tool Choice: {:?}", request.tool_choice);
+
+        // 打印消息内容
+        log::info!("  Messages:");
+        for (i, msg) in request.messages.iter().enumerate() {
+            log::info!("    {}. Role: {}, Content: {}", i + 1, msg.role,
+                if msg.content.len() > 100 {
+                    format!("{}...", &msg.content[..100])
+                } else {
+                    msg.content.clone()
+                });
+        }
+
+        // 打印工具定义的JSON
+        if let Some(ref tools_vec) = request.tools {
+            match serde_json::to_string_pretty(tools_vec) {
+                Ok(tools_json) => {
+                    log::info!("  Tools JSON:");
+                    for line in tools_json.lines() {
+                        log::info!("    {}", line);
+                    }
+                }
+                Err(e) => {
+                    log::error!("  Failed to serialize tools to JSON: {}", e);
+                }
+            }
+        }
 
         let mut request_builder = self.client.post(&url)
             .header(header::CONTENT_TYPE, "application/json");

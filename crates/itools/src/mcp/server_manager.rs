@@ -218,8 +218,17 @@ impl McpServerManager {
 
     /// Save configuration after test (with updated status from client)
     async fn save_configuration_after_test(&mut self) -> Result<()> {
+        log::info!("💾 开始保存测试后的配置到文件");
+
         // 从客户端获取更新后的配置
         let updated_configs = self.client.get_all_server_configs();
+
+        log::info!("📋 从客户端获取到 {} 个更新后的配置", updated_configs.len());
+
+        // 记录每个配置的状态
+        for config in &updated_configs {
+            log::info!("📊 配置状态 - '{}': {:?}", config.name, config.last_health_status);
+        }
 
         // 更新本地配置
         self.server_directories.clear();
@@ -232,7 +241,16 @@ impl McpServerManager {
         }
 
         // 保存到文件
-        self.save_configuration().await
+        log::info!("💾 开始保存配置到文件: {:?}", self.config_path);
+        let result = self.save_configuration().await;
+
+        if result.is_ok() {
+            log::info!("✅ 配置保存成功");
+        } else {
+            log::error!("❌ 配置保存失败: {:?}", result);
+        }
+
+        result
     }
 
     /// Create default configuration
@@ -262,6 +280,15 @@ impl McpServerManager {
 
         let directory = config.directory.clone();
         let server_id = config.id;
+        let server_name = config.name.clone();
+        let is_enabled = config.enabled;
+
+        // 调试：检查传入的配置是否包含能力信息
+        if let Some(capabilities) = &config.capabilities {
+            log::info!("📥 添加服务器时收到能力信息: {}", serde_json::to_string_pretty(capabilities).unwrap_or_default());
+        } else {
+            log::info!("📥 添加服务器时没有能力信息");
+        }
 
         // Add to directory
         self.server_directories
@@ -275,7 +302,13 @@ impl McpServerManager {
         // Save configuration
         self.save_configuration().await?;
 
-        log::info!("Added new server: {}", server_id);
+        log::info!("✅ 已添加新服务器: '{}' ({})", server_name, server_id);
+
+        // 如果服务器已启用，建议用户测试以获取能力定义
+        if is_enabled {
+            log::info!("💡 新添加的服务器 '{}' 已启用，建议进行测试以获取能力定义", server_name);
+        }
+
         Ok(server_id)
     }
 
@@ -310,6 +343,9 @@ impl McpServerManager {
         // Validate the updated configuration
         self.validate_server_config(&updated_config)?;
 
+        let server_name = updated_config.name.clone();
+        let was_enabled = updated_config.enabled;
+
         // Find and update in directories
         let mut found = false;
         let mut old_directory = String::new();
@@ -340,7 +376,13 @@ impl McpServerManager {
         // Save configuration
         self.save_configuration().await?;
 
-        log::info!("Updated server: {} (moved from '{}' to '{}')", server_id, old_directory, new_directory);
+        log::info!("✅ 已更新服务器: '{}' ({}) (从 '{}' 移动到 '{}')", server_name, server_id, old_directory, new_directory);
+
+        // 如果服务器已启用，建议用户测试以获取能力定义
+        if was_enabled {
+            log::info!("💡 更新后的服务器 '{}' 已启用，建议进行测试以获取能力定义", server_name);
+        }
+
         Ok(())
     }
 
@@ -453,9 +495,24 @@ impl McpServerManager {
         self.client.get_server_health_status(server_id)
     }
 
+    /// Manually update server status to Green (after successful testing)
+    pub async fn update_server_status_to_green(&mut self, server_id: Uuid) -> Result<()> {
+        self.client.update_server_status_to_green(server_id)?;
+
+        // Save configuration with updated status from client
+        self.save_configuration_after_test().await?;
+
+        Ok(())
+    }
+
     /// Get server capabilities
     pub fn get_server_capabilities(&self, server_id: Uuid) -> Option<super::rmcp_client::ServerCapabilities> {
         self.client.get_server_capabilities(server_id)
+    }
+
+    /// 获取rmcp客户端的可变引用（用于调试和测试）
+    pub fn get_rmcp_client_mut(&mut self) -> Option<&mut RmcpClient> {
+        Some(&mut self.client)
     }
 
     /// Get server test results
@@ -472,14 +529,31 @@ impl McpServerManager {
     pub async fn import_server_config(&mut self, file_path: PathBuf) -> Result<Vec<Uuid>> {
         let content = tokio::fs::read_to_string(file_path).await?;
         let configs: Vec<McpServerConfig> = serde_json::from_str(&content)?;
-        
+
         let mut server_ids = Vec::new();
+        let mut enabled_servers = Vec::new();
+
         for config in configs {
+            let server_name = config.name.clone();
+            let is_enabled = config.enabled;
             let server_id = self.add_server(config).await?;
             server_ids.push(server_id);
+
+            if is_enabled {
+                enabled_servers.push((server_id, server_name));
+            }
         }
-        
-        log::info!("Imported {} server configurations", server_ids.len());
+
+        log::info!("✅ 已导入 {} 个服务器配置", server_ids.len());
+
+        // 对于已启用的服务器，建议用户测试以获取能力定义
+        if !enabled_servers.is_empty() {
+            log::info!("💡 导入了 {} 个已启用的服务器，建议进行测试以获取能力定义", enabled_servers.len());
+            for (_, server_name) in enabled_servers {
+                log::info!("  - {}", server_name);
+            }
+        }
+
         Ok(server_ids)
     }
 

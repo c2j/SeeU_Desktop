@@ -358,6 +358,8 @@ pub enum McpEvent {
     ServerDisconnected(Uuid),
     ServerError(Uuid, String),
     CapabilitiesUpdated(Uuid, ServerCapabilities),
+    /// Server capabilities extracted and ready for database storage
+    CapabilitiesExtracted(Uuid, ServerCapabilities, String), // server_id, capabilities, capabilities_json_string
     HealthStatusChanged(Uuid, ServerHealthStatus),
     TestCompleted(Uuid, TestResult),
 }
@@ -546,23 +548,24 @@ impl RmcpClient {
                 log::debug!("⏳ Allowing rmcp service to stabilize after capability query...");
                 tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
-                // Verify the service is still healthy after capability query
+                // Verify the service is still healthy after capability query with timeout
                 log::debug!("🔍 Verifying rmcp service health after capability query...");
                 if let Some(connection) = self.servers.get(&server_id) {
                     if let Some(rmcp_service) = &connection.rmcp_service {
-                        match rmcp_service.list_tools().await {
-                            Ok(_) => {
+                        match tokio::time::timeout(
+                            tokio::time::Duration::from_secs(5),
+                            rmcp_service.list_tools()
+                        ).await {
+                            Ok(Ok(_)) => {
                                 log::info!("✅ RMCP service is healthy after capability query");
                             }
-                            Err(e) => {
-                                log::error!("❌ RMCP service became unhealthy after capability query: {}", e);
-                                // Mark as disconnected so it will be reconnected on next use
-                                if let Some(conn) = self.servers.get_mut(&server_id) {
-                                    conn.status = ConnectionStatus::Disconnected;
-                                    conn.rmcp_service = None;
-                                    conn.capabilities = None;
-                                }
-                                return Err(anyhow::anyhow!("RMCP service became unhealthy after capability query: {}", e));
+                            Ok(Err(e)) => {
+                                log::warn!("⚠️ RMCP service health check failed after capability query: {}", e);
+                                // Don't fail the connection, just log the warning
+                            }
+                            Err(_) => {
+                                log::warn!("⏰ RMCP service health check timed out after capability query");
+                                // Don't fail the connection, just log the warning
                             }
                         }
                     }
@@ -643,23 +646,24 @@ impl RmcpClient {
                 log::debug!("⏳ Allowing SSE rmcp service to stabilize after capability query...");
                 tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
-                // Verify the service is still healthy after capability query
+                // Verify the service is still healthy after capability query with timeout
                 log::debug!("🔍 Verifying SSE rmcp service health after capability query...");
                 if let Some(connection) = self.servers.get(&server_id) {
                     if let Some(rmcp_service) = &connection.rmcp_service {
-                        match rmcp_service.list_tools().await {
-                            Ok(_) => {
+                        match tokio::time::timeout(
+                            tokio::time::Duration::from_secs(5),
+                            rmcp_service.list_tools()
+                        ).await {
+                            Ok(Ok(_)) => {
                                 log::info!("✅ SSE RMCP service is healthy after capability query");
                             }
-                            Err(e) => {
-                                log::error!("❌ SSE RMCP service became unhealthy after capability query: {}", e);
-                                // Mark as disconnected so it will be reconnected on next use
-                                if let Some(conn) = self.servers.get_mut(&server_id) {
-                                    conn.status = ConnectionStatus::Disconnected;
-                                    conn.rmcp_service = None;
-                                    conn.capabilities = None;
-                                }
-                                return Err(anyhow::anyhow!("SSE RMCP service became unhealthy after capability query: {}", e));
+                            Ok(Err(e)) => {
+                                log::warn!("⚠️ SSE RMCP service health check failed after capability query: {}", e);
+                                // Don't fail the connection, just log the warning
+                            }
+                            Err(_) => {
+                                log::warn!("⏰ SSE RMCP service health check timed out after capability query");
+                                // Don't fail the connection, just log the warning
                             }
                         }
                     }
@@ -771,16 +775,12 @@ impl RmcpClient {
     }
 
     /// Query server capabilities using MCP protocol
-    async fn query_server_capabilities(&mut self, server_id: Uuid) -> Result<()> {
-        log::info!("Querying capabilities for server: {}", server_id);
+    pub async fn query_server_capabilities(&mut self, server_id: Uuid) -> Result<()> {
+        log::info!("🔍 开始查询服务器能力: {}", server_id);
 
         // Check if server is connected
         let connection = self.servers.get(&server_id)
             .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
-
-        if connection.status != ConnectionStatus::Connected {
-            return Err(anyhow::anyhow!("Server is not connected"));
-        }
 
         // Get server config for logging
         let server_name = {
@@ -789,35 +789,112 @@ impl RmcpClient {
             config.name.clone()
         };
 
+        log::info!("📊 服务器状态检查 - '{}' ({}):", server_name, server_id);
+        log::info!("  - 连接状态: {:?}", connection.status);
+        log::info!("  - 健康状态: {:?}", connection.health_status);
+        log::info!("  - rmcp服务可用: {}", connection.rmcp_service.is_some());
+
+        if connection.status != ConnectionStatus::Connected {
+            log::warn!("⚠️ 服务器未连接，无法查询能力 - '{}': {:?}", server_name, connection.status);
+            return Err(anyhow::anyhow!("Server is not connected"));
+        }
+
         // Check if we have rmcp service - if so, use it directly
         if connection.rmcp_service.is_some() {
-            log::info!("Using rmcp service to extract capabilities for server: {}", server_name);
+            log::info!("✅ 使用现有rmcp服务提取能力 - 服务器: '{}'", server_name);
 
             // Extract capabilities from rmcp service
-            let capabilities = self.extract_capabilities_from_rmcp_service(server_id).await?;
+            match self.extract_capabilities_from_rmcp_service(server_id).await {
+                Ok(capabilities) => {
+                    log::info!("🎉 成功从rmcp服务提取能力 - 服务器: '{}' - 工具:{}, 资源:{}, 提示:{}",
+                               server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
 
-            log::info!("Successfully extracted capabilities from rmcp service for server: {} - Tools: {}, Resources: {}, Prompts: {}",
-                       server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+                    // 详细记录工具信息
+                    if !capabilities.tools.is_empty() {
+                        log::info!("🛠️ 提取的工具详情 - 服务器 '{}':", server_name);
+                        for (index, tool) in capabilities.tools.iter().enumerate() {
+                            log::info!("  {}. {} - {}",
+                                index + 1,
+                                tool.name,
+                                tool.description.as_deref().unwrap_or("无描述")
+                            );
+                        }
+                    } else {
+                        log::warn!("⚠️ 从rmcp服务提取的能力中没有工具 - 服务器: '{}'", server_name);
+                    }
 
-            // Update connection with capabilities
-            if let Some(connection) = self.servers.get_mut(&server_id) {
-                connection.capabilities = Some(capabilities.clone());
+                    // Update connection with capabilities
+                    if let Some(connection) = self.servers.get_mut(&server_id) {
+                        connection.capabilities = Some(capabilities.clone());
+                        log::info!("✅ 已更新连接中的能力信息 - 服务器: '{}'", server_name);
+                    }
+
+                    // Save the extracted capabilities to the server configuration
+                    if let Err(e) = self.save_runtime_capabilities(server_id, &capabilities).await {
+                        log::error!("❌ 保存运行时能力失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                    } else {
+                        log::info!("✅ 成功保存运行时能力到配置 - 服务器: '{}'", server_name);
+                    }
+
+                    // Send event to UI
+                    self.send_event(McpEvent::CapabilitiesUpdated(server_id, capabilities));
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::error!("❌ 从rmcp服务提取能力失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                    // 继续执行fallback逻辑
+                }
             }
+        } else {
+            log::warn!("⚠️ 没有可用的rmcp服务 - 服务器: '{}'", server_name);
 
-            // Save the extracted capabilities to the server configuration
-            if let Err(e) = self.save_runtime_capabilities(server_id, &capabilities).await {
-                log::warn!("Failed to save runtime capabilities for server {}: {}", server_id, e);
-            } else {
-                log::info!("✅ Successfully saved runtime capabilities for server: {}", server_name);
+            // 尝试创建新的rmcp服务进行能力提取
+            log::info!("🔄 尝试创建新的rmcp服务进行能力提取 - 服务器: '{}'", server_name);
+            match self.extract_capabilities_with_fresh_service(server_id).await {
+                Ok(capabilities) => {
+                    log::info!("🎉 使用新rmcp服务成功提取能力 - 服务器: '{}' - 工具:{}, 资源:{}, 提示:{}",
+                               server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+                    // 详细记录工具信息
+                    if !capabilities.tools.is_empty() {
+                        log::info!("🛠️ 新服务提取的工具详情 - 服务器 '{}':", server_name);
+                        for (index, tool) in capabilities.tools.iter().enumerate() {
+                            log::info!("  {}. {} - {}",
+                                index + 1,
+                                tool.name,
+                                tool.description.as_deref().unwrap_or("无描述")
+                            );
+                        }
+                    } else {
+                        log::warn!("⚠️ 新rmcp服务提取的能力中没有工具 - 服务器: '{}'", server_name);
+                    }
+
+                    // Update connection with capabilities
+                    if let Some(connection) = self.servers.get_mut(&server_id) {
+                        connection.capabilities = Some(capabilities.clone());
+                        log::info!("✅ 已更新连接中的能力信息 - 服务器: '{}'", server_name);
+                    }
+
+                    // Save the extracted capabilities to the server configuration
+                    if let Err(e) = self.save_runtime_capabilities(server_id, &capabilities).await {
+                        log::error!("❌ 保存运行时能力失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                    } else {
+                        log::info!("✅ 成功保存运行时能力到配置 - 服务器: '{}'", server_name);
+                    }
+
+                    // Send event to UI
+                    self.send_event(McpEvent::CapabilitiesUpdated(server_id, capabilities));
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::error!("❌ 使用新rmcp服务提取能力失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                    // 继续执行fallback逻辑
+                }
             }
-
-            // Send event to UI
-            self.send_event(McpEvent::CapabilitiesUpdated(server_id, capabilities));
-            return Ok(());
         }
 
         // Fallback: no rmcp service available, return empty capabilities
-        log::warn!("No rmcp service available for server: {}, returning empty capabilities", server_name);
+        log::error!("🚫 所有能力提取方法都失败，返回空能力 - 服务器: '{}'", server_name);
 
         let capabilities = ServerCapabilities {
             tools: Vec::new(),
@@ -853,10 +930,14 @@ impl RmcpClient {
         };
 
         // Use the real rmcp service to query actual capabilities
-        // Query tools using the real MCP protocol
-        let tools = match rmcp_client.list_tools().await {
-            Ok(response) => {
-                log::info!("Successfully queried tools from rmcp service");
+        // Query tools using the real MCP protocol with timeout
+        let tools = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            rmcp_client.list_tools()
+        ).await {
+            Ok(Ok(response)) => {
+                log::info!("✅ 成功从rmcp服务查询工具 - 服务器: {}", server_id);
+                log::debug!("🔍 原始工具响应: {}", serde_json::to_string_pretty(&response).unwrap_or_default());
 
                 // Parse the response to extract tools
                 if let Some(tools_array) = response.get("tools").and_then(|t| t.as_array()) {
@@ -865,6 +946,8 @@ impl RmcpClient {
                         let description = tool.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
                         let input_schema = tool.get("inputSchema").cloned();
 
+                        log::debug!("🔧 解析工具: {} - {}", name, description.as_deref().unwrap_or("无描述"));
+
                         Some(ToolInfo {
                             name,
                             description,
@@ -872,22 +955,42 @@ impl RmcpClient {
                         })
                     }).collect();
 
-                    log::info!("Parsed {} tools from rmcp service response", tool_infos.len());
+                    log::info!("📊 成功解析 {} 个工具从rmcp服务响应", tool_infos.len());
+                    if !tool_infos.is_empty() {
+                        log::info!("🛠️ 解析的工具列表:");
+                        for (index, tool) in tool_infos.iter().enumerate() {
+                            log::info!("  {}. {} - {}",
+                                index + 1,
+                                tool.name,
+                                tool.description.as_deref().unwrap_or("无描述")
+                            );
+                        }
+                    } else {
+                        log::warn!("⚠️ 工具数组为空，但响应中包含tools字段");
+                    }
                     tool_infos
                 } else {
-                    log::warn!("No tools array found in rmcp service response");
+                    log::warn!("⚠️ rmcp服务响应中没有找到tools数组");
+                    log::debug!("📋 响应结构: {}", serde_json::to_string_pretty(&response).unwrap_or_default());
                     Vec::new()
                 }
             }
-            Err(e) => {
-                log::warn!("Failed to query tools from rmcp service: {}", e);
+            Ok(Err(e)) => {
+                log::error!("❌ 从rmcp服务查询工具失败 - 服务器: {} - 错误: {}", server_id, e);
+                Vec::new()
+            }
+            Err(_) => {
+                log::error!("⏰ 从rmcp服务查询工具超时 - 服务器: {}", server_id);
                 Vec::new()
             }
         };
 
-        // Query resources using the real MCP protocol
-        let resources = match rmcp_client.list_resources().await {
-            Ok(response) => {
+        // Query resources using the real MCP protocol with timeout
+        let resources = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            rmcp_client.list_resources()
+        ).await {
+            Ok(Ok(response)) => {
                 log::info!("Successfully queried resources from rmcp service");
 
                 // Parse the response to extract resources
@@ -913,15 +1016,22 @@ impl RmcpClient {
                     Vec::new()
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 log::warn!("Failed to query resources from rmcp service: {}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                log::warn!("⏰ 从rmcp服务查询资源超时");
                 Vec::new()
             }
         };
 
-        // Query prompts using the real MCP protocol
-        let prompts = match rmcp_client.list_prompts().await {
-            Ok(response) => {
+        // Query prompts using the real MCP protocol with timeout
+        let prompts = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            rmcp_client.list_prompts()
+        ).await {
+            Ok(Ok(response)) => {
                 log::info!("Successfully queried prompts from rmcp service");
 
                 // Parse the response to extract prompts
@@ -957,8 +1067,12 @@ impl RmcpClient {
                     Vec::new()
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 log::warn!("Failed to query prompts from rmcp service: {}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                log::warn!("⏰ 从rmcp服务查询提示超时");
                 Vec::new()
             }
         };
@@ -1060,13 +1174,18 @@ impl RmcpClient {
     async fn extract_capabilities_from_command_service(&self, service: &rmcp::service::RunningService<rmcp::RoleClient, ()>) -> Result<ServerCapabilities> {
         log::info!("Extracting capabilities from command-based rmcp service");
 
-        // Query tools using the real MCP protocol
-        let tools = match service.list_tools(Default::default()).await {
-            Ok(response) => {
-                log::info!("Successfully queried tools from rmcp service");
+        // Query tools using the real MCP protocol with timeout
+        let tools = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            service.list_tools(Default::default())
+        ).await {
+            Ok(Ok(response)) => {
+                log::info!("✅ 成功从命令服务查询工具");
 
                 // Parse the response to extract tools
                 let tool_infos: Vec<ToolInfo> = response.tools.iter().map(|tool| {
+                    log::debug!("🔧 解析命令服务工具: {} - {}", tool.name, tool.description);
+
                     ToolInfo {
                         name: tool.name.to_string(),
                         description: Some(tool.description.to_string()),
@@ -1074,18 +1193,35 @@ impl RmcpClient {
                     }
                 }).collect();
 
-                log::info!("Parsed {} tools from rmcp service response", tool_infos.len());
+                log::info!("📊 成功解析 {} 个工具从命令服务响应", tool_infos.len());
+                if !tool_infos.is_empty() {
+                    log::info!("🛠️ 命令服务工具列表:");
+                    for (index, tool) in tool_infos.iter().enumerate() {
+                        log::info!("  {}. {} - {}",
+                            index + 1,
+                            tool.name,
+                            tool.description.as_deref().unwrap_or("无描述")
+                        );
+                    }
+                }
                 tool_infos
             }
-            Err(e) => {
-                log::warn!("Failed to query tools from rmcp service: {}", e);
+            Ok(Err(e)) => {
+                log::error!("❌ 从命令服务查询工具失败: {}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                log::error!("⏰ 从命令服务查询工具超时");
                 Vec::new()
             }
         };
 
-        // Query resources using the real MCP protocol
-        let resources = match service.list_resources(Default::default()).await {
-            Ok(response) => {
+        // Query resources using the real MCP protocol with timeout
+        let resources = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            service.list_resources(Default::default())
+        ).await {
+            Ok(Ok(response)) => {
                 log::info!("Successfully queried resources from rmcp service");
 
                 let resource_infos: Vec<ResourceInfo> = response.resources.iter().map(|resource| {
@@ -1100,15 +1236,22 @@ impl RmcpClient {
                 log::info!("Parsed {} resources from rmcp service response", resource_infos.len());
                 resource_infos
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 log::warn!("Failed to query resources from rmcp service: {}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                log::warn!("⏰ 从命令服务查询资源超时");
                 Vec::new()
             }
         };
 
-        // Query prompts using the real MCP protocol
-        let prompts = match service.list_prompts(Default::default()).await {
-            Ok(response) => {
+        // Query prompts using the real MCP protocol with timeout
+        let prompts = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            service.list_prompts(Default::default())
+        ).await {
+            Ok(Ok(response)) => {
                 log::info!("Successfully queried prompts from rmcp service");
 
                 let prompt_infos: Vec<PromptInfo> = response.prompts.iter().map(|prompt| {
@@ -1134,8 +1277,12 @@ impl RmcpClient {
                 log::info!("Parsed {} prompts from rmcp service response", prompt_infos.len());
                 prompt_infos
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 log::warn!("Failed to query prompts from rmcp service: {}", e);
+                Vec::new()
+            }
+            Err(_) => {
+                log::warn!("⏰ 从命令服务查询提示超时");
                 Vec::new()
             }
         };
@@ -1270,9 +1417,143 @@ impl RmcpClient {
         self.servers.get(&server_id).map(|conn| conn.health_status.clone())
     }
 
+    /// Manually update server health status to Green (after successful testing)
+    pub fn update_server_status_to_green(&mut self, server_id: Uuid) -> Result<()> {
+        let config = self.server_configs.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server config not found"))?;
+
+        let server_name = config.name.clone();
+        log::info!("🟢 手动将服务器状态更新为绿灯: '{}' ({})", server_name, server_id);
+
+        // Update server connection health status
+        if let Some(connection) = self.servers.get_mut(&server_id) {
+            let old_status = connection.health_status.clone();
+            connection.health_status = ServerHealthStatus::Green;
+            connection.last_test_time = Some(chrono::Utc::now());
+
+            log::info!("✅ 服务器状态已更新: '{}' {} -> Green", server_name, format!("{:?}", old_status));
+
+            // Update configuration for persistence
+            if let Some(config) = self.server_configs.get_mut(&server_id) {
+                let old_config_status = config.last_health_status.clone();
+                config.last_health_status = Some(ServerHealthStatus::Green);
+                config.last_test_time = Some(chrono::Utc::now());
+                config.last_test_success = Some(true);
+
+                log::info!("✅ 服务器配置状态已更新: '{}' {:?} -> Green", server_name, old_config_status);
+            } else {
+                log::error!("❌ 未找到服务器配置: '{}'", server_name);
+            }
+
+            // Notify UI of health status change
+            self.send_event(McpEvent::HealthStatusChanged(server_id, ServerHealthStatus::Green));
+
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Server connection not found"))
+        }
+    }
+
     /// Get server capabilities
     pub fn get_server_capabilities(&self, server_id: Uuid) -> Option<ServerCapabilities> {
-        self.servers.get(&server_id).and_then(|conn| conn.capabilities.clone())
+        let capabilities = self.servers.get(&server_id).and_then(|conn| conn.capabilities.clone());
+
+        if let Some(ref caps) = capabilities {
+            let server_name = self.server_configs.get(&server_id)
+                .map(|config| config.name.clone())
+                .unwrap_or_else(|| format!("Unknown server {}", server_id));
+
+            log::debug!("📋 获取服务器能力 - '{}': 工具:{}, 资源:{}, 提示:{}",
+                server_name, caps.tools.len(), caps.resources.len(), caps.prompts.len());
+        } else {
+            let server_name = self.server_configs.get(&server_id)
+                .map(|config| config.name.clone())
+                .unwrap_or_else(|| format!("Unknown server {}", server_id));
+
+            log::warn!("⚠️ 服务器 '{}' 没有能力信息", server_name);
+        }
+
+        capabilities
+    }
+
+    /// 手动触发服务器能力提取（用于调试和测试）
+    pub async fn force_extract_capabilities(&mut self, server_id: Uuid) -> Result<()> {
+        let server_name = self.server_configs.get(&server_id)
+            .map(|config| config.name.clone())
+            .unwrap_or_else(|| format!("Unknown server {}", server_id));
+
+        log::info!("🔄 手动触发能力提取 - 服务器: '{}'", server_name);
+
+        // 强制查询服务器能力，即使服务器状态不是Connected
+        let connection = self.servers.get(&server_id)
+            .ok_or_else(|| anyhow::anyhow!("Server not found"))?;
+
+        log::info!("📊 强制提取前的服务器状态 - '{}' ({}):", server_name, server_id);
+        log::info!("  - 连接状态: {:?}", connection.status);
+        log::info!("  - 健康状态: {:?}", connection.health_status);
+        log::info!("  - rmcp服务可用: {}", connection.rmcp_service.is_some());
+
+        // 尝试使用现有的rmcp服务
+        if connection.rmcp_service.is_some() {
+            log::info!("✅ 使用现有rmcp服务强制提取能力 - 服务器: '{}'", server_name);
+
+            match self.extract_capabilities_from_rmcp_service(server_id).await {
+                Ok(capabilities) => {
+                    log::info!("🎉 强制提取成功 - 服务器: '{}' - 工具:{}, 资源:{}, 提示:{}",
+                               server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+                    // Update connection with capabilities
+                    if let Some(connection) = self.servers.get_mut(&server_id) {
+                        connection.capabilities = Some(capabilities.clone());
+                        log::info!("✅ 已更新连接中的能力信息 - 服务器: '{}'", server_name);
+                    }
+
+                    // Save the extracted capabilities to the server configuration
+                    if let Err(e) = self.save_runtime_capabilities(server_id, &capabilities).await {
+                        log::error!("❌ 保存运行时能力失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                    } else {
+                        log::info!("✅ 成功保存运行时能力到配置 - 服务器: '{}'", server_name);
+                    }
+
+                    // Send event to UI
+                    self.send_event(McpEvent::CapabilitiesUpdated(server_id, capabilities));
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::error!("❌ 强制提取失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                }
+            }
+        }
+
+        // 尝试创建新的rmcp服务
+        log::info!("🔄 尝试创建新的rmcp服务进行强制提取 - 服务器: '{}'", server_name);
+        match self.extract_capabilities_with_fresh_service(server_id).await {
+            Ok(capabilities) => {
+                log::info!("🎉 使用新rmcp服务强制提取成功 - 服务器: '{}' - 工具:{}, 资源:{}, 提示:{}",
+                           server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+                // Update connection with capabilities
+                if let Some(connection) = self.servers.get_mut(&server_id) {
+                    connection.capabilities = Some(capabilities.clone());
+                    log::info!("✅ 已更新连接中的能力信息 - 服务器: '{}'", server_name);
+                }
+
+                // Save the extracted capabilities to the server configuration
+                if let Err(e) = self.save_runtime_capabilities(server_id, &capabilities).await {
+                    log::error!("❌ 保存运行时能力失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                } else {
+                    log::info!("✅ 成功保存运行时能力到配置 - 服务器: '{}'", server_name);
+                }
+
+                // Send event to UI
+                self.send_event(McpEvent::CapabilitiesUpdated(server_id, capabilities));
+                return Ok(());
+            }
+            Err(e) => {
+                log::error!("❌ 使用新rmcp服务强制提取失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                return Err(e);
+            }
+        }
     }
 
     /// Get server test results
@@ -1292,9 +1573,13 @@ impl RmcpClient {
         }
     }
 
-    /// Save runtime capabilities to server configuration
+    /// Save runtime capabilities to server configuration and trigger database update
     async fn save_runtime_capabilities(&mut self, server_id: Uuid, capabilities: &ServerCapabilities) -> Result<()> {
-        log::info!("Saving runtime capabilities for server: {}", server_id);
+        let server_name = self.server_configs.get(&server_id)
+            .map(|config| config.name.clone())
+            .unwrap_or_else(|| format!("Unknown server {}", server_id));
+
+        log::info!("💾 保存运行时能力到配置 - 服务器: '{}'", server_name);
 
         // Convert ServerCapabilities to JSON Value for storage
         let capabilities_json = serde_json::to_value(capabilities)
@@ -1302,16 +1587,23 @@ impl RmcpClient {
 
         // Update the server configuration with the extracted capabilities
         if let Some(config) = self.server_configs.get_mut(&server_id) {
-            config.capabilities = Some(capabilities_json);
-            log::info!("Updated server config with runtime capabilities: {} tools, {} resources, {} prompts",
-                       capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+            config.capabilities = Some(capabilities_json.clone());
+            log::info!("✅ 已更新服务器配置中的运行时能力 - 服务器: '{}' - 工具:{}, 资源:{}, 提示:{}",
+                       server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
         } else {
             return Err(anyhow::anyhow!("Server config not found for ID: {}", server_id));
         }
 
-        // For now, we don't have access to server_manager in RmcpClient
-        // The configurations will be saved when the server manager saves them
-        log::info!("✅ Successfully updated server configuration with runtime capabilities");
+        // 触发数据库更新事件，将测试通过的能力保存到数据库
+        let capabilities_json_string = serde_json::to_string(&capabilities_json)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize capabilities to string: {}", e))?;
+
+        log::info!("📤 触发数据库更新事件 - 保存测试通过的能力到数据库 - 服务器: '{}'", server_name);
+
+        // 发送能力更新事件，包含序列化的能力信息
+        self.send_event(McpEvent::CapabilitiesExtracted(server_id, capabilities.clone(), capabilities_json_string));
+
+        log::info!("✅ 成功保存运行时能力到配置并触发数据库更新 - 服务器: '{}'", server_name);
 
         Ok(())
     }
@@ -1658,34 +1950,62 @@ impl RmcpClient {
 
     /// Test server functionality and update health status (simplified approach)
     pub async fn test_server_functionality(&mut self, server_id: Uuid) -> Result<TestResult> {
-        log::info!("🧪 Testing server functionality for: {}", server_id);
+        log::info!("🧪 开始测试服务器功能: {}", server_id);
 
         let config = self.server_configs.get(&server_id)
             .ok_or_else(|| anyhow::anyhow!("Server config not found"))?
             .clone();
 
-        // Create a fresh rmcp service for testing (like git_stdio.rs)
-        let test_result = match &config.transport {
-            crate::mcp::server_manager::TransportConfig::Command { command, args, .. } => {
-                self.test_server_with_rmcp(server_id, command, args).await
-            }
-            crate::mcp::server_manager::TransportConfig::WebSocket { url } => {
-                self.test_server_with_sse(server_id, url).await
-            }
-            crate::mcp::server_manager::TransportConfig::Tcp { host, port } => {
-                TestResult {
-                    success: false,
-                    stdout: String::new(),
-                    stderr: format!("TCP transport not yet supported for testing: {}:{}", host, port),
-                    error_message: Some("TCP transport is not yet supported for testing".to_string()),
+        let server_name = config.name.clone();
+        log::info!("🎯 测试服务器: '{}' ({})", server_name, server_id);
+
+        // Create a fresh rmcp service for testing (like git_stdio.rs) with overall timeout
+        log::info!("🚀 开始创建测试服务 - 服务器: '{}'", server_name);
+        let test_result = match tokio::time::timeout(
+            tokio::time::Duration::from_secs(60), // 总体超时60秒
+            async {
+                match &config.transport {
+                    crate::mcp::server_manager::TransportConfig::Command { command, args, .. } => {
+                        log::info!("📋 使用命令传输测试 - 服务器: '{}' - 命令: {} {:?}", server_name, command, args);
+                        self.test_server_with_rmcp(server_id, command, args).await
+                    }
+                    crate::mcp::server_manager::TransportConfig::WebSocket { url } => {
+                        log::info!("🌐 使用WebSocket传输测试 - 服务器: '{}' - URL: {}", server_name, url);
+                        self.test_server_with_sse(server_id, url).await
+                    }
+                    crate::mcp::server_manager::TransportConfig::Tcp { host, port } => {
+                        log::warn!("🚫 TCP传输暂不支持测试 - 服务器: '{}' - {}:{}", server_name, host, port);
+                        TestResult {
+                            success: false,
+                            stdout: String::new(),
+                            stderr: format!("TCP transport not yet supported for testing: {}:{}", host, port),
+                            error_message: Some("TCP transport is not yet supported for testing".to_string()),
+                        }
+                    }
+                    crate::mcp::server_manager::TransportConfig::Unix { socket_path } => {
+                        log::warn!("🚫 Unix socket传输暂不支持测试 - 服务器: '{}' - {}", server_name, socket_path);
+                        TestResult {
+                            success: false,
+                            stdout: String::new(),
+                            stderr: format!("Unix socket transport not yet supported for testing: {}", socket_path),
+                            error_message: Some("Unix socket transport is not yet supported for testing".to_string()),
+                        }
+                    }
                 }
             }
-            crate::mcp::server_manager::TransportConfig::Unix { socket_path } => {
+        ).await {
+            Ok(result) => {
+                log::info!("✅ 测试服务创建完成 - 服务器: '{}' - 成功: {}", server_name, result.success);
+                result
+            }
+            Err(_) => {
+                let timeout_msg = format!("⏰ 服务器功能测试总体超时 (60秒) - 服务器: '{}'", server_name);
+                log::error!("{}", timeout_msg);
                 TestResult {
                     success: false,
                     stdout: String::new(),
-                    stderr: format!("Unix socket transport not yet supported for testing: {}", socket_path),
-                    error_message: Some("Unix socket transport is not yet supported for testing".to_string()),
+                    stderr: timeout_msg.clone(),
+                    error_message: Some(timeout_msg),
                 }
             }
         };
@@ -1718,6 +2038,51 @@ impl RmcpClient {
 
         // Send test completion event
         self.send_event(McpEvent::TestCompleted(server_id, test_result.clone()));
+
+        // 如果测试成功，尝试提取能力并保存到数据库
+        if test_result.success {
+            let server_name = self.server_configs.get(&server_id)
+                .map(|config| config.name.clone())
+                .unwrap_or_else(|| format!("Unknown server {}", server_id));
+
+            log::info!("✅ 测试成功，开始提取服务器能力: '{}'", server_name);
+
+            // 尝试提取能力，带超时
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(30), // 能力提取超时30秒
+                self.query_server_capabilities(server_id)
+            ).await {
+                Ok(Ok(_)) => {
+                    log::info!("🎉 测试成功且能力提取成功 - 服务器: '{}'", server_name);
+                }
+                Ok(Err(e)) => {
+                    log::warn!("⚠️ 测试成功但能力提取失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                }
+                Err(_) => {
+                    log::error!("⏰ 测试成功但能力提取超时 (30秒) - 服务器: '{}'", server_name);
+                }
+            }
+
+                // 如果能力提取成功，检查是否有能力信息并触发数据库保存
+                if let Some(capabilities) = self.servers.get(&server_id).and_then(|conn| conn.capabilities.clone()) {
+                    log::info!("📤 测试成功后触发能力保存到数据库 - 服务器: '{}' - 工具:{}, 资源:{}, 提示:{}",
+                        server_name, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
+
+                    // 序列化能力信息
+                    match serde_json::to_string(&capabilities) {
+                        Ok(capabilities_json) => {
+                            // 发送能力提取成功事件
+                            self.send_event(McpEvent::CapabilitiesExtracted(server_id, capabilities.clone(), capabilities_json));
+                            log::info!("✅ 已发送测试成功后的能力提取事件 - 服务器: '{}'", server_name);
+                        }
+                        Err(e) => {
+                            log::error!("❌ 序列化能力信息失败 - 服务器: '{}' - 错误: {}", server_name, e);
+                        }
+                    }
+                } else {
+                    log::warn!("⚠️ 测试成功但没有找到能力信息 - 服务器: '{}'", server_name);
+                }
+        }
 
         log::info!("🧪 Server {} test completed: success={}", server_id, test_result.success);
         Ok(test_result)
@@ -1765,14 +2130,25 @@ impl RmcpClient {
                 let mut critical_tests_passed = true;
                 let mut critical_error_msg = None;
 
-                // Test 2: List tools (CRITICAL - must succeed for green light)
-                match service.list_tools(Default::default()).await {
-                    Ok(tools) => {
+                // Test 2: List tools (CRITICAL - must succeed for green light) with timeout
+                log::info!("🔧 开始测试工具列表 (关键测试)...");
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(10),
+                    service.list_tools(Default::default())
+                ).await {
+                    Ok(Ok(tools)) => {
                         test_stdout.push_str(&format!("✅ Available tools: {:#?}\n", tools));
                         log::info!("✅ Tools listed successfully: {} tools found", tools.tools.len());
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         let error_msg = format!("❌ Failed to list tools: {}", e);
+                        test_stderr.push_str(&format!("{}\n", error_msg));
+                        log::error!("{}", error_msg);
+                        critical_tests_passed = false;
+                        critical_error_msg = Some(error_msg);
+                    }
+                    Err(_) => {
+                        let error_msg = "⏰ List tools operation timed out after 10 seconds".to_string();
                         test_stderr.push_str(&format!("{}\n", error_msg));
                         log::error!("{}", error_msg);
                         critical_tests_passed = false;
@@ -1780,29 +2156,47 @@ impl RmcpClient {
                     }
                 }
 
-                // Test 3: List resources (optional)
-                match service.list_resources(Default::default()).await {
-                    Ok(resources) => {
+                // Test 3: List resources (optional) with timeout
+                log::info!("📁 开始测试资源列表 (可选测试)...");
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(10),
+                    service.list_resources(Default::default())
+                ).await {
+                    Ok(Ok(resources)) => {
                         test_stdout.push_str(&format!("✅ Available resources: {:#?}\n", resources));
                         log::info!("✅ Resources listed successfully: {} resources found", resources.resources.len());
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         // Resources might not be supported, just log as warning
                         test_stdout.push_str(&format!("⚠️ Resources not available: {}\n", e));
                         log::warn!("⚠️ Resources not available: {}", e);
                     }
+                    Err(_) => {
+                        let warning_msg = "⏰ List resources operation timed out after 10 seconds";
+                        test_stdout.push_str(&format!("⚠️ {}\n", warning_msg));
+                        log::warn!("{}", warning_msg);
+                    }
                 }
 
-                // Test 4: List prompts (optional)
-                match service.list_prompts(Default::default()).await {
-                    Ok(prompts) => {
+                // Test 4: List prompts (optional) with timeout
+                log::info!("💬 开始测试提示列表 (可选测试)...");
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(10),
+                    service.list_prompts(Default::default())
+                ).await {
+                    Ok(Ok(prompts)) => {
                         test_stdout.push_str(&format!("✅ Available prompts: {:#?}\n", prompts));
                         log::info!("✅ Prompts listed successfully: {} prompts found", prompts.prompts.len());
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         // Prompts might not be supported, just log as warning
                         test_stdout.push_str(&format!("⚠️ Prompts not available: {}\n", e));
                         log::warn!("⚠️ Prompts not available: {}", e);
+                    }
+                    Err(_) => {
+                        let warning_msg = "⏰ List prompts operation timed out after 10 seconds";
+                        test_stdout.push_str(&format!("⚠️ {}\n", warning_msg));
+                        log::warn!("{}", warning_msg);
                     }
                 }
 
@@ -1867,15 +2261,26 @@ impl RmcpClient {
                 let mut critical_tests_passed = true;
                 let mut critical_error_msg = None;
 
-                // Test 2: List tools
+                // Test 2: List tools with timeout
                 test_stdout.push_str("🔧 Testing tools/list...\n");
-                match service.list_tools().await {
-                    Ok(tools_response) => {
+                log::info!("🔧 开始测试SSE工具列表 (关键测试)...");
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(10),
+                    service.list_tools()
+                ).await {
+                    Ok(Ok(tools_response)) => {
                         test_stdout.push_str(&format!("✅ Tools list: {:#?}\n", tools_response));
                         log::info!("✅ Tools list retrieved successfully");
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         let error_msg = format!("❌ Failed to list tools: {}", e);
+                        test_stderr.push_str(&format!("{}\n", error_msg));
+                        log::error!("{}", error_msg);
+                        critical_tests_passed = false;
+                        critical_error_msg = Some(error_msg);
+                    }
+                    Err(_) => {
+                        let error_msg = "⏰ SSE list tools operation timed out after 10 seconds".to_string();
                         test_stderr.push_str(&format!("{}\n", error_msg));
                         log::error!("{}", error_msg);
                         critical_tests_passed = false;
@@ -1883,33 +2288,51 @@ impl RmcpClient {
                     }
                 }
 
-                // Test 3: List resources
+                // Test 3: List resources with timeout
                 test_stdout.push_str("📁 Testing resources/list...\n");
-                match service.list_resources().await {
-                    Ok(resources_response) => {
+                log::info!("📁 开始测试SSE资源列表 (可选测试)...");
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(10),
+                    service.list_resources()
+                ).await {
+                    Ok(Ok(resources_response)) => {
                         test_stdout.push_str(&format!("✅ Resources list: {:#?}\n", resources_response));
                         log::info!("✅ Resources list retrieved successfully");
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         let error_msg = format!("❌ Failed to list resources: {}", e);
                         test_stderr.push_str(&format!("{}\n", error_msg));
                         log::error!("{}", error_msg);
                         // Resources failure is not critical for basic functionality
                     }
+                    Err(_) => {
+                        let warning_msg = "⏰ SSE list resources operation timed out after 10 seconds";
+                        test_stderr.push_str(&format!("⚠️ {}\n", warning_msg));
+                        log::warn!("{}", warning_msg);
+                    }
                 }
 
-                // Test 4: List prompts
+                // Test 4: List prompts with timeout
                 test_stdout.push_str("💬 Testing prompts/list...\n");
-                match service.list_prompts().await {
-                    Ok(prompts_response) => {
+                log::info!("💬 开始测试SSE提示列表 (可选测试)...");
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(10),
+                    service.list_prompts()
+                ).await {
+                    Ok(Ok(prompts_response)) => {
                         test_stdout.push_str(&format!("✅ Prompts list: {:#?}\n", prompts_response));
                         log::info!("✅ Prompts list retrieved successfully");
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         let error_msg = format!("❌ Failed to list prompts: {}", e);
                         test_stderr.push_str(&format!("{}\n", error_msg));
                         log::error!("{}", error_msg);
                         // Prompts failure is not critical for basic functionality
+                    }
+                    Err(_) => {
+                        let warning_msg = "⏰ SSE list prompts operation timed out after 10 seconds";
+                        test_stderr.push_str(&format!("⚠️ {}\n", warning_msg));
+                        log::warn!("{}", warning_msg);
                     }
                 }
 
@@ -1967,15 +2390,23 @@ impl RmcpClient {
         let needs_reconnection = if connection.status == ConnectionStatus::Connected && connection.rmcp_service.is_some() {
             log::info!("🔍 Server {} appears connected, testing rmcp service health...", server_id);
 
-            // Test the actual health of the rmcp service
+            // Test the actual health of the rmcp service with timeout
             if let Some(rmcp_service) = &connection.rmcp_service {
-                match rmcp_service.list_tools().await {
-                    Ok(_) => {
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(5),
+                    rmcp_service.list_tools()
+                ).await {
+                    Ok(Ok(_)) => {
                         log::info!("✅ RMCP service for server {} is healthy", server_id);
                         return Ok(());
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         log::warn!("❌ RMCP service for server {} is unhealthy: {}", server_id, e);
+                        log::info!("🔄 Marking server as disconnected and will reconnect");
+                        true // Need reconnection
+                    }
+                    Err(_) => {
+                        log::warn!("⏰ RMCP service health check timed out for server {}", server_id);
                         log::info!("🔄 Marking server as disconnected and will reconnect");
                         true // Need reconnection
                     }
