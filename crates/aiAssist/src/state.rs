@@ -1347,13 +1347,20 @@ impl AIAssistState {
 
     /// 从响应创建工具调用批次
     fn create_tool_call_batch_from_response(&mut self, response: crate::api::ChatResponse) {
+        log::info!("📦 开始创建工具调用批次");
+
         if let Some(choice) = response.choices.first() {
             if let Some(tool_calls) = &choice.message.tool_calls {
                 let batch_id = Uuid::new_v4();
                 let mut pending_calls = Vec::new();
                 let tool_calls_len = tool_calls.len(); // 提前获取长度
 
-                for tool_call in tool_calls {
+                log::info!("  - 批次ID: {}", batch_id);
+                log::info!("  - 工具调用总数: {}", tool_calls_len);
+
+                for (index, tool_call) in tool_calls.iter().enumerate() {
+                    log::info!("  - 处理第 {} 个工具调用: {}", index + 1, tool_call.function.name);
+
                     // 解析MCP工具调用信息
                     if let Some(mcp_info) = crate::mcp_tools::McpToolConverter::parse_mcp_tool_call(tool_call) {
                         if let Some(server_id) = self.selected_mcp_server {
@@ -1362,13 +1369,19 @@ impl AIAssistState {
                                 .cloned()
                                 .unwrap_or_else(|| format!("服务器 {}", server_id));
 
+                            log::info!("    ✅ 成功解析为MCP工具调用，目标服务器: {}", server_name);
+
                             pending_calls.push(PendingToolCall {
                                 tool_call: tool_call.clone(),
                                 mcp_info,
                                 server_id,
                                 server_name,
                             });
+                        } else {
+                            log::warn!("    ❌ 未选择MCP服务器，跳过此工具调用");
                         }
+                    } else {
+                        log::warn!("    ❌ 无法解析为MCP工具调用，跳过");
                     }
                 }
 
@@ -1376,7 +1389,7 @@ impl AIAssistState {
                     // 创建工具调用批次
                     let batch = ToolCallBatch {
                         id: batch_id,
-                        tool_calls: pending_calls,
+                        tool_calls: pending_calls.clone(),
                         original_response: response,
                         results: HashMap::new(),
                         user_approved: false,
@@ -1385,9 +1398,17 @@ impl AIAssistState {
                     self.current_tool_call_batch = Some(batch);
                     self.show_tool_call_confirmation = true;
 
-                    log::info!("创建了包含 {} 个工具调用的批次", tool_calls_len);
+                    log::info!("✅ 成功创建工具调用批次:");
+                    log::info!("  - 有效工具调用数: {}", pending_calls.len());
+                    log::info!("  - 等待用户确认执行");
+                } else {
+                    log::warn!("❌ 没有有效的工具调用，未创建批次");
                 }
+            } else {
+                log::warn!("❌ 响应中没有工具调用信息");
             }
+        } else {
+            log::warn!("❌ 响应中没有选择项");
         }
     }
 }

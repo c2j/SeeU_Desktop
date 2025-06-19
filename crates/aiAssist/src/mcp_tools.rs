@@ -148,29 +148,47 @@ impl McpToolConverter {
     pub fn parse_mcp_tool_call(tool_call: &ToolCall) -> Option<McpToolCallInfo> {
         let function_name = &tool_call.function.name;
 
-        if function_name.starts_with("read_resource_") {
+        log::info!("🔍 解析MCP工具调用:");
+        log::info!("  - 调用ID: {}", tool_call.id);
+        log::info!("  - 函数名称: {}", function_name);
+        log::info!("  - 函数参数: {}", tool_call.function.arguments);
+
+        let mcp_info = if function_name.starts_with("read_resource_") {
+            let original_name = function_name.strip_prefix("read_resource_").unwrap().to_string();
+            log::info!("  - 识别为资源读取调用: {}", original_name);
             Some(McpToolCallInfo {
                 call_type: McpCallType::ReadResource,
-                original_name: function_name.strip_prefix("read_resource_").unwrap().to_string(),
+                original_name,
                 arguments: tool_call.function.arguments.clone(),
                 tool_call_id: tool_call.id.clone(),
             })
         } else if function_name.starts_with("get_prompt_") {
+            let original_name = function_name.strip_prefix("get_prompt_").unwrap().to_string();
+            log::info!("  - 识别为提示获取调用: {}", original_name);
             Some(McpToolCallInfo {
                 call_type: McpCallType::GetPrompt,
-                original_name: function_name.strip_prefix("get_prompt_").unwrap().to_string(),
+                original_name,
                 arguments: tool_call.function.arguments.clone(),
                 tool_call_id: tool_call.id.clone(),
             })
         } else {
             // 直接的工具调用
+            log::info!("  - 识别为直接工具调用: {}", function_name);
             Some(McpToolCallInfo {
                 call_type: McpCallType::CallTool,
                 original_name: function_name.clone(),
                 arguments: tool_call.function.arguments.clone(),
                 tool_call_id: tool_call.id.clone(),
             })
+        };
+
+        if mcp_info.is_some() {
+            log::info!("✅ MCP工具调用解析成功");
+        } else {
+            log::warn!("❌ MCP工具调用解析失败");
         }
+
+        mcp_info
     }
 }
 
@@ -217,7 +235,12 @@ impl McpToolExecutor {
         call_info: &McpToolCallInfo,
     ) -> Result<McpToolCallResult> {
         // TODO: 集成实际的MCP客户端调用
-        log::info!("执行MCP工具调用: {:?}", call_info);
+        log::info!("🔧 开始执行MCP工具调用:");
+        log::info!("  - 服务器ID: {}", server_id);
+        log::info!("  - 调用类型: {:?}", call_info.call_type);
+        log::info!("  - 工具名称: {}", call_info.original_name);
+        log::info!("  - 调用ID: {}", call_info.tool_call_id);
+        log::info!("  - 参数JSON: {}", call_info.arguments);
 
         // 占位符实现
         let result = match call_info.call_type {
@@ -246,11 +269,32 @@ impl McpToolExecutor {
             }
         };
 
-        Ok(McpToolCallResult {
+        let tool_result = McpToolCallResult {
             tool_call_id: call_info.tool_call_id.clone(),
             success: true,
-            result,
+            result: result.clone(),
             error: None,
-        })
+        };
+
+        // 记录执行结果
+        log::info!("✅ MCP工具调用执行完成:");
+        log::info!("  - 调用ID: {}", tool_result.tool_call_id);
+        log::info!("  - 执行状态: {}", if tool_result.success { "成功" } else { "失败" });
+        if let Some(error) = &tool_result.error {
+            log::error!("  - 错误信息: {}", error);
+        }
+        log::info!("  - 结果JSON:");
+        match serde_json::to_string_pretty(&result) {
+            Ok(result_json) => {
+                for line in result_json.lines() {
+                    log::info!("    {}", line);
+                }
+            }
+            Err(e) => {
+                log::error!("    Failed to serialize result to JSON: {}", e);
+            }
+        }
+
+        Ok(tool_result)
     }
 }

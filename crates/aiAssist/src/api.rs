@@ -68,7 +68,7 @@ pub struct Model {
 }
 
 /// 聊天响应消息
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponseMessage {
     pub role: Option<String>,  // 可选，某些服务可能不返回
     pub content: Option<String>,  // 可选，当有tool_calls时可能为空
@@ -78,7 +78,7 @@ pub struct ChatResponseMessage {
 
 /// 聊天响应 (OpenAI compatible)
 /// 为了增强兼容性，只有choices字段是必需的，其他字段都是可选的
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub id: Option<String>,
     pub object: Option<String>,
@@ -88,14 +88,14 @@ pub struct ChatResponse {
     pub usage: Option<Usage>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Choice {
     pub index: Option<u32>,  // 可选，某些服务可能不返回
     pub message: ChatResponseMessage,  // 必需
     pub finish_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -251,6 +251,19 @@ impl ApiService {
             tool_choice: None,
         };
 
+        // 打印完整的请求JSON信息
+        log::info!("📋 完整请求JSON:");
+        match serde_json::to_string_pretty(&request) {
+            Ok(request_json) => {
+                for line in request_json.lines() {
+                    log::info!("  {}", line);
+                }
+            }
+            Err(e) => {
+                log::error!("  Failed to serialize request to JSON: {}", e);
+            }
+        }
+
         let mut request_builder = self.client.post(&url)
             .header(header::CONTENT_TYPE, "application/json");
 
@@ -269,6 +282,19 @@ impl ApiService {
 
         // 解析响应
         let chat_response: ChatResponse = response.json().await?;
+
+        // 打印完整的响应JSON信息
+        log::info!("📥 完整响应JSON:");
+        match serde_json::to_string_pretty(&chat_response) {
+            Ok(response_json) => {
+                for line in response_json.lines() {
+                    log::info!("  {}", line);
+                }
+            }
+            Err(e) => {
+                log::error!("  Failed to serialize response to JSON: {}", e);
+            }
+        }
 
         // 检查并警告缺失的字段
         if chat_response.id.is_none() {
@@ -353,6 +379,19 @@ impl ApiService {
             tool_choice: None,
         };
 
+        // 打印完整的请求JSON信息
+        log::info!("📋 完整请求JSON:");
+        match serde_json::to_string_pretty(&request) {
+            Ok(request_json) => {
+                for line in request_json.lines() {
+                    log::info!("  {}", line);
+                }
+            }
+            Err(e) => {
+                log::error!("  Failed to serialize request to JSON: {}", e);
+            }
+        }
+
         let mut request_builder = self.client.post(&url)
             .header(header::CONTENT_TYPE, "application/json");
 
@@ -371,6 +410,19 @@ impl ApiService {
 
         // 解析响应
         let chat_response: ChatResponse = response.json().await?;
+
+        // 打印完整的响应JSON信息
+        log::info!("📥 完整响应JSON:");
+        match serde_json::to_string_pretty(&chat_response) {
+            Ok(response_json) => {
+                for line in response_json.lines() {
+                    log::info!("  {}", line);
+                }
+            }
+            Err(e) => {
+                log::error!("  Failed to serialize response to JSON: {}", e);
+            }
+        }
 
         // 检查并警告缺失的字段
         if chat_response.id.is_none() {
@@ -474,38 +526,16 @@ impl ApiService {
             tool_choice: if tools.is_some() { Some("auto".to_string()) } else { None },
         };
 
-        // 打印完整的请求信息
-        log::info!("📋 完整请求信息:");
-        log::info!("  URL: {}", url);
-        log::info!("  Model: {}", request.model);
-        log::info!("  Stream: {}", request.stream);
-        log::info!("  Temperature: {:?}", request.temperature);
-        log::info!("  Max Tokens: {:?}", request.max_tokens);
-        log::info!("  Tool Choice: {:?}", request.tool_choice);
-
-        // 打印消息内容
-        log::info!("  Messages:");
-        for (i, msg) in request.messages.iter().enumerate() {
-            log::info!("    {}. Role: {}, Content: {}", i + 1, msg.role,
-                if msg.content.len() > 100 {
-                    format!("{}...", &msg.content[..100])
-                } else {
-                    msg.content.clone()
-                });
-        }
-
-        // 打印工具定义的JSON
-        if let Some(ref tools_vec) = request.tools {
-            match serde_json::to_string_pretty(tools_vec) {
-                Ok(tools_json) => {
-                    log::info!("  Tools JSON:");
-                    for line in tools_json.lines() {
-                        log::info!("    {}", line);
-                    }
+        // 打印完整的请求JSON信息
+        log::info!("📋 完整请求JSON:");
+        match serde_json::to_string_pretty(&request) {
+            Ok(request_json) => {
+                for line in request_json.lines() {
+                    log::info!("  {}", line);
                 }
-                Err(e) => {
-                    log::error!("  Failed to serialize tools to JSON: {}", e);
-                }
+            }
+            Err(e) => {
+                log::error!("  Failed to serialize request to JSON: {}", e);
             }
         }
 
