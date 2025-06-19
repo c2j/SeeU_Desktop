@@ -510,6 +510,11 @@ impl McpServerManager {
         self.client.get_server_capabilities(server_id)
     }
 
+    /// 获取rmcp客户端的不可变引用
+    pub fn get_rmcp_client(&self) -> Option<&RmcpClient> {
+        Some(&self.client)
+    }
+
     /// 获取rmcp客户端的可变引用（用于调试和测试）
     pub fn get_rmcp_client_mut(&mut self) -> Option<&mut RmcpClient> {
         Some(&mut self.client)

@@ -219,8 +219,10 @@ pub struct McpToolCallResult {
 }
 
 /// MCP工具执行器
+#[derive(Clone)]
 pub struct McpToolExecutor {
     // 这里将来会集成实际的MCP客户端
+    // 目前使用占位符实现，但会记录详细的执行信息
 }
 
 impl McpToolExecutor {
@@ -228,13 +230,13 @@ impl McpToolExecutor {
         Self {}
     }
 
-    /// 执行MCP工具调用（占位符实现）
+    /// 执行MCP工具调用
+    /// 注意：这是一个占位符实现，实际的MCP客户端集成需要在主应用程序中处理
     pub async fn execute_tool_call(
         &self,
         server_id: Uuid,
         call_info: &McpToolCallInfo,
     ) -> Result<McpToolCallResult> {
-        // TODO: 集成实际的MCP客户端调用
         log::info!("🔧 开始执行MCP工具调用:");
         log::info!("  - 服务器ID: {}", server_id);
         log::info!("  - 调用类型: {:?}", call_info.call_type);
@@ -242,19 +244,28 @@ impl McpToolExecutor {
         log::info!("  - 调用ID: {}", call_info.tool_call_id);
         log::info!("  - 参数JSON: {}", call_info.arguments);
 
-        // 占位符实现
+        // 模拟一些处理时间
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // 创建模拟结果
         let result = match call_info.call_type {
             McpCallType::CallTool => {
                 json!({
                     "success": true,
-                    "message": format!("工具 {} 执行成功", call_info.original_name),
-                    "arguments": call_info.arguments
+                    "message": format!("工具 {} 执行成功（模拟）", call_info.original_name),
+                    "tool_name": call_info.original_name,
+                    "server_id": server_id.to_string(),
+                    "arguments": call_info.arguments,
+                    "timestamp": chrono::Utc::now().to_rfc3339()
                 })
             }
             McpCallType::ReadResource => {
                 json!({
-                    "content": format!("资源 {} 的内容", call_info.original_name),
-                    "mime_type": "text/plain"
+                    "content": format!("这是资源 {} 的模拟内容。\n\n实际使用时，这里会包含真实的资源数据。", call_info.original_name),
+                    "mime_type": "text/plain",
+                    "resource_name": call_info.original_name,
+                    "server_id": server_id.to_string(),
+                    "timestamp": chrono::Utc::now().to_rfc3339()
                 })
             }
             McpCallType::GetPrompt => {
@@ -262,9 +273,12 @@ impl McpToolExecutor {
                     "messages": [
                         {
                             "role": "user",
-                            "content": format!("提示 {} 的内容", call_info.original_name)
+                            "content": format!("这是提示 {} 的模拟内容。\n\n实际使用时，这里会包含真实的提示模板。", call_info.original_name)
                         }
-                    ]
+                    ],
+                    "prompt_name": call_info.original_name,
+                    "server_id": server_id.to_string(),
+                    "timestamp": chrono::Utc::now().to_rfc3339()
                 })
             }
         };
@@ -283,17 +297,9 @@ impl McpToolExecutor {
         if let Some(error) = &tool_result.error {
             log::error!("  - 错误信息: {}", error);
         }
-        log::info!("  - 结果JSON:");
-        match serde_json::to_string_pretty(&result) {
-            Ok(result_json) => {
-                for line in result_json.lines() {
-                    log::info!("    {}", line);
-                }
-            }
-            Err(e) => {
-                log::error!("    Failed to serialize result to JSON: {}", e);
-            }
-        }
+        log::info!("  - 结果预览: {}",
+            serde_json::to_string(&result).unwrap_or_default().chars().take(100).collect::<String>()
+        );
 
         Ok(tool_result)
     }

@@ -11,6 +11,7 @@ use crate::mcp_tools::{
 use crate::state::{AIAssistState, PendingToolCall, ToolCallBatch};
 
 /// MCP集成管理器
+#[derive(Clone)]
 pub struct McpIntegrationManager {
     tool_executor: McpToolExecutor,
     server_names: HashMap<Uuid, String>,

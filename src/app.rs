@@ -1,5 +1,6 @@
 use eframe::egui;
 use uuid::Uuid;
+use anyhow::Result;
 
 use crate::ui::{
     navigation::render_navigation,
@@ -1880,6 +1881,9 @@ impl eframe::App for SeeUApp {
         let can_insert_to_note = self.active_module == Module::Note && self.inote_state.current_note.is_some();
         aiAssist::update_can_insert_to_note(&mut self.ai_assist_state, can_insert_to_note);
 
+        // 处理待执行的工具调用
+        self.process_pending_tool_execution();
+
         // 更新 iTools 模块
         itools::update_itools(&mut self.itools_state);
 
@@ -1949,6 +1953,223 @@ impl eframe::App for SeeUApp {
 }
 
 impl SeeUApp {
+    /// 查找服务器ID根据服务器名称
+    fn find_server_id_by_name(&self, target_server_name: &str) -> Option<uuid::Uuid> {
+        // 从MCP设置中查找服务器ID
+        if let Some(_manager) = &self.itools_state.mcp_server_manager {
+            for (server_id, server_name) in self.itools_state.get_available_mcp_servers() {
+                if server_name == target_server_name {
+                    return Some(server_id);
+                }
+            }
+        }
+        None
+    }
+
+    /// 查找服务器ID根据服务器名称（备用方法）
+    fn find_server_id_by_name_alt(&self, target_server_name: &str) -> Option<uuid::Uuid> {
+        // 从MCP服务器管理器中查找服务器ID
+        for (server_id, server_name) in self.itools_state.get_available_mcp_servers() {
+            if server_name == target_server_name {
+                return Some(server_id);
+            }
+        }
+        None
+    }
+
+
+
+    /// 处理待执行的工具调用
+    fn process_pending_tool_execution(&mut self) {
+        if self.ai_assist_state.tool_execution_pending {
+            log::info!("🚀 检测到待执行的工具调用，开始处理");
+
+            // 重置标志
+            self.ai_assist_state.tool_execution_pending = false;
+
+            // 克隆必要的数据以避免借用冲突
+            if let Some(batch) = self.ai_assist_state.current_tool_call_batch.clone() {
+                if batch.user_approved {
+                    log::info!("🔧 开始执行 {} 个已确认的工具调用", batch.tool_calls.len());
+
+                    // 不再创建独立的执行开始消息，而是直接开始执行
+                    log::info!("🔧 开始执行 {} 个工具调用...", batch.tool_calls.len());
+
+                    // 执行真正的MCP工具调用
+                    let mcp_integration = self.mcp_integration.clone();
+                    let mut results = Vec::new();
+
+                    for pending_call in &batch.tool_calls {
+                        log::info!("🔧 执行工具调用: {} (服务器: {})",
+                            pending_call.tool_call.function.name,
+                            pending_call.server_name
+                        );
+
+                        // 查找服务器ID
+                        let server_id = if let Some(server_id) = self.find_server_id_by_name(&pending_call.server_name) {
+                            server_id
+                        } else {
+                            log::error!("❌ 找不到服务器: {}", pending_call.server_name);
+                            let error_result = aiAssist::mcp_tools::McpToolCallResult {
+                                tool_call_id: pending_call.tool_call.id.clone(),
+                                success: false,
+                                result: serde_json::json!({}),
+                                error: Some(format!("找不到服务器: {}", pending_call.server_name)),
+                            };
+                            results.push(error_result);
+                            continue;
+                        };
+
+                        // 解析参数
+                        let arguments = match serde_json::from_str::<serde_json::Value>(&pending_call.tool_call.function.arguments) {
+                            Ok(args) => args,
+                            Err(e) => {
+                                log::error!("❌ 解析工具参数失败: {}", e);
+                                let error_result = aiAssist::mcp_tools::McpToolCallResult {
+                                    tool_call_id: pending_call.tool_call.id.clone(),
+                                    success: false,
+                                    result: serde_json::json!({}),
+                                    error: Some(format!("参数解析失败: {}", e)),
+                                };
+                                results.push(error_result);
+                                continue;
+                            }
+                        };
+
+                        // 调用真正的MCP工具 (使用阻塞调用，因为我们在主线程中)
+                        let tool_name = pending_call.tool_call.function.name.clone();
+
+                        let call_result = if let Some(manager) = &self.itools_state.mcp_server_manager {
+                            // 使用测试版本的工具调用，它会绕过健康状态检查并自动处理连接
+                            if let Some(rmcp_client) = manager.get_rmcp_client() {
+                                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                                    // 如果已经在异步运行时中，使用spawn_blocking
+                                    match handle.block_on(rmcp_client.call_tool_for_testing(server_id, &tool_name, arguments)) {
+                                        Ok(response) => Ok(response),
+                                        Err(e) => Err(e)
+                                    }
+                                } else {
+                                    // 如果不在异步运行时中，创建新的运行时
+                                    match tokio::runtime::Runtime::new() {
+                                        Ok(rt) => {
+                                            rt.block_on(rmcp_client.call_tool_for_testing(server_id, &tool_name, arguments))
+                                        }
+                                        Err(e) => Err(anyhow::anyhow!("无法创建异步运行时: {}", e))
+                                    }
+                                }
+                            } else {
+                                Err(anyhow::anyhow!("无法获取RMCP客户端"))
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("MCP服务器管理器未初始化"))
+                        };
+
+                        match call_result {
+                            Ok(response) => {
+                                log::info!("✅ 工具 {} 执行成功", tool_name);
+                                let result = aiAssist::mcp_tools::McpToolCallResult {
+                                    tool_call_id: pending_call.tool_call.id.clone(),
+                                    success: true,
+                                    result: response,
+                                    error: None,
+                                };
+                                results.push(result);
+                            }
+                            Err(e) => {
+                                log::error!("❌ 工具 {} 执行失败: {}", tool_name, e);
+                                let error_result = aiAssist::mcp_tools::McpToolCallResult {
+                                    tool_call_id: pending_call.tool_call.id.clone(),
+                                    success: false,
+                                    result: serde_json::json!({}),
+                                    error: Some(e.to_string()),
+                                };
+                                results.push(error_result);
+                            }
+                        }
+                    }
+
+                    log::info!("✅ 工具调用执行完成，成功: {}, 失败: {}",
+                        results.iter().filter(|r| r.success).count(),
+                        results.iter().filter(|r| !r.success).count()
+                    );
+
+                    // 将结果转换为ToolCallResult格式
+                    let tool_call_results: Vec<aiAssist::state::ToolCallResult> = results.iter().map(|r| {
+                        aiAssist::state::ToolCallResult {
+                            tool_call_id: r.tool_call_id.clone(),
+                            result: serde_json::to_string_pretty(&r.result).unwrap_or_default(),
+                            success: r.success,
+                            error: r.error.clone(),
+                            timestamp: chrono::Utc::now(),
+                        }
+                    }).collect();
+
+                    // 找到包含工具调用的消息并添加结果
+                    self.add_tool_results_to_message(&tool_call_results);
+
+                    // 自动保存会话
+                    self.ai_assist_state.auto_save_sessions();
+
+                    log::info!("📝 工具调用结果已添加到聊天记录");
+
+                    // 清理当前批次
+                    self.ai_assist_state.current_tool_call_batch = None;
+                } else {
+                    log::warn!("⚠️ 工具调用批次未获得用户确认，跳过执行");
+                }
+            } else {
+                log::warn!("⚠️ 没有找到待执行的工具调用批次");
+            }
+        }
+    }
+
+    /// 将工具调用结果添加到对应的工具调用消息中
+    fn add_tool_results_to_message(&mut self, tool_call_results: &[aiAssist::state::ToolCallResult]) {
+        // 找到最近的包含工具调用的助手消息
+        for message in self.ai_assist_state.chat_messages.iter_mut().rev() {
+            if message.role == aiAssist::state::MessageRole::Assistant && message.tool_calls.is_some() {
+                // 检查是否有匹配的工具调用ID
+                if let Some(tool_calls) = &message.tool_calls {
+                    let tool_call_ids: std::collections::HashSet<String> = tool_calls.iter().map(|tc| tc.id.clone()).collect();
+                    let result_ids: std::collections::HashSet<String> = tool_call_results.iter().map(|tr| tr.tool_call_id.clone()).collect();
+
+                    // 如果有交集，说明这些结果属于这个消息
+                    if !tool_call_ids.is_disjoint(&result_ids) {
+                        // 合并现有结果和新结果
+                        let mut all_results = message.tool_call_results.clone().unwrap_or_default();
+                        all_results.extend_from_slice(tool_call_results);
+                        message.tool_call_results = Some(all_results);
+
+                        log::info!("✅ 已将 {} 个工具调用结果添加到消息 {}", tool_call_results.len(), message.id);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 同样更新当前会话中的消息
+        if let Some(session) = self.ai_assist_state.chat_sessions.get_mut(self.ai_assist_state.active_session_idx) {
+            for message in session.messages.iter_mut().rev() {
+                if message.role == aiAssist::state::MessageRole::Assistant && message.tool_calls.is_some() {
+                    if let Some(tool_calls) = &message.tool_calls {
+                        let tool_call_ids: std::collections::HashSet<String> = tool_calls.iter().map(|tc| tc.id.clone()).collect();
+                        let result_ids: std::collections::HashSet<String> = tool_call_results.iter().map(|tr| tr.tool_call_id.clone()).collect();
+
+                        if !tool_call_ids.is_disjoint(&result_ids) {
+                            let mut all_results = message.tool_call_results.clone().unwrap_or_default();
+                            all_results.extend_from_slice(tool_call_results);
+                            message.tool_call_results = Some(all_results);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 自动保存会话
+        self.ai_assist_state.auto_save_sessions();
+    }
+
     /// 保存提取的能力到数据库
     fn save_extracted_capabilities_to_database(&self, server_id: uuid::Uuid, capabilities_json: &str) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("💾 开始保存提取的能力到数据库 - 服务器: {}", server_id);
