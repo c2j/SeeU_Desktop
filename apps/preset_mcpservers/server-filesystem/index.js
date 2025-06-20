@@ -1,3 +1,5 @@
+require('@modelcontextprotocol/server-filesystem');
+
 const { execSync } = require('child_process');
 
 // 获取用户输入的所有参数（跳过前两个默认参数）
