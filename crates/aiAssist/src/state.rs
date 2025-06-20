@@ -8,7 +8,7 @@ use crate::mcp_tools::{McpToolCallInfo, McpToolCallResult, McpServerCapabilities
 use once_cell::sync::Lazy;
 
 // 全局状态，用于在UI线程和异步任务之间共享数据
-static ACTIVE_REQUESTS: Lazy<Mutex<HashMap<Uuid, Arc<Mutex<StateUpdate>>>>> =
+pub static ACTIVE_REQUESTS: Lazy<Mutex<HashMap<Uuid, Arc<Mutex<StateUpdate>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 // 状态更新结构
@@ -622,6 +622,62 @@ impl AIAssistState {
         self.current_request_id = Some(request_id);
     }
 
+    /// 准备发送给API的消息（包含工具调用结果）
+    pub fn prepare_messages_for_api_with_tool_results(&self) -> Vec<(MessageRole, String)> {
+        let mut messages = Vec::new();
+
+        // 获取当前会话的消息
+        let session = &self.chat_sessions[self.active_session_idx];
+
+        for message in &session.messages {
+            match message.role {
+                MessageRole::User => {
+                    // 处理用户消息中的 @search 引用
+                    let content = if message.content.contains("@search") {
+                        self.process_search_references(&message.content)
+                    } else {
+                        message.content.clone()
+                    };
+                    messages.push((MessageRole::User, content));
+                },
+                MessageRole::Assistant => {
+                    // 如果有工具调用，需要特殊处理
+                    if let Some(tool_calls) = &message.tool_calls {
+                        // 添加助手的工具调用消息
+                        let mut content = message.content.clone();
+                        if content.is_empty() {
+                            content = "我需要调用一些工具来帮助您。".to_string();
+                        }
+                        messages.push((MessageRole::Assistant, content));
+
+                        // 如果有工具调用结果，添加工具结果消息
+                        if let Some(tool_results) = &message.tool_call_results {
+                            for result in tool_results {
+                                let tool_result_content = if result.success {
+                                    format!("工具调用结果：{}", result.result)
+                                } else {
+                                    format!("工具调用失败：{}", result.error.as_deref().unwrap_or("未知错误"))
+                                };
+                                messages.push((MessageRole::User, tool_result_content));
+                            }
+                        }
+                    } else {
+                        // 普通助手消息
+                        messages.push((MessageRole::Assistant, message.content.clone()));
+                    }
+                },
+                MessageRole::System => {
+                    messages.push((MessageRole::System, message.content.clone()));
+                },
+                MessageRole::SlashCommand => {
+                    // Slash命令不发送给API
+                }
+            }
+        }
+
+        messages
+    }
+
     /// Prepare messages for the API
     fn prepare_messages_for_api(&self) -> Vec<(MessageRole, String)> {
         // Get all messages from the current session
@@ -797,7 +853,7 @@ impl AIAssistState {
                 }
 
                 // 检查是否有Function Call响应需要处理
-                log::debug!("🔍 检查Function Call标志: has_function_calls={}, function_call_response存在={}",
+                log::info!("🔍 检查Function Call标志: has_function_calls={}, function_call_response存在={}",
                     has_function_calls, function_call_response.is_some());
 
                 if has_function_calls {
@@ -810,11 +866,27 @@ impl AIAssistState {
                         log::warn!("⚠️ has_function_calls为true但function_call_response为None");
                     }
                 } else {
-                    log::debug!("🔍 没有Function Call需要处理");
+                    log::info!("🔍 没有Function Call需要处理");
                 }
 
-                // 完成流式输出（现在不会导致死锁）
-                self.complete_streaming();
+                // 如果有Function Call需要处理，延迟清理streaming状态
+                log::info!("🚦 决定是否调用complete_streaming: has_function_calls={}", has_function_calls);
+                if !has_function_calls {
+                    // 没有Function Call，正常完成流式输出
+                    log::info!("✅ 没有Function Call，调用complete_streaming");
+                    self.complete_streaming();
+                } else {
+                    // 有Function Call，只清理请求状态，保留streaming_message_id用于后续处理
+                    log::info!("🔄 有Function Call待处理，延迟清理streaming状态");
+                    if let Some(request_id) = self.current_request_id {
+                        log::info!("🧹 清理请求状态（保留streaming_message_id），ID: {}", request_id);
+                        ACTIVE_REQUESTS.lock().unwrap().remove(&request_id);
+                    }
+                    self.is_sending = false;
+                    self.current_request_id = None;
+                    // 注意：不清理 streaming_message_id 和 streaming_content，留给Function Call处理完成后清理
+                    log::info!("🎯 保留streaming_message_id用于Function Call处理: {:?}", self.streaming_message_id);
+                }
             }
         }
     }
@@ -1465,7 +1537,7 @@ impl AIAssistState {
 
         if let Some(choice) = response.choices.first() {
             if let Some(tool_calls) = &choice.message.tool_calls {
-                log::info!("🎯 检测到 {} 个工具调用，创建消息", tool_calls.len());
+                log::info!("🎯 检测到 {} 个工具调用，更新现有占位符消息", tool_calls.len());
 
                 // 获取当前选中的MCP Server信息
                 let mcp_server_info = if let Some(server_id) = self.selected_mcp_server {
@@ -1480,26 +1552,50 @@ impl AIAssistState {
                     None
                 };
 
-                // 创建一个新的助手消息来显示工具调用
-                let tool_call_message = ChatMessage {
-                    id: Uuid::new_v4(),
-                    role: MessageRole::Assistant,
-                    content: choice.message.content.clone().unwrap_or_default(),
-                    timestamp: Utc::now(),
-                    attachments: vec![],
-                    tool_calls: Some(tool_calls.clone()),
-                    tool_call_results: None,
-                    mcp_server_info,
-                };
+                // 查找并更新现有的占位符消息（最后一条助手消息）
+                log::info!("🔍 检查流式消息ID: {:?}", self.streaming_message_id);
+                log::info!("🔍 当前chat_messages数量: {}", self.chat_messages.len());
 
-                log::info!("📝 创建工具调用消息，ID: {}", tool_call_message.id);
+                if let Some(streaming_id) = self.streaming_message_id {
+                    log::info!("🔍 查找占位符消息，ID: {}", streaming_id);
 
-                // 添加到chat_messages
-                self.chat_messages.push(tool_call_message.clone());
+                    // 更新chat_messages中的消息
+                    let mut found_in_chat = false;
+                    if let Some(message) = self.chat_messages.iter_mut()
+                        .find(|msg| msg.id == streaming_id && msg.role == MessageRole::Assistant) {
+                        message.content = choice.message.content.clone().unwrap_or_default();
+                        message.tool_calls = Some(tool_calls.clone());
+                        message.mcp_server_info = mcp_server_info.clone();
+                        found_in_chat = true;
+                        log::info!("📝 成功更新chat_messages中的占位符消息为工具调用消息，ID: {}", message.id);
+                    } else {
+                        log::warn!("⚠️ 在chat_messages中未找到占位符消息，ID: {}", streaming_id);
+                        // 列出所有助手消息的ID用于调试
+                        let assistant_ids: Vec<String> = self.chat_messages.iter()
+                            .filter(|msg| msg.role == MessageRole::Assistant)
+                            .map(|msg| msg.id.to_string())
+                            .collect();
+                        log::info!("🔍 当前所有助手消息ID: {:?}", assistant_ids);
+                    }
 
-                // 添加到当前会话
-                if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
-                    session.messages.push(tool_call_message.clone());
+                    // 更新当前会话中的消息
+                    let mut found_in_session = false;
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        if let Some(message) = session.messages.iter_mut()
+                            .find(|msg| msg.id == streaming_id && msg.role == MessageRole::Assistant) {
+                            message.content = choice.message.content.clone().unwrap_or_default();
+                            message.tool_calls = Some(tool_calls.clone());
+                            message.mcp_server_info = mcp_server_info;
+                            found_in_session = true;
+                            log::info!("📝 成功更新当前会话中的占位符消息为工具调用消息，ID: {}", message.id);
+                        } else {
+                            log::warn!("⚠️ 在当前会话中未找到占位符消息，ID: {}", streaming_id);
+                        }
+                    }
+
+                    log::info!("📊 占位符消息更新结果: chat_messages={}, session={}", found_in_chat, found_in_session);
+                } else {
+                    log::warn!("⚠️ 没有找到流式消息ID，无法更新占位符消息");
                 }
 
                 // 标记需要创建工具调用批次（延迟处理）
@@ -1507,7 +1603,15 @@ impl AIAssistState {
                 self.pending_tool_batch_creation = true;
                 log::info!("🔧 标记工具调用批次创建为待处理（延迟处理避免UI阻塞）");
 
-                log::info!("📋 已添加工具调用消息到chat_messages，当前消息总数: {}", self.chat_messages.len());
+                log::info!("📋 已更新工具调用消息，当前消息总数: {}", self.chat_messages.len());
+
+                // Function Call处理完成，现在可以清理streaming状态
+                log::info!("✅ Function Call处理完成，清理streaming状态");
+                self.streaming_message_id = None;
+                self.streaming_content.clear();
+
+                // Auto-save sessions after completing Function Call processing
+                self.auto_save_sessions();
             }
         }
     }
@@ -1518,7 +1622,7 @@ impl AIAssistState {
 
         if let Some(choice) = response.choices.first() {
             if let Some(tool_calls) = &choice.message.tool_calls {
-                log::info!("🎯 检测到 {} 个工具调用", tool_calls.len());
+                log::info!("🎯 检测到 {} 个工具调用，更新现有占位符消息", tool_calls.len());
 
                 // 获取当前选中的MCP Server信息
                 let mcp_server_info = if let Some(server_id) = self.selected_mcp_server {
@@ -1533,41 +1637,45 @@ impl AIAssistState {
                     None
                 };
 
-                // 创建一个新的助手消息来显示工具调用
-                let tool_call_message = ChatMessage {
-                    id: Uuid::new_v4(),
-                    role: MessageRole::Assistant,
-                    content: choice.message.content.clone().unwrap_or_default(),
-                    timestamp: Utc::now(),
-                    attachments: vec![],
-                    tool_calls: Some(tool_calls.clone()),
-                    tool_call_results: None,
-                    mcp_server_info,
-                };
+                // 查找并更新现有的占位符消息（最后一条助手消息）
+                if let Some(streaming_id) = self.streaming_message_id {
+                    // 更新chat_messages中的消息
+                    if let Some(message) = self.chat_messages.iter_mut()
+                        .find(|msg| msg.id == streaming_id && msg.role == MessageRole::Assistant) {
+                        message.content = choice.message.content.clone().unwrap_or_default();
+                        message.tool_calls = Some(tool_calls.clone());
+                        message.mcp_server_info = mcp_server_info.clone();
+                        log::info!("📝 更新占位符消息为工具调用消息，ID: {}", message.id);
+                    }
 
-                log::info!("📝 创建工具调用消息，ID: {}", tool_call_message.id);
-
-                // 添加到chat_messages
-                self.chat_messages.push(tool_call_message.clone());
-                log::info!("📋 已添加工具调用消息到chat_messages，当前消息总数: {}", self.chat_messages.len());
-
-                // 添加到当前会话
-                if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
-                    session.messages.push(tool_call_message.clone());
-                    log::info!("📋 已添加工具调用消息到当前会话，会话消息总数: {}", session.messages.len());
+                    // 更新当前会话中的消息
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        if let Some(message) = session.messages.iter_mut()
+                            .find(|msg| msg.id == streaming_id && msg.role == MessageRole::Assistant) {
+                            message.content = choice.message.content.clone().unwrap_or_default();
+                            message.tool_calls = Some(tool_calls.clone());
+                            message.mcp_server_info = mcp_server_info;
+                            log::info!("📋 已更新当前会话中的工具调用消息");
+                        }
+                    } else {
+                        log::error!("❌ 无法获取当前会话来更新工具调用消息");
+                    }
                 } else {
-                    log::error!("❌ 无法获取当前会话来添加工具调用消息");
+                    log::warn!("⚠️ 没有找到流式消息ID，无法更新占位符消息");
                 }
 
-                // 验证消息是否正确添加
-                if let Some(last_message) = self.chat_messages.last() {
-                    log::info!("🔍 最后一条消息验证:");
-                    log::info!("  - ID: {}", last_message.id);
-                    log::info!("  - 角色: {:?}", last_message.role);
-                    log::info!("  - 内容长度: {}", last_message.content.len());
-                    log::info!("  - 是否有工具调用: {}", last_message.tool_calls.is_some());
-                    if let Some(tool_calls) = &last_message.tool_calls {
-                        log::info!("  - 工具调用数量: {}", tool_calls.len());
+                // 验证消息是否正确更新
+                if let Some(streaming_id) = self.streaming_message_id {
+                    if let Some(updated_message) = self.chat_messages.iter()
+                        .find(|msg| msg.id == streaming_id && msg.role == MessageRole::Assistant) {
+                        log::info!("🔍 工具调用消息更新验证:");
+                        log::info!("  - ID: {}", updated_message.id);
+                        log::info!("  - 角色: {:?}", updated_message.role);
+                        log::info!("  - 内容长度: {}", updated_message.content.len());
+                        log::info!("  - 是否有工具调用: {}", updated_message.tool_calls.is_some());
+                        if let Some(tool_calls) = &updated_message.tool_calls {
+                            log::info!("  - 工具调用数量: {}", tool_calls.len());
+                        }
                     }
                 }
 

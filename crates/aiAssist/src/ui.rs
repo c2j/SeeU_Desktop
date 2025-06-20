@@ -260,7 +260,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                                             // 设置固定的最大宽度，避免工具调用面板导致宽度不断增加
                                             // 使用固定的宽度限制，而不是动态的 available_width
-                                            let max_content_width = 600.0; // 固定最大宽度
+                                            let max_content_width = 280.0; // 固定最大宽度
                                             ui.set_max_width(max_content_width);
 
                                             // 如果是流式输出中的消息，显示动画效果
@@ -1201,27 +1201,35 @@ fn render_mcp_status_panel(ui: &mut egui::Ui, state: &AIAssistState) {
 
 /// 渲染消息内容，简单处理<think>标签
 fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, _is_streaming: bool, text_color: egui::Color32) {
-    // 设置最大宽度
-    ui.set_max_width(max_width);
-
     // 如果内容为空，不显示任何内容
     if content.trim().is_empty() {
         return;
     }
 
-    // 直接将所有内容作为普通文本处理
-    // 如果内容包含<think>标签，则将其中的文本显示为灰色，否则使用传入的颜色
-    if content.contains("<think>") {
-        ui.add(egui::Label::new(
-            egui::RichText::new(content)
-                .color(egui::Color32::from_rgb(100, 100, 100))
-        ).wrap());
+    // 选择文本颜色
+    let display_color = if content.contains("<think>") {
+        egui::Color32::from_rgb(100, 100, 100)
     } else {
-        ui.add(egui::Label::new(
-            egui::RichText::new(content)
-                .color(text_color)
-        ).wrap());
-    }
+        text_color
+    };
+
+    // 使用严格的宽度控制来防止撑宽对话框
+    ui.allocate_ui_with_layout(
+        egui::Vec2::new(max_width, 0.0),
+        egui::Layout::top_down(egui::Align::LEFT),
+        |ui| {
+            ui.set_max_width(max_width);
+            ui.set_min_width(max_width);
+
+            // 使用 Label 并强制换行
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(content)
+                        .color(display_color)
+                ).wrap()
+            );
+        }
+    );
 }
 
 /// 工具调用执行请求

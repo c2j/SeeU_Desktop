@@ -2112,6 +2112,9 @@ impl SeeUApp {
 
                     log::info!("📝 工具调用结果已添加到聊天记录");
 
+                    // 自动将工具调用结果发送给大模型获取完整反馈
+                    self.send_tool_results_to_llm();
+
                     // 清理当前批次
                     self.ai_assist_state.current_tool_call_batch = None;
                 } else {
@@ -2121,6 +2124,101 @@ impl SeeUApp {
                 log::warn!("⚠️ 没有找到待执行的工具调用批次");
             }
         }
+    }
+
+    /// 自动将工具调用结果发送给大模型获取完整反馈
+    fn send_tool_results_to_llm(&mut self) {
+        log::info!("🤖 开始自动发送工具调用结果给大模型获取完整反馈");
+
+        // 检查是否有AI设置
+        if self.ai_assist_state.ai_settings.api_key.is_empty() {
+            log::warn!("⚠️ AI设置不完整，跳过自动发送");
+            return;
+        }
+
+        // 准备消息历史，包含工具调用和结果
+        let messages = self.ai_assist_state.prepare_messages_for_api_with_tool_results();
+
+        if messages.is_empty() {
+            log::warn!("⚠️ 没有消息历史，跳过自动发送");
+            return;
+        }
+
+        log::info!("📤 准备发送 {} 条消息给大模型（包含工具调用结果）", messages.len());
+
+        // 创建一个新的助手消息来接收大模型的反馈
+        let response_message_id = uuid::Uuid::new_v4();
+        let response_message = aiAssist::state::ChatMessage {
+            id: response_message_id,
+            role: aiAssist::state::MessageRole::Assistant,
+            content: String::new(),
+            timestamp: chrono::Utc::now(),
+            attachments: vec![],
+            tool_calls: None,
+            tool_call_results: None,
+            mcp_server_info: None,
+        };
+
+        // 添加到聊天记录
+        self.ai_assist_state.chat_messages.push(response_message.clone());
+
+        // 添加到当前会话
+        if let Some(session) = self.ai_assist_state.chat_sessions.get_mut(self.ai_assist_state.active_session_idx) {
+            session.messages.push(response_message.clone());
+        }
+
+        // 设置流式输出状态
+        self.ai_assist_state.streaming_message_id = Some(response_message_id);
+        self.ai_assist_state.is_sending = true;
+
+        // 异步发送请求
+        let api_service = self.ai_assist_state.api_service.clone();
+        let ai_settings = self.ai_assist_state.ai_settings.clone();
+
+        // 创建共享状态
+        let state_mutex = std::sync::Arc::new(std::sync::Mutex::new(aiAssist::state::StateUpdate {
+            message_id: response_message_id,
+            content: String::new(),
+            is_complete: false,
+            error: None,
+            has_function_calls: false,
+            function_call_response: None,
+        }));
+
+        let ui_state = state_mutex.clone();
+        let request_id = uuid::Uuid::new_v4();
+
+        // 存储请求状态
+        aiAssist::state::ACTIVE_REQUESTS.lock().unwrap().insert(request_id, ui_state);
+
+        // 设置当前请求ID，这样UI可以检查更新
+        self.ai_assist_state.current_request_id = Some(request_id);
+
+        // 启动后台任务
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                log::info!("🚀 开始异步发送工具调用结果给大模型");
+
+                match api_service.send_chat(&ai_settings, messages).await {
+                    Ok(response) => {
+                        log::info!("✅ 大模型反馈获取成功，内容长度: {}", response.len());
+                        let mut state = state_mutex.lock().unwrap();
+                        state.content = response;
+                        state.is_complete = true;
+                    },
+                    Err(e) => {
+                        log::error!("❌ 获取大模型反馈失败: {}", e);
+                        let mut state = state_mutex.lock().unwrap();
+                        state.error = Some(format!("获取大模型反馈失败: {}", e));
+                        state.is_complete = true;
+                    }
+                }
+
+                // 注意：不在这里清理请求状态，让UI线程在check_for_updates中处理
+                log::info!("🔔 后台任务完成，等待UI线程处理");
+            });
+        });
     }
 
     /// 将工具调用结果添加到对应的工具调用消息中
