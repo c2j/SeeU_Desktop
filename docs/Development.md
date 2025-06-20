@@ -123,8 +123,8 @@ SeeU-Desktop/
 │   ├── inote/             # 笔记模块
 │   ├── isearch/           # 搜索模块
 │   ├── aiAssist/          # AI助手模块
-│   ├── itools/            # 工具集成模块
-│   └── iterminal/         # 终端模块
+│   ├── itools/            # 工具集成模块 (MCP协议支持)
+│   └── iterminal/         # 安全终端模块
 ├── assets/                # 静态资源
 │   ├── fonts/             # 字体文件
 │   ├── icons/             # 图标资源
@@ -201,6 +201,16 @@ UI 组件模块，采用组件化设计：
 - **notify**: 文件系统监控
 - **arboard**: 剪贴板操作
 
+#### MCP协议支持
+- **rmcp**: MCP协议实现
+- **JSON-RPC**: JSON-RPC 2.0协议支持
+- **Protocol Handler**: 自定义协议处理器
+
+#### 终端支持
+- **portable-pty**: 跨平台PTY支持
+- **vte**: ANSI转义序列解析
+- **crossterm**: 跨平台终端操作
+
 ### 状态管理
 
 #### 全局状态
@@ -216,10 +226,12 @@ pub struct SeeUApp {
     pub isearch_state: ISearchState,
     pub ai_assist_state: AIAssistState,
     pub itools_state: IToolsState,
+    pub iterminal_state: ITerminalState,
     
     // 服务
     pub system_service: SystemService,
-    
+    pub mcp_integration_manager: McpIntegrationManager,
+
     // 配置
     pub theme: Theme,
     pub app_settings: AppSettings,
@@ -339,6 +351,142 @@ async fn test_app_initialization() {
 }
 ```
 
+## 🔗 MCP集成开发
+
+### MCP协议实现
+
+#### 协议处理器
+```rust
+// crates/itools/src/mcp/protocol_handler.rs
+pub struct ProtocolHandler {
+    pub state: ProtocolState,
+    pub capabilities: Option<ServerCapabilities>,
+    pub request_id_counter: u64,
+}
+
+impl ProtocolHandler {
+    pub fn new() -> Self {
+        Self {
+            state: ProtocolState::Disconnected,
+            capabilities: None,
+            request_id_counter: 0,
+        }
+    }
+
+    pub async fn initialize(&mut self, server_info: ServerInfo) -> Result<(), ProtocolError> {
+        // 实现MCP初始化握手
+    }
+}
+```
+
+#### JSON-RPC 2.0支持
+```rust
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JsonRpcRequest {
+    pub jsonrpc: String,
+    pub id: Option<serde_json::Value>,
+    pub method: String,
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JsonRpcResponse {
+    pub jsonrpc: String,
+    pub id: Option<serde_json::Value>,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<JsonRpcError>,
+}
+```
+
+### MCP服务器管理
+
+#### 服务器配置
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub transport_type: TransportType,
+    pub command: String,
+    pub args: Vec<String>,
+    pub working_directory: Option<String>,
+    pub environment_variables: HashMap<String, String>,
+    pub category: String,
+    pub directory: String,
+}
+```
+
+#### 状态管理
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServerStatus {
+    New,           // 🔴 新添加或配置修改
+    Connected,     // 🟡 连接成功但未测试
+    Tested,        // 🟢 功能测试通过
+    Error,         // ❌ 连接或测试失败
+}
+```
+
+### AI助手工具调用集成
+
+#### 工具转换器
+```rust
+// crates/aiAssist/src/mcp_tools.rs
+pub struct McpToolConverter;
+
+impl McpToolConverter {
+    pub fn convert_capabilities_to_tools(capabilities: &ServerCapabilities) -> Vec<Tool> {
+        let mut tools = Vec::new();
+
+        // 转换MCP工具为OpenAI Function Calling格式
+        if let Some(mcp_tools) = &capabilities.tools {
+            for tool in mcp_tools {
+                tools.push(Tool {
+                    r#type: "function".to_string(),
+                    function: FunctionDefinition {
+                        name: format!("mcp_call_tool_{}", tool.name),
+                        description: tool.description.clone(),
+                        parameters: tool.input_schema.clone(),
+                    },
+                });
+            }
+        }
+
+        tools
+    }
+}
+```
+
+#### 工具执行器
+```rust
+pub struct McpToolExecutor;
+
+impl McpToolExecutor {
+    pub async fn execute_tool_call(
+        server_id: String,
+        tool_call: &ToolCall,
+        mcp_manager: &mut McpManager,
+    ) -> Result<String, String> {
+        // 解析工具调用信息
+        let mcp_info = McpToolConverter::parse_mcp_tool_call(tool_call)?;
+
+        // 执行MCP工具调用
+        match mcp_info.call_type {
+            McpCallType::CallTool => {
+                mcp_manager.call_tool(&server_id, &mcp_info.tool_name, &mcp_info.arguments).await
+            }
+            McpCallType::ReadResource => {
+                mcp_manager.read_resource(&server_id, &mcp_info.resource_uri).await
+            }
+            McpCallType::GetPrompt => {
+                mcp_manager.get_prompt(&server_id, &mcp_info.prompt_name, &mcp_info.arguments).await
+            }
+        }
+    }
+}
+```
+
 ## 🧩 模块开发
 
 ### 创建新模块
@@ -444,6 +592,140 @@ pub fn render_responsive_layout(ui: &mut egui::Ui) {
             render_left_panel(ui);
             render_right_panel(ui);
         });
+    }
+}
+```
+
+## 🖥 终端模块开发
+
+### 安全终端架构
+
+#### 核心组件
+```rust
+// crates/iterminal/src/lib.rs
+pub struct ITerminalState {
+    pub terminal_manager: TerminalManager,
+    pub show_settings: bool,
+    pub show_history: bool,
+    pub config: TerminalConfig,
+}
+
+// crates/iterminal/src/terminal.rs
+pub struct TerminalManager {
+    pub sessions: Vec<TerminalSession>,
+    pub active_session_index: usize,
+    pub next_session_id: u32,
+}
+
+// crates/iterminal/src/session.rs
+pub struct TerminalSession {
+    pub id: u32,
+    pub title: String,
+    pub output_buffer: Vec<String>,
+    pub input_buffer: String,
+    pub command_history: Vec<String>,
+    pub current_directory: PathBuf,
+    pub is_running_command: bool,
+}
+```
+
+#### 安全命令系统
+```rust
+// crates/iterminal/src/command.rs
+pub struct CommandExecutor {
+    safe_commands: HashMap<String, CommandHandler>,
+}
+
+impl CommandExecutor {
+    pub fn new() -> Self {
+        let mut executor = Self {
+            safe_commands: HashMap::new(),
+        };
+
+        // 注册安全命令
+        executor.register_file_commands();
+        executor.register_system_commands();
+        executor.register_utility_commands();
+
+        executor
+    }
+
+    fn register_file_commands(&mut self) {
+        self.safe_commands.insert("ls".to_string(), Box::new(LsCommand));
+        self.safe_commands.insert("cd".to_string(), Box::new(CdCommand));
+        self.safe_commands.insert("pwd".to_string(), Box::new(PwdCommand));
+        // ... 更多文件命令
+    }
+}
+
+pub trait CommandHandler {
+    fn execute(&self, args: &[String], session: &mut TerminalSession) -> CommandResult;
+    fn description(&self) -> &'static str;
+    fn usage(&self) -> &'static str;
+}
+```
+
+#### 异步命令执行
+```rust
+pub async fn execute_command_async(
+    command: String,
+    args: Vec<String>,
+    session: &mut TerminalSession,
+) -> Result<String, String> {
+    // 检查命令是否在安全列表中
+    if !is_safe_command(&command) {
+        return Err(format!("命令 '{}' 不在安全命令列表中", command));
+    }
+
+    // 异步执行命令
+    let output = tokio::task::spawn_blocking(move || {
+        execute_safe_command(&command, &args)
+    }).await.map_err(|e| e.to_string())?;
+
+    // 更新会话状态
+    session.add_output(&output);
+    session.add_to_history(&format!("{} {}", command, args.join(" ")));
+
+    Ok(output)
+}
+```
+
+### 配置管理
+```rust
+// crates/iterminal/src/config.rs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalConfig {
+    // 外观设置
+    pub font_size: f32,
+    pub font_scale: f32,
+    pub scroll_buffer_lines: usize,
+
+    // 行为设置
+    pub default_shell: String,
+    pub enable_bell: bool,
+    pub cursor_blink_interval: u64,
+    pub tab_size: usize,
+
+    // 颜色设置
+    pub background_color: [f32; 4],
+    pub text_color: [f32; 4],
+    pub cursor_color: [f32; 4],
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            font_size: 14.0,
+            font_scale: 1.0,
+            scroll_buffer_lines: 1000,
+            default_shell: default_shell(),
+            enable_bell: true,
+            cursor_blink_interval: 500,
+            tab_size: 4,
+            background_color: [0.0, 0.0, 0.0, 1.0],
+            text_color: [1.0, 1.0, 1.0, 1.0],
+            cursor_color: [1.0, 1.0, 1.0, 1.0],
+        }
     }
 }
 ```
@@ -563,6 +845,51 @@ docker run -it --rm \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   seeu-desktop:latest
 ```
+
+## 📦 依赖项管理
+
+### 核心依赖
+- `egui` - GUI框架
+- `eframe` - 跨平台窗口管理
+- `tokio` - 异步运行时
+- `uuid` - 唯一标识符
+- `chrono` - 时间处理
+- `serde` - 序列化
+
+### 数据库和搜索
+- `rusqlite` - SQLite数据库
+- `tantivy` - 全文搜索引擎
+- `sqlx` - 异步SQL工具包
+
+### MCP协议支持
+- `rmcp` - MCP协议实现
+- `serde_json` - JSON序列化
+- `reqwest` - HTTP客户端
+- `tungstenite` - WebSocket支持
+
+### 终端相关
+- `portable-pty` - 跨平台PTY支持
+- `vte` - ANSI转义序列解析
+- `crossterm` - 跨平台终端操作
+
+### AI集成
+- `base64` - Base64编码
+- `mime_guess` - MIME类型检测
+- `image` - 图像处理
+
+### 工具库
+- `dirs` - 系统目录
+- `regex` - 正则表达式
+- `hostname` - 主机名获取
+- `sysinfo` - 系统信息
+- `notify` - 文件系统监控
+- `arboard` - 剪贴板操作
+
+### 开发依赖
+- `cargo-watch` - 自动重新编译
+- `cargo-expand` - 宏展开工具
+- `cargo-audit` - 安全审计
+- `cargo-deny` - 依赖检查
 
 ### 发布流程
 
