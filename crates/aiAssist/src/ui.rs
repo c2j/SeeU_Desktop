@@ -1280,142 +1280,148 @@ fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::Too
 
     let mut tool_call_to_execute = None;
 
-    for (index, tool_call) in tool_calls.iter().enumerate() {
-        // 工具调用框架 - 使用主题适配的样式
-        egui::Frame::none()
-            .fill(background_color)
-            .stroke(egui::Stroke::new(1.5, border_color))
-            .inner_margin(egui::Margin::same(12))
-            .corner_radius(8.0)
-            .show(ui, |ui| {
-                ui.set_max_width(fixed_max_width - 24.0); // 使用固定宽度，确保不超出父容器宽度
+    ui.vertical(|ui|{
 
-                ui.vertical(|ui| {
-                    // 工具标题行
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("🔧").size(16.0));
-                        ui.label(egui::RichText::new(format!("AI助手请求调用 {} 个工具", tool_calls.len()))
-                            .strong()
-                            .color(title_color));
-                    });
-                    ui.horizontal(|ui| {
-                        // 工具名称，包含MCP Server信息
-                        let tool_display = if let Some(mcp_info) = mcp_server_info {
-                            format!("{}#工具: {} ({})", index + 1, &tool_call.function.name, &mcp_info.server_name)
-                        } else {
-                            format!("{}#工具: {}", index + 1, &tool_call.function.name)
-                        };
+    
+        // 显示工具调用总标题（只显示一次）
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("🔧").size(16.0));
+            ui.label(egui::RichText::new(format!("AI助手请求调用 {} 个工具", tool_calls.len()))
+                .strong()
+                .color(title_color));
+        });
+        ui.add_space(8.0);
 
-                        ui.label(egui::RichText::new(tool_display)
-                            .strong()
-                            .color(title_color));
-                    });
+        for (index, tool_call) in tool_calls.iter().enumerate() {
+            // 工具调用框架 - 使用主题适配的样式
+            egui::Frame::none()
+                .fill(background_color)
+                .stroke(egui::Stroke::new(1.5, border_color))
+                .inner_margin(egui::Margin::same(12))
+                .corner_radius(8.0)
+                .show(ui, |ui| {
+                    ui.set_max_width(fixed_max_width - 24.0); // 使用固定宽度，确保不超出父容器宽度
 
-                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        // 工具名称行，包含MCP Server信息
+                        ui.horizontal(|ui| {
+                            let tool_display = if let Some(mcp_info) = mcp_server_info {
+                                format!("{}#工具: {} ({})", index + 1, &tool_call.function.name, &mcp_info.server_name)
+                            } else {
+                                format!("{}#工具: {}", index + 1, &tool_call.function.name)
+                            };
 
-                    // 参数显示
-                    let formatted_args = if tool_call.function.arguments.trim().is_empty() {
-                        "无参数".to_string()
-                    } else {
-                        match serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments) {
-                            Ok(json) => serde_json::to_string_pretty(&json).unwrap_or_else(|_| tool_call.function.arguments.clone()),
-                            Err(_) => tool_call.function.arguments.clone(),
-                        }
-                    };
-
-                    // 参数框
-                    egui::Frame::none()
-                        .fill(if is_dark_mode { egui::Color32::from_rgb(35, 40, 50) } else { egui::Color32::from_rgb(250, 250, 250) })
-                        .stroke(egui::Stroke::new(1.0, if is_dark_mode { egui::Color32::from_rgb(60, 60, 60) } else { egui::Color32::from_rgb(220, 220, 220) }))
-                        .inner_margin(egui::Margin::same(8))
-                        .corner_radius(4.0)
-                        .show(ui, |ui| {
-                            ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("参数:")
-                                    .small()
-                                    .color(if is_dark_mode { egui::Color32::LIGHT_GRAY } else { egui::Color32::GRAY }));
-
-                                ui.add(egui::TextEdit::multiline(&mut formatted_args.as_str())
-                                    .id(egui::Id::new(format!("tool_args_{}", tool_call.id)))
-                                    .desired_rows(if formatted_args.lines().count() > 3 { 3 } else { formatted_args.lines().count().max(1) })
-                                    .font(egui::TextStyle::Monospace)
-                                    .interactive(false));
-                            });
-                        });
-
-                    ui.add_space(8.0);
-
-                    // 执行按钮
-                    ui.horizontal(|ui| {
-                        // 检查是否已经有执行结果来决定按钮文字
-                        let has_results = if let Some(results) = tool_results {
-                            results.iter().any(|result| result.tool_call_id == tool_call.id)
-                        } else {
-                            false
-                        };
-
-                        let button_text = if has_results {
-                            "▶ 再次执行"
-                        } else {
-                            "▶ 执行"
-                        };
-
-                        let button_response = ui.add_sized([100.0, 28.0], egui::Button::new(button_text)
-                            .fill(if is_dark_mode { egui::Color32::from_rgb(0, 120, 60) } else { egui::Color32::from_rgb(0, 150, 80) }));
-
-                        if button_response.clicked() {
-                            log::debug!("🎯 用户点击执行工具调用: {}", tool_call.function.name);
-                            tool_call_to_execute = Some(ToolCallExecutionRequest {
-                                tool_call: tool_call.clone(),
-                                mcp_server_info: mcp_server_info.cloned(),
-                            });
-                        }
-
-                        ui.add_space(8.0);
-                        let hint_text = if has_results {
-                            "点击再次执行此工具调用"
-                        } else {
-                            "点击执行此工具调用"
-                        };
-                        ui.label(egui::RichText::new(hint_text)
-                            .small()
-                            .color(if is_dark_mode { egui::Color32::LIGHT_GRAY } else { egui::Color32::GRAY }));
-                    });
-
-                    // 在工具调用下方显示相关的执行结果
-                    if let Some(results) = tool_results {
-                        let related_results: Vec<_> = results.iter()
-                            .filter(|result| result.tool_call_id == tool_call.id)
-                            .collect();
-
-                        if !related_results.is_empty() {
-                            ui.add_space(12.0);
-                            ui.separator();
-                            ui.add_space(8.0);
-
-                            ui.label(egui::RichText::new("📋 执行结果")
+                            ui.label(egui::RichText::new(tool_display)
                                 .strong()
                                 .color(title_color));
-                            ui.add_space(4.0);
+                        });
 
-                            // 按时间戳排序结果
-                            let mut sorted_results = related_results;
-                            sorted_results.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                        ui.add_space(4.0);
 
-                            for (result_index, result) in sorted_results.iter().enumerate() {
-                                render_single_tool_result(ui, result, is_dark_mode, result_index);
-                                ui.add_space(6.0);
+                        // 参数显示
+                        let formatted_args = if tool_call.function.arguments.trim().is_empty() {
+                            "无参数".to_string()
+                        } else {
+                            match serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments) {
+                                Ok(json) => serde_json::to_string_pretty(&json).unwrap_or_else(|_| tool_call.function.arguments.clone()),
+                                Err(_) => tool_call.function.arguments.clone(),
+                            }
+                        };
+
+                        // 参数框
+                        egui::Frame::none()
+                            .fill(if is_dark_mode { egui::Color32::from_rgb(35, 40, 50) } else { egui::Color32::from_rgb(250, 250, 250) })
+                            .stroke(egui::Stroke::new(1.0, if is_dark_mode { egui::Color32::from_rgb(60, 60, 60) } else { egui::Color32::from_rgb(220, 220, 220) }))
+                            .inner_margin(egui::Margin::same(8))
+                            .corner_radius(4.0)
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new("参数:")
+                                        .small()
+                                        .color(if is_dark_mode { egui::Color32::LIGHT_GRAY } else { egui::Color32::GRAY }));
+
+                                    ui.add(egui::TextEdit::multiline(&mut formatted_args.as_str())
+                                        .id(egui::Id::new(format!("tool_args_{}", tool_call.id)))
+                                        .desired_rows(if formatted_args.lines().count() > 3 { 3 } else { formatted_args.lines().count().max(1) })
+                                        .font(egui::TextStyle::Monospace)
+                                        .interactive(false));
+                                });
+                            });
+
+                        ui.add_space(8.0);
+
+                        // 执行按钮
+                        ui.horizontal(|ui| {
+                            // 检查是否已经有执行结果来决定按钮文字
+                            let has_results = if let Some(results) = tool_results {
+                                results.iter().any(|result| result.tool_call_id == tool_call.id)
+                            } else {
+                                false
+                            };
+
+                            let button_text = if has_results {
+                                "▶ 再次执行"
+                            } else {
+                                "▶ 执行"
+                            };
+
+                            let button_response = ui.add_sized([100.0, 28.0], egui::Button::new(button_text)
+                                .fill(if is_dark_mode { egui::Color32::from_rgb(0, 120, 60) } else { egui::Color32::from_rgb(0, 150, 80) }));
+
+                            if button_response.clicked() {
+                                log::debug!("🎯 用户点击执行工具调用: {}", tool_call.function.name);
+                                tool_call_to_execute = Some(ToolCallExecutionRequest {
+                                    tool_call: tool_call.clone(),
+                                    mcp_server_info: mcp_server_info.cloned(),
+                                });
+                            }
+
+                            ui.add_space(8.0);
+                            let hint_text = if has_results {
+                                "点击再次执行此工具调用"
+                            } else {
+                                "点击执行此工具调用"
+                            };
+                            ui.label(egui::RichText::new(hint_text)
+                                .small()
+                                .color(if is_dark_mode { egui::Color32::LIGHT_GRAY } else { egui::Color32::GRAY }));
+                        });
+
+                        // 在工具调用下方显示相关的执行结果
+                        if let Some(results) = tool_results {
+                            let related_results: Vec<_> = results.iter()
+                                .filter(|result| result.tool_call_id == tool_call.id)
+                                .collect();
+
+                            if !related_results.is_empty() {
+                                ui.add_space(12.0);
+                                ui.separator();
+                                ui.add_space(8.0);
+
+                                ui.label(egui::RichText::new("📋 执行结果")
+                                    .strong()
+                                    .color(title_color));
+                                ui.add_space(4.0);
+
+                                // 按时间戳排序结果
+                                let mut sorted_results = related_results;
+                                sorted_results.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+
+                                for (result_index, result) in sorted_results.iter().enumerate() {
+                                    render_single_tool_result(ui, result, is_dark_mode, result_index);
+                                    ui.add_space(6.0);
+                                }
                             }
                         }
-                    }
+                    });
                 });
-            });
 
-        if index < tool_calls.len() - 1 {
-            ui.add_space(8.0);
+            if index < tool_calls.len() - 1 {
+                ui.add_space(8.0);
+            }
         }
-    }
-
+    });
+        
     tool_call_to_execute
 }
 
