@@ -1,33 +1,5 @@
-#FROM rust:slim
-#FROM uosproject/uos
-#FROM registry.uniontech.com/uos-app/uos-server-20-1070a-rust:1.58.1-amd64
-#FROM ahu37/uos-toolchain
-#FROM ubuntu:20.04
-#FROM alpine:3.22
-#FROM rust:alpine
-#FROM alpine:edge
-FROM --platform=linux/arm64 arm64v8/ubuntu:20.04
+FROM --platform=linux/arm64 seeu-desktop-linux-builder-arm64v8-base
 
-RUN rm /var/lib/dpkg/status && touch /var/lib/dpkg/status && apt-get update --fix-missing && apt-get install -y --no-install-recommends tzdata 
-RUN apt-get update &&    apt-get install -y --no-install-recommends \
-    build-essential \
-    pkg-config \
-    wget \
-    libssl-dev \
-    libsqlite3-dev \
-    curl ca-certificates  \
-    libgtk-3-dev libappindicator3-dev librsvg2-dev libwebkit2gtk-4.0-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
-    && . $HOME/.cargo/env \
-    && cargo -V
-#ENV PATH="/root/.cargo/bin:${PATH}"
-
-# Initialize rustup and install the default toolchain
-# RUN rustup-init -y --default-toolchain stable
-ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /app
 COPY . .
 
