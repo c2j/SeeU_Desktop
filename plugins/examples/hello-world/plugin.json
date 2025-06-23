@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "name": "hello-world",
+  "display_name": "Hello World Plugin",
+  "version": "0.1.0",
+  "description": "一个简单的 Hello World 插件，演示基本功能",
+  "author": "SeeU Team",
+  "license": "MIT",
+  "homepage": "https://github.com/c2j/SeeU_Desktop",
+  "repository": "https://github.com/c2j/SeeU_Desktop",
+  "keywords": ["demo", "hello", "example"],
+  "categories": ["tools", "examples"],
+  "mcp_version": "1.0",
+  "capabilities": {
+    "provides_tools": true,
+    "provides_resources": false,
+    "provides_prompts": false,
+    "supports_sampling": false,
+    "supports_notifications": false,
+    "supports_progress": false
+  },
+  "permissions": [],
+  "dependencies": [],
+  "entry_point": "hello_world_plugin.wasm",
+  "target_roles": ["Developer", "DataAnalyst", "ContentCreator", "Researcher"],
+  "tools": [
+    {
+      "name": "hello",
+      "description": "向某人问好",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "要问候的人的姓名"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "echo",
+      "description": "回显输入的文本",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "要回显的文本"
+          }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "random_number",
+      "description": "在指定范围内生成随机数",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "integer",
+            "description": "最小值（默认：1）"
+          },
+          "max": {
+            "type": "integer",
+            "description": "最大值（默认：100）"
+          }
+        }
+      }
+    }
+  ]
+}

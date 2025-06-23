@@ -3,7 +3,7 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
-use super::plugin::{Plugin, PluginMetadata, PluginManifest};
+use super::plugin::{Plugin, PluginMetadata, PluginManifest, PluginCapabilities, PluginPermission, ResourceDefinition, ToolDefinition, PromptDefinition, PromptArgument, PermissionType};
 use crate::roles::UserRole;
 use crate::state::PermissionLevel;
 
@@ -37,6 +37,9 @@ pub struct MarketplacePlugin {
     pub last_updated: chrono::DateTime<chrono::Utc>,
     pub verified: bool,
     pub featured: bool,
+    pub size_mb: f32,
+    pub screenshots: Vec<String>,
+    pub changelog: String,
 }
 
 /// Plugin category
@@ -163,34 +166,29 @@ impl PluginMarketplace {
         }
     }
 
-    /// Refresh marketplace data
-    fn refresh_marketplace(&mut self) {
-        log::info!("Refreshing marketplace data");
 
-        // TODO: Implement actual marketplace API calls
-        // For now, we'll use preset data
-
-        self.last_refresh = Some(chrono::Utc::now());
-    }
 
     /// Load preset plugins (built-in plugins)
     fn load_preset_plugins(&mut self) {
         log::info!("Loading preset plugins");
 
+        // Use the preset plugin creation methods from presets.rs
+        use super::presets::PluginPresets;
+
         // Filesystem MCP Server
-        let filesystem_plugin = self.create_filesystem_plugin();
+        let filesystem_plugin = PluginPresets::create_filesystem_plugin();
         self.available_plugins.insert(filesystem_plugin.plugin.id, filesystem_plugin);
 
         // Git Integration
-        let git_plugin = self.create_git_plugin();
+        let git_plugin = PluginPresets::create_git_plugin();
         self.available_plugins.insert(git_plugin.plugin.id, git_plugin);
 
         // BI Connector
-        let bi_plugin = self.create_bi_plugin();
+        let bi_plugin = PluginPresets::create_bi_plugin();
         self.available_plugins.insert(bi_plugin.plugin.id, bi_plugin);
 
         // System Monitor
-        let monitor_plugin = self.create_system_monitor_plugin();
+        let monitor_plugin = PluginPresets::create_system_monitor_plugin();
         self.available_plugins.insert(monitor_plugin.plugin.id, monitor_plugin);
 
         // Set featured plugins
@@ -305,6 +303,16 @@ impl PluginMarketplace {
                 results.sort_by(|a, b| b.rating.partial_cmp(&a.rating).unwrap_or(std::cmp::Ordering::Equal));
             }
         }
+    }
+
+    /// Make refresh_marketplace public for manager access
+    pub fn refresh_marketplace(&mut self) {
+        log::info!("Refreshing marketplace data");
+
+        // TODO: Implement actual marketplace API calls
+        // For now, we'll use preset data
+
+        self.last_refresh = Some(chrono::Utc::now());
     }
 }
 

@@ -9,6 +9,7 @@ lerna-debug.log*
 
 # Node.js
 node_modules
+apps/preset_mcpservers/node_js-servers/node_modules
 dist
 dist-ssr
 *.local

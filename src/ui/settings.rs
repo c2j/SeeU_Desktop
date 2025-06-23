@@ -900,6 +900,9 @@ fn render_itools_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 let permission_level = match app.itools_state.current_role {
                     itools::roles::UserRole::BusinessUser => "受限",
                     itools::roles::UserRole::Developer => "中等",
+                    itools::roles::UserRole::DataAnalyst => "中等",
+                    itools::roles::UserRole::ContentCreator => "中等",
+                    itools::roles::UserRole::Researcher => "中等",
                     itools::roles::UserRole::Operations => "运维",
                     itools::roles::UserRole::Administrator => "完整",
                     itools::roles::UserRole::Custom(_) => "自定义",
@@ -988,6 +991,9 @@ fn get_role_description(role: &itools::roles::UserRole) -> &'static str {
     match role {
         itools::roles::UserRole::BusinessUser => "适用于业务分析和数据处理任务，具有受限的系统权限",
         itools::roles::UserRole::Developer => "适用于软件开发和代码管理任务，具有中等的系统权限",
+        itools::roles::UserRole::DataAnalyst => "适用于数据分析和统计建模任务，具有中等的系统权限",
+        itools::roles::UserRole::ContentCreator => "适用于内容创作和编辑任务，具有中等的系统权限",
+        itools::roles::UserRole::Researcher => "适用于研究和学术工作任务，具有中等的系统权限",
         itools::roles::UserRole::Operations => "适用于系统运维和监控任务，具有运维相关的系统权限",
         itools::roles::UserRole::Administrator => "适用于系统管理和配置任务，具有完整的系统权限",
         itools::roles::UserRole::Custom(_) => "自定义角色，权限根据具体配置而定",

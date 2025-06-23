@@ -117,9 +117,8 @@ VCPKG_FEATURE_FLAGS = "manifests,versions"
 opt-level = 3
 debug = false
 strip = true
-lto = true
+lto = false
 codegen-units = 1
-panic = "abort"
 
 # Optimize for debug builds
 [profile.dev]

@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@modelcontextprotocol/inspector": "^0.14.3",
+    "@modelcontextprotocol/server-filesystem": "^2025.3.28",
+    "@modelcontextprotocol/server-memory": "^2025.4.25",
+    "@modelcontextprotocol/server-sequential-thinking": "^0.6.2"
+  }
+}

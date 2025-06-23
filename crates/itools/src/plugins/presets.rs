@@ -10,9 +10,12 @@ use super::marketplace::MarketplacePlugin;
 use crate::roles::UserRole;
 use crate::state::PermissionLevel;
 
-impl super::marketplace::PluginMarketplace {
+/// Plugin presets for marketplace
+pub struct PluginPresets;
+
+impl PluginPresets {
     /// Create Filesystem MCP Server plugin
-    pub(super) fn create_filesystem_plugin(&self) -> MarketplacePlugin {
+    pub fn create_filesystem_plugin() -> MarketplacePlugin {
         let metadata = PluginMetadata {
             name: "filesystem-mcp".to_string(),
             display_name: "文件系统 MCP 服务器".to_string(),
@@ -183,11 +186,14 @@ impl super::marketplace::PluginMarketplace {
             last_updated: Utc::now(),
             verified: true,
             featured: true,
+            size_mb: 2.1,
+            screenshots: vec![],
+            changelog: "Initial release with secure file operations".to_string(),
         }
     }
 
     /// Create Git Integration plugin
-    pub(super) fn create_git_plugin(&self) -> MarketplacePlugin {
+    pub fn create_git_plugin() -> MarketplacePlugin {
         let metadata = PluginMetadata {
             name: "git-integration".to_string(),
             display_name: "Git 集成".to_string(),
@@ -307,11 +313,14 @@ impl super::marketplace::PluginMarketplace {
             last_updated: Utc::now(),
             verified: true,
             featured: true,
+            size_mb: 3.2,
+            screenshots: vec![],
+            changelog: "Added branch management and merge conflict resolution".to_string(),
         }
     }
 
     /// Create BI Connector plugin
-    pub(super) fn create_bi_plugin(&self) -> MarketplacePlugin {
+    pub fn create_bi_plugin() -> MarketplacePlugin {
         let metadata = PluginMetadata {
             name: "bi-connector".to_string(),
             display_name: "BI 连接器".to_string(),
@@ -445,11 +454,14 @@ impl super::marketplace::PluginMarketplace {
             last_updated: Utc::now(),
             verified: true,
             featured: true,
+            size_mb: 5.7,
+            screenshots: vec![],
+            changelog: "Enhanced chart customization and added new data sources".to_string(),
         }
     }
 
     /// Create System Monitor plugin
-    pub(super) fn create_system_monitor_plugin(&self) -> MarketplacePlugin {
+    pub fn create_system_monitor_plugin() -> MarketplacePlugin {
         let metadata = PluginMetadata {
             name: "system-monitor".to_string(),
             display_name: "系统监控".to_string(),
@@ -549,6 +561,9 @@ impl super::marketplace::PluginMarketplace {
             last_updated: Utc::now(),
             verified: true,
             featured: true,
+            size_mb: 1.8,
+            screenshots: vec![],
+            changelog: "Improved performance monitoring and added disk I/O metrics".to_string(),
         }
     }
 }

@@ -62,6 +62,19 @@ pub struct PluginCapabilities {
     pub supports_progress: bool,
 }
 
+impl Default for PluginCapabilities {
+    fn default() -> Self {
+        Self {
+            provides_resources: false,
+            provides_tools: false,
+            provides_prompts: false,
+            supports_sampling: false,
+            supports_notifications: false,
+            supports_progress: false,
+        }
+    }
+}
+
 /// Plugin permission requirement
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginPermission {

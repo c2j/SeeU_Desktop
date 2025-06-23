@@ -6,7 +6,7 @@ authors = ["SeeU Team C&L"]
 description = "A modern desktop application built with Rust, egui and eframe"
 
 [dependencies]
-# GUI Framework - 最小化配置，避免系统依赖
+# GUI Framework - 最小化配置，避免系统依赖 0.31.1
 egui = { version = "0.31.1", default-features = false, features = ["default_fonts"] }
 eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow"] }
 egui_extras = { version = "0.31.1", default-features = false }

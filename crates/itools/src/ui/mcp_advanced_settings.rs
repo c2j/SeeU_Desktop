@@ -127,7 +127,7 @@ impl AdvancedMcpSettingsUi {
 
     /// Render the advanced MCP settings UI
     pub fn render(&mut self, ctx: &Context, ui: &mut Ui) {
-        ui.heading("🚀 Advanced MCP Settings");
+        ui.heading("🚀 Advanced MCP Hub");
         ui.separator();
 
         // Tab bar

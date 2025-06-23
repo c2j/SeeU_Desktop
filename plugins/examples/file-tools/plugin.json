@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0",
+  "name": "file-tools",
+  "display_name": "File Tools Plugin",
+  "version": "0.1.0",
+  "description": "文件操作工具集合，提供文件列表、搜索、信息查看等功能",
+  "author": "SeeU Team",
+  "license": "MIT",
+  "homepage": "https://github.com/c2j/SeeU_Desktop",
+  "repository": "https://github.com/c2j/SeeU_Desktop",
+  "keywords": ["file", "tools", "filesystem", "search"],
+  "categories": ["tools", "filesystem"],
+  "mcp_version": "1.0",
+  "capabilities": {
+    "provides_tools": true,
+    "provides_resources": false,
+    "provides_prompts": false,
+    "supports_sampling": false,
+    "supports_notifications": false,
+    "supports_progress": true
+  },
+  "permissions": [
+    {
+      "type": "FileSystem",
+      "resource": "read",
+      "description": "读取文件和目录信息",
+      "required": true,
+      "level": "Medium"
+    },
+    {
+      "type": "FileSystem",
+      "resource": "list",
+      "description": "列出目录内容",
+      "required": true,
+      "level": "Medium"
+    }
+  ],
+  "dependencies": [],
+  "entry_point": "file_tools_plugin.wasm",
+  "target_roles": ["Developer", "DataAnalyst", "Researcher"],
+  "tools": [
+    {
+      "name": "list_files",
+      "description": "列出目录中的文件和子目录",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "要列出的目录路径"
+          },
+          "include_hidden": {
+            "type": "boolean",
+            "description": "是否包含隐藏文件（默认：false）"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "file_info",
+      "description": "获取文件的详细信息",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "文件路径"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "search_files",
+      "description": "按名称模式搜索文件",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string",
+            "description": "搜索目录"
+          },
+          "pattern": {
+            "type": "string",
+            "description": "文件名模式（支持通配符）"
+          },
+          "recursive": {
+            "type": "boolean",
+            "description": "是否递归搜索（默认：false）"
+          }
+        },
+        "required": ["directory", "pattern"]
+      }
+    },
+    {
+      "name": "calculate_hash",
+      "description": "计算文件哈希值",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "文件路径"
+          },
+          "algorithm": {
+            "type": "string",
+            "enum": ["md5", "sha1", "sha256"],
+            "description": "哈希算法（默认：sha256）"
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  ]
+}

@@ -270,25 +270,284 @@ impl PluginManager {
     /// Load installed plugins from disk
     fn load_installed_plugins(&mut self) {
         log::info!("Loading installed plugins from: {:?}", self.install_dir);
-        
+
         if !self.install_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&self.install_dir) {
+                log::error!("Failed to create plugin directory: {}", e);
+                return;
+            }
+        }
+
+        // Scan plugin directory for installed plugins
+        match std::fs::read_dir(&self.install_dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        self.load_plugin_from_directory(&entry.path());
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to read plugin directory: {}", e);
+            }
+        }
+    }
+
+    /// Load a plugin from a directory
+    fn load_plugin_from_directory(&mut self, plugin_dir: &std::path::Path) {
+        let manifest_path = plugin_dir.join("manifest.json");
+        if !manifest_path.exists() {
             return;
         }
-        
-        // TODO: Implement plugin loading from disk
-        // This would scan the installation directory and load plugin manifests
+
+        match std::fs::read_to_string(&manifest_path) {
+            Ok(content) => {
+                match serde_json::from_str::<super::plugin::PluginManifest>(&content) {
+                    Ok(manifest) => {
+                        // Try to load metadata
+                        let metadata_path = plugin_dir.join("metadata.json");
+                        match std::fs::read_to_string(&metadata_path) {
+                            Ok(metadata_content) => {
+                                match serde_json::from_str::<super::plugin::PluginMetadata>(&metadata_content) {
+                                    Ok(metadata) => {
+                                        let mut plugin = super::plugin::Plugin::new(metadata, manifest);
+                                        plugin.status = super::plugin::PluginStatus::Installed;
+                                        plugin.installation_path = Some(plugin_dir.to_path_buf());
+
+                                        // Try to load installation timestamp
+                                        if let Ok(metadata) = std::fs::metadata(&manifest_path) {
+                                            if let Ok(created) = metadata.created() {
+                                                plugin.installed_at = Some(chrono::DateTime::from(created));
+                                            }
+                                        }
+
+                                        self.plugins.insert(plugin.id, plugin);
+                                        log::info!("Loaded plugin from: {:?}", plugin_dir);
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to parse plugin metadata from {:?}: {}", metadata_path, e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Failed to read plugin metadata from {:?}: {}", metadata_path, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse plugin manifest from {:?}: {}", manifest_path, e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to read plugin manifest from {:?}: {}", manifest_path, e);
+            }
+        }
     }
     
     /// Start background task processor
     fn start_background_processor(&mut self) {
-        // TODO: Implement background task processing
-        // This would handle actual plugin installation, updates, etc.
         log::info!("Starting plugin manager background processor");
+
+        let (sender, receiver) = mpsc::unbounded_channel();
+        self.task_sender = Some(sender);
+        self.task_receiver = Some(receiver);
+
+        // Note: In a real implementation, we would spawn a background thread here
+        // For now, we'll process tasks synchronously in the update method
     }
     
     /// Process completed operations
     fn process_completed_operations(&mut self) {
-        // TODO: Check for completed background operations and update plugin states
+        // Collect tasks first to avoid borrowing issues
+        let mut tasks = Vec::new();
+        if let Some(receiver) = &mut self.task_receiver {
+            while let Ok(task) = receiver.try_recv() {
+                tasks.push(task);
+            }
+        }
+
+        // Process collected tasks
+        for task in tasks {
+            self.process_task(task);
+        }
+    }
+
+    /// Process a single task
+    fn process_task(&mut self, task: PluginTask) {
+        match task {
+            PluginTask::Install(plugin_id, source_url) => {
+                self.process_install_task(plugin_id, source_url);
+            }
+            PluginTask::Uninstall(plugin_id) => {
+                self.process_uninstall_task(plugin_id);
+            }
+            PluginTask::Enable(plugin_id) => {
+                self.process_enable_task(plugin_id);
+            }
+            PluginTask::Disable(plugin_id) => {
+                self.process_disable_task(plugin_id);
+            }
+            PluginTask::Update(plugin_id) => {
+                self.process_update_task(plugin_id);
+            }
+            PluginTask::RefreshMarketplace => {
+                self.marketplace.refresh_marketplace();
+            }
+        }
+    }
+
+    /// Process plugin installation
+    fn process_install_task(&mut self, plugin_id: uuid::Uuid, source_url: String) {
+        log::info!("Processing install task for plugin: {}", plugin_id);
+
+        // Update progress
+        if let Some(operation) = self.pending_operations.get_mut(&plugin_id) {
+            operation.progress = 0.1;
+            operation.status_message = "下载插件...".to_string();
+        }
+
+        // Get plugin from marketplace
+        let marketplace_plugin = match self.marketplace.get_plugin(&plugin_id) {
+            Some(plugin) => plugin.clone(),
+            None => {
+                log::error!("Plugin not found in marketplace: {}", plugin_id);
+                self.complete_operation_with_error(plugin_id, "插件在市场中未找到".to_string());
+                return;
+            }
+        };
+
+        // Create plugin directory
+        let plugin_dir = self.install_dir.join(plugin_id.to_string());
+        if let Err(e) = std::fs::create_dir_all(&plugin_dir) {
+            log::error!("Failed to create plugin directory: {}", e);
+            self.complete_operation_with_error(plugin_id, format!("创建插件目录失败: {}", e));
+            return;
+        }
+
+        // Update progress
+        if let Some(operation) = self.pending_operations.get_mut(&plugin_id) {
+            operation.progress = 0.5;
+            operation.status_message = "安装插件文件...".to_string();
+        }
+
+        // Save plugin manifest
+        let manifest_path = plugin_dir.join("manifest.json");
+        match serde_json::to_string_pretty(&marketplace_plugin.plugin.manifest) {
+            Ok(manifest_json) => {
+                if let Err(e) = std::fs::write(&manifest_path, manifest_json) {
+                    log::error!("Failed to write plugin manifest: {}", e);
+                    self.complete_operation_with_error(plugin_id, format!("写入插件清单失败: {}", e));
+                    return;
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to serialize plugin manifest: {}", e);
+                self.complete_operation_with_error(plugin_id, format!("序列化插件清单失败: {}", e));
+                return;
+            }
+        }
+
+        // Save plugin metadata
+        let metadata_path = plugin_dir.join("metadata.json");
+        match serde_json::to_string_pretty(&marketplace_plugin.plugin.metadata) {
+            Ok(metadata_json) => {
+                if let Err(e) = std::fs::write(&metadata_path, metadata_json) {
+                    log::error!("Failed to write plugin metadata: {}", e);
+                    self.complete_operation_with_error(plugin_id, format!("写入插件元数据失败: {}", e));
+                    return;
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to serialize plugin metadata: {}", e);
+                self.complete_operation_with_error(plugin_id, format!("序列化插件元数据失败: {}", e));
+                return;
+            }
+        }
+
+        // Create plugin instance
+        let mut plugin = marketplace_plugin.plugin.clone();
+        plugin.status = super::plugin::PluginStatus::Installed;
+        plugin.installation_path = Some(plugin_dir);
+        plugin.installed_at = Some(chrono::Utc::now());
+
+        // Add to installed plugins
+        self.plugins.insert(plugin_id, plugin);
+
+        // Complete operation
+        self.pending_operations.remove(&plugin_id);
+        log::info!("Plugin installation completed: {}", plugin_id);
+    }
+
+    /// Process plugin uninstallation
+    fn process_uninstall_task(&mut self, plugin_id: uuid::Uuid) {
+        log::info!("Processing uninstall task for plugin: {}", plugin_id);
+
+        if let Some(plugin) = self.plugins.get(&plugin_id) {
+            if let Some(install_path) = &plugin.installation_path {
+                if let Err(e) = std::fs::remove_dir_all(install_path) {
+                    log::error!("Failed to remove plugin directory: {}", e);
+                    self.complete_operation_with_error(plugin_id, format!("删除插件目录失败: {}", e));
+                    return;
+                }
+            }
+        }
+
+        // Remove from installed plugins
+        self.plugins.remove(&plugin_id);
+
+        // Complete operation
+        self.pending_operations.remove(&plugin_id);
+        log::info!("Plugin uninstallation completed: {}", plugin_id);
+    }
+
+    /// Process plugin enabling
+    fn process_enable_task(&mut self, plugin_id: uuid::Uuid) {
+        log::info!("Processing enable task for plugin: {}", plugin_id);
+
+        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
+            plugin.status = super::plugin::PluginStatus::Enabled;
+            plugin.last_updated = Some(chrono::Utc::now());
+        }
+
+        // Complete operation
+        self.pending_operations.remove(&plugin_id);
+        log::info!("Plugin enabling completed: {}", plugin_id);
+    }
+
+    /// Process plugin disabling
+    fn process_disable_task(&mut self, plugin_id: uuid::Uuid) {
+        log::info!("Processing disable task for plugin: {}", plugin_id);
+
+        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
+            plugin.status = super::plugin::PluginStatus::Disabled;
+            plugin.last_updated = Some(chrono::Utc::now());
+        }
+
+        // Complete operation
+        self.pending_operations.remove(&plugin_id);
+        log::info!("Plugin disabling completed: {}", plugin_id);
+    }
+
+    /// Process plugin update
+    fn process_update_task(&mut self, plugin_id: uuid::Uuid) {
+        log::info!("Processing update task for plugin: {}", plugin_id);
+
+        // TODO: Implement plugin update logic
+        // This would download new version and replace existing files
+
+        // Complete operation
+        self.pending_operations.remove(&plugin_id);
+        log::info!("Plugin update completed: {}", plugin_id);
+    }
+
+    /// Complete operation with error
+    fn complete_operation_with_error(&mut self, plugin_id: uuid::Uuid, error_message: String) {
+        if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
+            plugin.status = super::plugin::PluginStatus::Error(error_message.clone());
+        }
+        self.pending_operations.remove(&plugin_id);
+        log::error!("Plugin operation failed for {}: {}", plugin_id, error_message);
     }
     
     /// Get marketplace

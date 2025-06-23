@@ -1,0 +1,18 @@
+[package]
+name = "file-tools-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "File operation tools plugin for SeeU Desktop"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+seeu-plugin-sdk = { path = "../../sdk/rust" }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

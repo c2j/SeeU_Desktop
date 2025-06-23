@@ -1,0 +1,7 @@
+/Volumes/Raiden_C2J/Projects/Desktop_Projects/CU/SeeU_Desktop/examples/rmcp_examples/clients/target/debug/deps/libmatchers-c05c365dba8d536e.rmeta: /Users/c2j/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchers-0.1.0/src/lib.rs
+
+/Volumes/Raiden_C2J/Projects/Desktop_Projects/CU/SeeU_Desktop/examples/rmcp_examples/clients/target/debug/deps/libmatchers-c05c365dba8d536e.rlib: /Users/c2j/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchers-0.1.0/src/lib.rs
+
+/Volumes/Raiden_C2J/Projects/Desktop_Projects/CU/SeeU_Desktop/examples/rmcp_examples/clients/target/debug/deps/matchers-c05c365dba8d536e.d: /Users/c2j/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchers-0.1.0/src/lib.rs
+
+/Users/c2j/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchers-0.1.0/src/lib.rs:

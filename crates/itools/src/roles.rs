@@ -6,6 +6,9 @@ use std::collections::HashMap;
 pub enum UserRole {
     BusinessUser,
     Developer,
+    DataAnalyst,
+    ContentCreator,
+    Researcher,
     Operations,
     Administrator,
     Custom(String),
@@ -77,6 +80,9 @@ impl UserRole {
         match self {
             UserRole::BusinessUser => "业务用户",
             UserRole::Developer => "开发者",
+            UserRole::DataAnalyst => "数据分析师",
+            UserRole::ContentCreator => "内容创作者",
+            UserRole::Researcher => "研究员",
             UserRole::Operations => "运维人员",
             UserRole::Administrator => "管理员",
             UserRole::Custom(name) => name,
@@ -164,7 +170,122 @@ impl UserRole {
                     auto_approve_threshold: Some(crate::state::PermissionLevel::Medium),
                 },
             },
-            
+
+            UserRole::DataAnalyst => Role {
+                name: "数据分析师".to_string(),
+                description: "专注于数据分析和统计建模的用户".to_string(),
+                permissions: vec![
+                    Permission {
+                        action: "read".to_string(),
+                        resource: "/data/*".to_string(),
+                        conditions: None,
+                    },
+                    Permission {
+                        action: "execute".to_string(),
+                        resource: "/tools/analysis/*".to_string(),
+                        conditions: None,
+                    },
+                    Permission {
+                        action: "execute".to_string(),
+                        resource: "/tools/statistics/*".to_string(),
+                        conditions: None,
+                    },
+                ],
+                ui_components: vec![
+                    UiComponent::DataDashboard,
+                    UiComponent::AnalysisButtons,
+                    UiComponent::VisualizationCharts,
+                    UiComponent::LogViewer,
+                ],
+                plugin_access: PluginAccess {
+                    allowed_categories: vec![
+                        "data-analysis".to_string(),
+                        "statistics".to_string(),
+                        "visualization".to_string(),
+                        "tools".to_string(),
+                    ],
+                    max_permission_level: crate::state::PermissionLevel::Medium,
+                    auto_approve_threshold: Some(crate::state::PermissionLevel::Low),
+                },
+            },
+
+            UserRole::ContentCreator => Role {
+                name: "内容创作者".to_string(),
+                description: "专注于内容创作和编辑的用户".to_string(),
+                permissions: vec![
+                    Permission {
+                        action: "read".to_string(),
+                        resource: "/content/*".to_string(),
+                        conditions: None,
+                    },
+                    Permission {
+                        action: "write".to_string(),
+                        resource: "/content/drafts/*".to_string(),
+                        conditions: None,
+                    },
+                    Permission {
+                        action: "execute".to_string(),
+                        resource: "/tools/content/*".to_string(),
+                        conditions: None,
+                    },
+                ],
+                ui_components: vec![
+                    UiComponent::DocumentTemplates,
+                    UiComponent::CodeEditor,
+                    UiComponent::VisualizationCharts,
+                ],
+                plugin_access: PluginAccess {
+                    allowed_categories: vec![
+                        "content".to_string(),
+                        "writing".to_string(),
+                        "templates".to_string(),
+                        "ai".to_string(),
+                    ],
+                    max_permission_level: crate::state::PermissionLevel::Medium,
+                    auto_approve_threshold: Some(crate::state::PermissionLevel::Low),
+                },
+            },
+
+            UserRole::Researcher => Role {
+                name: "研究员".to_string(),
+                description: "专注于研究和学术工作的用户".to_string(),
+                permissions: vec![
+                    Permission {
+                        action: "read".to_string(),
+                        resource: "/research/*".to_string(),
+                        conditions: None,
+                    },
+                    Permission {
+                        action: "execute".to_string(),
+                        resource: "/tools/research/*".to_string(),
+                        conditions: None,
+                    },
+                    Permission {
+                        action: "execute".to_string(),
+                        resource: "/tools/analysis/*".to_string(),
+                        conditions: None,
+                    },
+                ],
+                ui_components: vec![
+                    UiComponent::DataDashboard,
+                    UiComponent::DocumentTemplates,
+                    UiComponent::AnalysisButtons,
+                    UiComponent::VisualizationCharts,
+                    UiComponent::LogViewer,
+                ],
+                plugin_access: PluginAccess {
+                    allowed_categories: vec![
+                        "research".to_string(),
+                        "data-analysis".to_string(),
+                        "academic".to_string(),
+                        "tools".to_string(),
+                        "ai".to_string(),
+                    ],
+                    max_permission_level: crate::state::PermissionLevel::Medium,
+                    auto_approve_threshold: Some(crate::state::PermissionLevel::Low),
+                },
+            },
+
             UserRole::Operations => Role {
                 name: "运维人员".to_string(),
                 description: "系统运维和监控用户".to_string(),

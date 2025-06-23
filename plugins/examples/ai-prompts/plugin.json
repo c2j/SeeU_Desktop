@@ -1,0 +1,148 @@
+{
+  "schema_version": "1.0",
+  "name": "ai-prompts",
+  "display_name": "AI Prompts Plugin",
+  "version": "0.1.0",
+  "description": "AI提示模板集合，提供代码审查、解释、文档编写、调试帮助等专业模板",
+  "author": "SeeU Team",
+  "license": "MIT",
+  "homepage": "https://github.com/c2j/SeeU_Desktop",
+  "repository": "https://github.com/c2j/SeeU_Desktop",
+  "keywords": ["ai", "prompts", "templates", "code", "documentation"],
+  "categories": ["prompts", "ai", "development"],
+  "mcp_version": "1.0",
+  "capabilities": {
+    "provides_tools": false,
+    "provides_resources": false,
+    "provides_prompts": true,
+    "supports_sampling": false,
+    "supports_notifications": false,
+    "supports_progress": false
+  },
+  "permissions": [],
+  "dependencies": [],
+  "entry_point": "ai_prompts_plugin.wasm",
+  "target_roles": ["Developer", "ContentCreator", "Researcher"],
+  "prompts": [
+    {
+      "name": "code_review",
+      "description": "代码审查提示模板，帮助进行全面的代码质量评估",
+      "arguments": [
+        {
+          "name": "language",
+          "description": "编程语言",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "code",
+          "description": "要审查的代码",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "context",
+          "description": "额外的上下文信息",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "explain_code",
+      "description": "代码解释提示模板，详细说明代码功能和原理",
+      "arguments": [
+        {
+          "name": "language",
+          "description": "编程语言",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "code",
+          "description": "要解释的代码",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "audience",
+          "description": "目标受众（如：初学者、专家等）",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "write_documentation",
+      "description": "文档编写提示模板，生成高质量的技术文档",
+      "arguments": [
+        {
+          "name": "type",
+          "description": "文档类型（如：API、函数、类等）",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "doc_type",
+          "description": "文档种类（如：用户手册、技术文档等）",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "content",
+          "description": "要编写文档的内容",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "format",
+          "description": "文档格式（如：Markdown、HTML等）",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "name": "audience",
+          "description": "目标读者",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "name": "title",
+          "description": "文档标题",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "debug_help",
+      "description": "调试帮助提示模板，协助解决编程问题",
+      "arguments": [
+        {
+          "name": "language",
+          "description": "编程语言",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "error",
+          "description": "错误信息或问题描述",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "code",
+          "description": "相关代码",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "steps",
+          "description": "已尝试的解决步骤",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    }
+  ]
+}

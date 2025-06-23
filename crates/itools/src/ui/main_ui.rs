@@ -33,6 +33,9 @@ pub fn render_main_interface(ui: &mut egui::Ui, state: &mut IToolsState) {
                 }
             }
         });
+
+    // Render plugin details dialog if needed
+    crate::ui::components::render_plugin_details_dialog(ui.ctx(), state);
 }
 
 /// Render the top toolbar with navigation and controls
@@ -46,10 +49,10 @@ fn render_top_toolbar(ui: &mut egui::Ui, state: &mut IToolsState) {
         // View tabs
         render_view_tabs(ui, state);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Info button or other controls can be added here
-            ui.label(egui::RichText::new("💡 在全局设置中配置 iTools").weak());
-        });
+        // ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        //     // Info button or other controls can be added here
+        //     ui.label(egui::RichText::new("💡 在全局设置中配置 iTools").weak());
+        // });
     });
 }
 
@@ -118,7 +121,7 @@ fn render_view_tabs(ui: &mut egui::Ui, state: &mut IToolsState) {
         // MCP Settings
         if ui.selectable_label(
             state.ui_state.current_view == IToolsView::McpSettings,
-            "⚙️ MCP设置"
+            "⚙️ MCP Hub"
         ).clicked() {
             state.ui_state.current_view = IToolsView::McpSettings;
         }
@@ -233,7 +236,7 @@ fn render_mcp_settings(ui: &mut egui::Ui, state: &mut IToolsState) {
     // Check if we have MCP settings UI
     if state.mcp_settings_ui.is_none() {
         ui.vertical_centered(|ui| {
-            ui.label("MCP设置界面未初始化");
+            ui.label("MCP Hub界面未初始化");
             if ui.button("重新初始化").clicked() {
                 state.initialize_mcp_settings_ui();
             }

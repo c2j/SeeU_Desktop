@@ -266,7 +266,7 @@ impl McpSettingsUi {
         // Process MCP events
         self.process_events();
 
-        ui.heading("MCP 服务器设置");
+        ui.heading("MCP Hub");
         ui.separator();
 
         // Toolbar
@@ -275,9 +275,34 @@ impl McpSettingsUi {
                 self.ui_state.show_add_server = true;
                 self.ui_state.add_server_json_mode = false;
                 self.ui_state.add_server_json_text.clear();
-                self.new_server_config = McpServerConfig::default();
-                // Set default directory for JSON mode
-                self.new_server_config.directory = "自定义".to_string();
+                // 清理之前的测试结果
+                self.ui_state.connection_test_result = None;
+                self.ui_state.tested_capabilities = None;
+                self.ui_state.error_message = None;
+
+                // 创建带有合理默认值的新配置
+                self.new_server_config = McpServerConfig {
+                    id: uuid::Uuid::new_v4(),
+                    name: "Filesystem Server".to_string(),
+                    description: Some("MCP Filesystem Server - 文件系统操作".to_string()),
+                    transport: TransportConfig::Command {
+                        command: "npx".to_string(),
+                        args: vec![
+                            "-y".to_string(),
+                            "@modelcontextprotocol/server-filesystem".to_string(),
+                            ".".to_string(), // 使用当前目录，与Inspector一致
+                        ],
+                        env: HashMap::new(),
+                    },
+                    enabled: false,
+                    auto_start: false,
+                    directory: "自定义".to_string(),
+                    metadata: HashMap::new(),
+                    capabilities: None,
+                    last_health_status: None,
+                    last_test_time: None,
+                    last_test_success: None,
+                };
             }
 
             if ui.button("📁 导入配置").clicked() {
@@ -1219,15 +1244,46 @@ impl McpSettingsUi {
                 if let TransportConfig::Command { command, args, env } = &mut self.new_server_config.transport {
                     ui.horizontal(|ui| {
                         ui.label("命令:");
-                        ui.add(TextEdit::singleline(command).desired_width(200.0));
+                        ui.add(TextEdit::singleline(command).hint_text("例如: npx").desired_width(200.0));
                     });
                     ui.horizontal(|ui| {
                         ui.label("参数:");
                         let args_text = args.join(" ");
                         let mut args_input = args_text.clone();
-                        ui.add(TextEdit::singleline(&mut args_input).desired_width(200.0));
+                        ui.add(TextEdit::singleline(&mut args_input)
+                            .hint_text("例如: -y @modelcontextprotocol/server-filesystem /path/to/directory")
+                            .desired_width(400.0));
                         if args_input != args_text {
                             *args = args_input.split_whitespace().map(|s| s.to_string()).collect();
+                        }
+                    });
+
+                    // 添加重要提示
+                    ui.label("💡 重要提示:");
+                    ui.label("• filesystem 服务器需要指定允许访问的目录路径");
+                    ui.label("• 示例: -y @modelcontextprotocol/server-filesystem /Users/username/Desktop");
+                    ui.label("• 可以指定多个目录，用空格分隔");
+
+                    // 快速设置按钮
+                    ui.horizontal(|ui| {
+                        if ui.button("📁 Filesystem 模板").clicked() {
+                            *command = "npx".to_string();
+                            *args = vec![
+                                "-y".to_string(),
+                                "@modelcontextprotocol/server-filesystem".to_string(),
+                                ".".to_string(), // 使用当前目录
+                            ];
+                        }
+                        if ui.button("🌐 Git 模板").clicked() {
+                            *command = "uvx".to_string();
+                            *args = vec!["mcp-server-git".to_string()];
+                        }
+                        if ui.button("🔍 Everything 模板").clicked() {
+                            *command = "npx".to_string();
+                            *args = vec![
+                                "-y".to_string(),
+                                "@modelcontextprotocol/server-everything".to_string(),
+                            ];
                         }
                     });
 
@@ -1277,8 +1333,12 @@ impl McpSettingsUi {
                     });
                 } else {
                     self.new_server_config.transport = TransportConfig::Command {
-                        command: String::new(),
-                        args: Vec::new(),
+                        command: "npx".to_string(),
+                        args: vec![
+                            "-y".to_string(),
+                            "@modelcontextprotocol/server-filesystem".to_string(),
+                            ".".to_string(), // 使用当前目录
+                        ],
                         env: HashMap::new(),
                     };
                 }
@@ -1816,15 +1876,21 @@ impl McpSettingsUi {
                 });
 
                 ui.indent("tools", |ui| {
-                    for tool in &capabilities.tools {
-                        ui.horizontal(|ui| {
-                            ui.label("  •");
-                            ui.label(&tool.name);
-                            if let Some(desc) = &tool.description {
-                                ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                    // 为工具列表添加滚动区域，支持长列表和长描述
+                    ScrollArea::vertical()
+                        .id_salt("server_capabilities_tools")
+                        .max_height(150.0)  // 限制最大高度为150像素
+                        .show(ui, |ui| {
+                            for tool in &capabilities.tools {
+                                ui.horizontal(|ui| {
+                                    ui.label("  •");
+                                    ui.label(&tool.name);
+                                    if let Some(desc) = &tool.description {
+                                        ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                                    }
+                                });
                             }
                         });
-                    }
                 });
             }
 
@@ -1836,15 +1902,21 @@ impl McpSettingsUi {
                 });
 
                 ui.indent("resources", |ui| {
-                    for resource in &capabilities.resources {
-                        ui.horizontal(|ui| {
-                            ui.label("  •");
-                            ui.label(&resource.name);
-                            if let Some(desc) = &resource.description {
-                                ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                    // 为资源列表添加滚动区域，支持长列表和长描述
+                    ScrollArea::vertical()
+                        .id_salt("server_capabilities_resources")
+                        .max_height(150.0)  // 限制最大高度为150像素
+                        .show(ui, |ui| {
+                            for resource in &capabilities.resources {
+                                ui.horizontal(|ui| {
+                                    ui.label("  •");
+                                    ui.label(&resource.name);
+                                    if let Some(desc) = &resource.description {
+                                        ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                                    }
+                                });
                             }
                         });
-                    }
                 });
             }
 
@@ -1856,15 +1928,21 @@ impl McpSettingsUi {
                 });
 
                 ui.indent("prompts", |ui| {
-                    for prompt in &capabilities.prompts {
-                        ui.horizontal(|ui| {
-                            ui.label("  •");
-                            ui.label(&prompt.name);
-                            if let Some(desc) = &prompt.description {
-                                ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                    // 为提示列表添加滚动区域，支持长列表和长描述
+                    ScrollArea::vertical()
+                        .id_salt("server_capabilities_prompts")
+                        .max_height(150.0)  // 限制最大高度为150像素
+                        .show(ui, |ui| {
+                            for prompt in &capabilities.prompts {
+                                ui.horizontal(|ui| {
+                                    ui.label("  •");
+                                    ui.label(&prompt.name);
+                                    if let Some(desc) = &prompt.description {
+                                        ui.label(RichText::new(format!("- {}", desc)).color(Color32::GRAY));
+                                    }
+                                });
                             }
                         });
-                    }
                 });
             }
 
@@ -2122,16 +2200,21 @@ impl McpSettingsUi {
                                         ui.separator();
                                         ui.label(RichText::new("参数设置:").strong());
 
-                                        // Parse inputSchema to generate parameter inputs
-                                        if let Some(schema_value) = &tool.input_schema {
-                                            if let Some(schema) = schema_value.as_object() {
-                                                if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                                                let required_fields = schema.get("required")
-                                                    .and_then(|r| r.as_array())
-                                                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<std::collections::HashSet<_>>())
-                                                    .unwrap_or_default();
+                                        // 为参数输入区域添加滚动区域，防止参数过多时挤出按钮
+                                        ScrollArea::vertical()
+                                            .id_salt(format!("tool_test_parameters_{}", selected_tool_index))
+                                            .max_height(200.0)  // 限制最大高度为200像素
+                                            .show(ui, |ui| {
+                                                // Parse inputSchema to generate parameter inputs
+                                                if let Some(schema_value) = &tool.input_schema {
+                                                    if let Some(schema) = schema_value.as_object() {
+                                                        if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                                                        let required_fields = schema.get("required")
+                                                            .and_then(|r| r.as_array())
+                                                            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<std::collections::HashSet<_>>())
+                                                            .unwrap_or_default();
 
-                                                for (param_name, param_schema) in properties {
+                                                        for (param_name, param_schema) in properties {
                                                     // Inline parameter input rendering to avoid borrowing issues
                                                     ui.horizontal(|ui| {
                                                         let is_required = required_fields.contains(param_name.as_str());
@@ -2199,15 +2282,16 @@ impl McpSettingsUi {
                                                         });
                                                     }
                                                 }
+                                                        } else {
+                                                            ui.colored_label(Color32::GRAY, "该工具无需参数");
+                                                        }
+                                                    } else {
+                                                        ui.colored_label(Color32::GRAY, "该工具无需参数");
+                                                    }
                                                 } else {
                                                     ui.colored_label(Color32::GRAY, "该工具无需参数");
                                                 }
-                                            } else {
-                                                ui.colored_label(Color32::GRAY, "该工具无需参数");
-                                            }
-                                        } else {
-                                            ui.colored_label(Color32::GRAY, "该工具无需参数");
-                                        }
+                                            });
                                     }
                                 }
                             }
@@ -2219,7 +2303,12 @@ impl McpSettingsUi {
                                                 ui.separator();
                                                 ui.label(RichText::new("参数设置:").strong());
 
-                                                for arg in arguments {
+                                                // 为提示参数输入区域添加滚动区域，防止参数过多时挤出按钮
+                                                ScrollArea::vertical()
+                                                    .id_salt(format!("prompt_test_parameters_{}", selected_prompt_index))
+                                                    .max_height(200.0)  // 限制最大高度为200像素
+                                                    .show(ui, |ui| {
+                                                        for arg in arguments {
                                                     ui.horizontal(|ui| {
                                                         let is_required = arg.required;
                                                         let label_text = if is_required {
@@ -2258,7 +2347,8 @@ impl McpSettingsUi {
                                                             });
                                                         }
                                                     }
-                                                }
+                                                        }
+                                                    });
                                         } else {
                                             ui.separator();
                                             ui.colored_label(Color32::GRAY, "该提示无需参数");
@@ -3341,14 +3431,28 @@ impl McpSettingsUi {
             if let Some(tool) = dialog.available_tools.get(tool_index) {
                 ui.separator();
                 ui.label(RichText::new("工具描述:").strong());
-                ui.label(tool.description.as_deref().unwrap_or("无描述"));
+
+                // 为工具描述添加滚动区域，支持长描述
+                let description = tool.description.as_deref().unwrap_or("无描述");
+                ScrollArea::vertical()
+                    .id_salt(format!("tool_description_{}", tool_index))
+                    .max_height(120.0)  // 限制最大高度为120像素
+                    .show(ui, |ui| {
+                        ui.label(description);
+                    });
 
                 // Parameter inputs
                 if let Some(input_schema) = &tool.input_schema {
                     ui.separator();
                     ui.label(RichText::new("参数配置:").strong());
 
-                    Self::render_tool_parameters_static(ui, input_schema, &mut dialog.parameter_inputs);
+                    // 为参数输入区域添加滚动区域，防止参数过多时挤出按钮
+                    ScrollArea::vertical()
+                        .id_salt(format!("tool_parameters_{}", tool_index))
+                        .max_height(200.0)  // 限制最大高度为200像素
+                        .show(ui, |ui| {
+                            Self::render_tool_parameters_static(ui, input_schema, &mut dialog.parameter_inputs);
+                        });
                 }
 
                 // Test button
@@ -3571,88 +3675,76 @@ impl McpSettingsUi {
         self.ui_state.error_message = None;
         self.ui_state.status_message = Some("正在测试连接...".to_string());
 
-        // 异步执行连接测试
-        let server_manager = &mut self.server_manager;
+        // 异步执行连接测试 - 使用简化的方法避免借用检查问题
         let config_clone = config.clone();
 
-        // 使用运行时执行异步测试
-        let (result, temp_server_id) = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.block_on(async {
-                // 临时添加服务器配置到客户端
-                if let Some(client) = server_manager.get_rmcp_client_mut() {
-                    let temp_server_id = client.add_server_config(config_clone.clone());
-
-                    // 先连接服务器
-                    let connect_result = client.connect_server(temp_server_id).await;
-                    if let Err(e) = connect_result {
-                        log::warn!("连接服务器失败: {}", e);
-                        return (Err(format!("连接服务器失败: {}", e)), Some(temp_server_id));
-                    }
-
-                    // 测试连接并获取能力
-                    let test_result = match client.query_server_capabilities(temp_server_id).await {
-                        Ok(()) => {
-                            // 获取测试结果
-                            if let Some(capabilities) = client.get_server_capabilities(temp_server_id) {
-                                log::info!("✅ 连接测试成功 - 工具:{}, 资源:{}, 提示:{}",
-                                    capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
-
-                                Ok(capabilities)
-                            } else {
-                                Err("无法获取服务器能力信息".to_string())
-                            }
-                        }
-                        Err(e) => {
-                            Err(format!("连接测试失败: {}", e))
-                        }
-                    };
-                    (test_result, Some(temp_server_id))
-                } else {
-                    (Err("无法获取RMCP客户端".to_string()), None)
-                }
-            })
-        } else {
-            match tokio::runtime::Runtime::new() {
-                Ok(rt) => {
-                    rt.block_on(async {
+        // 直接在当前线程中执行，使用更短的超时机制快速fallback
+        let (result, temp_server_id) = if let Ok(rt) = tokio::runtime::Runtime::new() {
+            rt.block_on(async {
+                // 添加总体超时 - 45秒（给足够时间进行连接和查询）
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(45),
+                    async {
                         // 临时添加服务器配置到客户端
-                        if let Some(client) = server_manager.get_rmcp_client_mut() {
+                        if let Some(client) = self.server_manager.get_rmcp_client_mut() {
                             let temp_server_id = client.add_server_config(config_clone.clone());
 
-                            // 先连接服务器
-                            let connect_result = client.connect_server(temp_server_id).await;
-                            if let Err(e) = connect_result {
-                                log::warn!("连接服务器失败: {}", e);
-                                return (Err(format!("连接服务器失败: {}", e)), Some(temp_server_id));
+                            // 先连接服务器 - 增加连接超时（20秒）以匹配rmcp超时
+                            let connect_result = tokio::time::timeout(
+                                tokio::time::Duration::from_secs(20),
+                                client.connect_server(temp_server_id)
+                            ).await;
+
+                            match connect_result {
+                                Ok(Ok(())) => {
+                                    log::info!("✅ 服务器连接成功，开始查询能力");
+                                }
+                                Ok(Err(e)) => {
+                                    log::warn!("连接服务器失败: {}", e);
+                                    return (Err(format!("连接服务器失败: {}", e)), Some(temp_server_id));
+                                }
+                                Err(_) => {
+                                    log::warn!("连接服务器超时");
+                                    return (Err("连接服务器超时 (20秒)".to_string()), Some(temp_server_id));
+                                }
                             }
 
-                            // 测试连接并获取能力
-                            let test_result = match client.query_server_capabilities(temp_server_id).await {
-                                Ok(()) => {
+                            // 测试连接并获取能力 - 增加查询超时（15秒）
+                            let test_result = tokio::time::timeout(
+                                tokio::time::Duration::from_secs(15),
+                                client.query_server_capabilities(temp_server_id)
+                            ).await;
+
+                            match test_result {
+                                Ok(Ok(())) => {
                                     // 获取测试结果
                                     if let Some(capabilities) = client.get_server_capabilities(temp_server_id) {
                                         log::info!("✅ 连接测试成功 - 工具:{}, 资源:{}, 提示:{}",
                                             capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
 
-                                        Ok(capabilities)
+                                        (Ok(capabilities), Some(temp_server_id))
                                     } else {
-                                        Err("无法获取服务器能力信息".to_string())
+                                        (Err("无法获取服务器能力信息".to_string()), Some(temp_server_id))
                                     }
                                 }
-                                Err(e) => {
-                                    Err(format!("连接测试失败: {}", e))
+                                Ok(Err(e)) => {
+                                    (Err(format!("查询能力失败: {}", e)), Some(temp_server_id))
                                 }
-                            };
-                            (test_result, Some(temp_server_id))
+                                Err(_) => {
+                                    (Err("查询能力超时 (15秒)".to_string()), Some(temp_server_id))
+                                }
+                            }
                         } else {
                             (Err("无法获取RMCP客户端".to_string()), None)
                         }
-                    })
+                    }
+                ).await {
+                    Ok(result) => result,
+                    Err(_) => (Err("连接测试总体超时 (45秒)".to_string()), None)
                 }
-                Err(e) => {
-                    (Err(format!("无法创建异步运行时: {}", e)), None)
-                }
-            }
+            })
+        } else {
+            (Err("无法创建异步运行时".to_string()), None)
         };
 
         // 处理测试结果
@@ -3683,7 +3775,7 @@ impl McpSettingsUi {
         }
 
         // 清理临时服务器配置
-        if let (Some(client), Some(temp_id)) = (server_manager.get_rmcp_client_mut(), temp_server_id) {
+        if let (Some(client), Some(temp_id)) = (self.server_manager.get_rmcp_client_mut(), temp_server_id) {
             let _ = client.remove_server_config(temp_id);
         }
     }
@@ -3727,8 +3819,12 @@ impl Default for McpServerConfig {
             name: String::new(),
             description: None,
             transport: TransportConfig::Command {
-                command: String::new(),
-                args: Vec::new(),
+                command: "npx".to_string(),
+                args: vec![
+                    "-y".to_string(),
+                    "@modelcontextprotocol/server-filesystem".to_string(),
+                    ".".to_string(), // 使用当前目录，与Inspector一致
+                ],
                 env: HashMap::new(),
             },
             enabled: false,

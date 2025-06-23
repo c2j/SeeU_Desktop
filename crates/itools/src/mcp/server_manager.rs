@@ -588,9 +588,31 @@ impl McpServerManager {
         }
 
         match &config.transport {
-            TransportConfig::Command { command, .. } => {
+            TransportConfig::Command { command, args, .. } => {
                 if command.trim().is_empty() {
                     return Err(anyhow::anyhow!("Command cannot be empty"));
+                }
+
+                // 特殊检查：对于常见的MCP服务器，验证必需的参数
+                if command == "npx" && args.len() >= 2 {
+                    let package = &args[1];
+                    if package == "@modelcontextprotocol/server-filesystem" {
+                        // filesystem服务器需要至少一个目录参数
+                        if args.len() < 3 {
+                            return Err(anyhow::anyhow!(
+                                "Filesystem server requires at least one directory path. \
+                                Example: npx -y @modelcontextprotocol/server-filesystem /path/to/directory"
+                            ));
+                        }
+                        // 检查目录参数是否为空
+                        for (i, arg) in args.iter().enumerate().skip(2) {
+                            if arg.trim().is_empty() {
+                                return Err(anyhow::anyhow!(
+                                    "Directory path {} cannot be empty", i - 1
+                                ));
+                            }
+                        }
+                    }
                 }
             }
             TransportConfig::Tcp { host, port } => {
