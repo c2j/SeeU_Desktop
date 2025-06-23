@@ -24,6 +24,8 @@ dist-ssr
 /src-tauri/target/
 /src-iSearch/target/
 /src-iNote/target/
+/examples/rmcp_examples/target/
+/examples/rmcp_examples/clients/target/
 **/*.rs.bk
 Cargo.lock
 *.pdb
