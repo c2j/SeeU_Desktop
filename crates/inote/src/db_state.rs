@@ -79,6 +79,9 @@ pub struct DbINoteState {
     pub settings_auto_save: bool,                  // 自动保存
     pub settings_syntax_highlight: bool,           // 语法高亮
     pub settings_show_line_numbers: bool,          // 显示行号
+
+    // UI 布局设置
+    pub show_note_tree: bool,                      // 是否显示笔记树
 }
 
 impl Default for DbINoteState {
@@ -124,6 +127,9 @@ impl Default for DbINoteState {
             settings_auto_save: true,                   // 自动保存
             settings_syntax_highlight: true,            // 语法高亮
             settings_show_line_numbers: false,          // 不显示行号
+
+            // UI 布局设置默认值
+            show_note_tree: true,                       // 默认显示笔记树
         }
     }
 }
@@ -1079,5 +1085,11 @@ fn main() {
                 }
             }
         }
+    }
+
+    /// 切换笔记树的可见性
+    pub fn toggle_note_tree(&mut self) {
+        self.show_note_tree = !self.show_note_tree;
+        log::info!("Note tree visibility toggled to: {}", self.show_note_tree);
     }
 }

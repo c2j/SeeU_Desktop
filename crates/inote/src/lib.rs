@@ -497,13 +497,22 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
     } else {
         // 正常模式
         ui.vertical(|ui| {
-            // Search bar
+            // Search bar and controls
             ui.horizontal(|ui| {
+                // 笔记树切换按钮
+                let tree_button_text = if state.show_note_tree { "📁 隐藏树" } else { "📁 显示树" };
+                if ui.button(tree_button_text).on_hover_text("切换笔记树的显示/隐藏").clicked() {
+                    state.toggle_note_tree();
+                }
+
+                ui.separator();
+
                 ui.label("🔍");
+                let search_width = ui.available_width() - 50.0;
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut state.search_query)
                         .hint_text("搜索笔记... (支持 label:标签名)")
-                        .desired_width(ui.available_width() - 50.0)
+                        .desired_width(search_width)
                 );
 
                 if ui.button("搜索").clicked() ||
@@ -533,60 +542,53 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
 
             ui.separator();
 
-            // Main content with tree view
-            let mut side_panel = egui::SidePanel::left("tree_panel")
-                .resizable(true)
-                .default_width(250.0)
-                .max_width(400.0); // 设置最大宽度，防止被内容撑得过宽
+            // Main content layout - conditionally show tree view
+            if state.show_note_tree {
+                // Show tree view in left panel
+                let mut side_panel = egui::SidePanel::left("tree_panel")
+                    .resizable(true)
+                    .default_width(250.0)
+                    .max_width(400.0); // 设置最大宽度，防止被内容撑得过宽
 
-            // 在Linux下减少间距以解决100px间隔问题
-            #[cfg(target_os = "linux")]
-            {
-                side_panel = side_panel.frame(egui::Frame::none().inner_margin(egui::Margin::same(0.0)));
+                // 在Linux下减少间距以解决100px间隔问题
+                #[cfg(target_os = "linux")]
+                {
+                    side_panel = side_panel.frame(egui::Frame::none().inner_margin(egui::Margin::same(0.0)));
+                }
+
+                side_panel.show_inside(ui, |ui| {
+                        // 设置固定宽度布局，防止内容自动撑开
+                        ui.set_width(ui.available_width());
+
+                        // 检查是否正在搜索
+                        if state.is_searching {
+                            // 在侧边栏显示搜索结果
+                            log::info!("Sidebar: Showing search results. Query: '{}', Results: {}",
+                                state.search_query, state.search_results.len());
+                            crate::db_ui::render_search_results(ui, state);
+                        } else {
+                            // 树状视图，整合笔记本和笔记
+                            crate::tree_ui::render_tree_view(ui, state);
+
+                            // Tags section
+                            ui.add_space(10.0);
+                            crate::tree_ui::render_tag_list(ui, state);
+                        }
+                    });
             }
 
-            side_panel.show_inside(ui, |ui| {
-                    // 设置固定宽度布局，防止内容自动撑开
-                    ui.set_width(ui.available_width());
-
-                    // 检查是否正在搜索
-                    if state.is_searching {
-                        // 在侧边栏显示搜索结果
-                        log::info!("Sidebar: Showing search results. Query: '{}', Results: {}",
-                            state.search_query, state.search_results.len());
-                        crate::db_ui::render_search_results(ui, state);
-                    } else {
-                        // 树状视图，整合笔记本和笔记
-                        crate::tree_ui::render_tree_view(ui, state);
-
-                        // Tags section
-                        ui.add_space(10.0);
-                        crate::tree_ui::render_tag_list(ui, state);
-                    }
-                });
-
-            // 根据右侧边栏状态调整中央面板
-            if right_sidebar_open {
-                // 当右侧边栏打开时，使用受限的中央面板
-                let available_rect = ui.available_rect_before_wrap();
-                // 使用传递的实际侧边栏宽度，如果没有传递则使用默认值
-                let sidebar_width = right_sidebar_width.unwrap_or(300.0);
-                let margin = 10.0; // 减少边距，因为现在使用实际宽度
-                let content_width = available_rect.width() - sidebar_width - margin;
-
-                ui.allocate_ui_with_layout(
-                    egui::Vec2::new(content_width.max(200.0), available_rect.height()),
-                    egui::Layout::top_down(egui::Align::LEFT),
-                    |ui| {
-                        render_note_content_area(ui, state);
-                    }
-                );
-            } else {
-                // 正常情况下使用完整的中央面板
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+            // 使用完整的中央面板，egui会自动处理侧边栏的空间分配
+            // 增加右侧边距15px，使编辑区与AI助手侧边栏保持适当距离
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().inner_margin(egui::Margin {
+                    left: 8.0,
+                    right: 23.0,  // 8 + 15 = 23，增加15px右边距
+                    top: 8.0,
+                    bottom: 8.0,
+                }))
+                .show_inside(ui, |ui| {
                     render_note_content_area(ui, state);
                 });
-            }
         });
     }
 
@@ -602,10 +604,15 @@ fn render_note_content_area(ui: &mut egui::Ui, state: &mut DbINoteState) {
         if let Some(_note_id) = &state.current_note {
             crate::db_ui::render_note_editor(ui, state);
         } else {
-            // 否则显示搜索结果的提示
-            ui.centered_and_justified(|ui| {
-                ui.heading("请从左侧选择一个搜索结果");
-            });
+            // 如果笔记树隐藏，在中央面板显示搜索结果
+            if !state.show_note_tree {
+                crate::db_ui::render_search_results(ui, state);
+            } else {
+                // 否则显示搜索结果的提示
+                ui.centered_and_justified(|ui| {
+                    ui.heading("请从左侧选择一个搜索结果");
+                });
+            }
         }
     } else if let Some(_note_id) = &state.current_note {
         // 直接显示笔记编辑器
@@ -629,10 +636,68 @@ fn render_note_content_area(ui: &mut egui::Ui, state: &mut DbINoteState) {
             }
         }
     } else {
-        ui.centered_and_justified(|ui| {
-            ui.label("选择或创建一个笔记本");
-        });
+        // 如果笔记树隐藏，显示笔记本选择界面
+        if !state.show_note_tree {
+            render_notebook_selection_area(ui, state);
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label("选择或创建一个笔记本");
+            });
+        }
     }
+}
+
+/// 渲染笔记本选择区域（当笔记树隐藏时使用）
+fn render_notebook_selection_area(ui: &mut egui::Ui, state: &mut DbINoteState) {
+    ui.vertical_centered(|ui| {
+        ui.heading("📚 笔记本管理");
+        ui.add_space(20.0);
+
+        if state.notebooks.is_empty() {
+            ui.label("还没有笔记本");
+            ui.add_space(10.0);
+            if ui.button("+ 创建第一个笔记本").clicked() {
+                state.show_create_notebook = true;
+            }
+        } else {
+            ui.label("选择一个笔记本开始编辑：");
+            ui.add_space(10.0);
+
+            // 显示笔记本列表
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    // 克隆笔记本数据以避免借用冲突
+                    let notebooks_data: Vec<(usize, String, usize, bool)> = state.notebooks.iter().enumerate()
+                        .map(|(idx, nb)| (idx, nb.name.clone(), nb.note_ids.len(), state.current_notebook == Some(idx)))
+                        .collect();
+
+                    for (notebook_idx, notebook_name, note_count, is_selected) in notebooks_data {
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(is_selected, format!("📓 {}", notebook_name)).clicked() {
+                                state.select_notebook(notebook_idx);
+                                state.current_note = None;
+                                // 自动展开并加载笔记
+                                if let Some(nb) = state.notebooks.get_mut(notebook_idx) {
+                                    if !nb.expanded {
+                                        nb.expanded = true;
+                                        let notebook_id = nb.id.clone();
+                                        state.load_notes_for_notebook(&notebook_id);
+                                    }
+                                }
+                            }
+
+                            ui.label(format!("({} 个笔记)", note_count));
+                        });
+                    }
+                });
+
+            ui.add_space(20.0);
+            if ui.button("+ 创建新笔记本").clicked() {
+                state.show_create_notebook = true;
+            }
+        }
+    });
 }
 
 /// 处理对话框的函数
@@ -856,50 +921,7 @@ fn process_dialogs(ui: &mut egui::Ui, state: &mut DbINoteState) {
             }
         }
     }
-
-    // ui.vertical(|ui| {
-
-    //     // Main content
-    //     egui::SidePanel::left("notebooks_panel")
-    //         .resizable(true)
-    //         .default_width(200.0)
-    //         .show_inside(ui, |ui| {
-    //             // Notebook section
-    //             crate::db_ui::render_notebook_list(ui, state);
-
-    //             // Tags section
-    //             ui.add_space(10.0);
-    //             crate::db_ui::render_tag_list(ui, state);
-    //         });
-
-    //     egui::CentralPanel::default().show_inside(ui, |ui| {
-    //         // Notes panel
-    //         if let Some(notebook_idx) = state.current_notebook {
-    //             if notebook_idx < state.notebooks.len() {
-    //                 // Split the central panel
-    //                 egui::SidePanel::left("notes_list_panel")
-    //                     .resizable(true)
-    //                     .default_width(200.0)
-    //                     .show_inside(ui, |ui| {
-    //                         // Notes list
-    //                         crate::db_ui::render_note_list(ui, state);
-    //                     });
-
-    //                 // Note editor
-    //                 egui::CentralPanel::default().show_inside(ui, |ui| {
-    //                     crate::db_ui::render_note_editor(ui, state);
-    //                 });
-    //             }
-    //         } else {
-    //             ui.centered_and_justified(|ui| {
-    //                 ui.label("选择或创建一个笔记本");
-    //             });
-    //         }
-    //     });
-    // });
 }
-
-// Dialog processing functions have been moved inline to render_inote
 
 /// Convert hex color string to egui::Color32
 fn hex_to_color32(hex: &str) -> egui::Color32 {
@@ -937,7 +959,8 @@ pub fn save_settings(state: &DbINoteState) -> Result<(), Box<dyn std::error::Err
         "settings_show_note_stats": state.settings_show_note_stats,
         "settings_auto_save": state.settings_auto_save,
         "settings_syntax_highlight": state.settings_syntax_highlight,
-        "settings_show_line_numbers": state.settings_show_line_numbers
+        "settings_show_line_numbers": state.settings_show_line_numbers,
+        "show_note_tree": state.show_note_tree
     });
 
     let json = serde_json::to_string_pretty(&settings)?;
@@ -974,6 +997,9 @@ pub fn load_settings(state: &mut DbINoteState) -> Result<(), Box<dyn std::error:
             }
             if let Some(value) = settings.get("settings_show_line_numbers").and_then(|v| v.as_bool()) {
                 state.settings_show_line_numbers = value;
+            }
+            if let Some(value) = settings.get("show_note_tree").and_then(|v| v.as_bool()) {
+                state.show_note_tree = value;
             }
 
             log::info!("Note settings loaded successfully");

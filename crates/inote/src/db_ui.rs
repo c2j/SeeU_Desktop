@@ -438,7 +438,7 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
                 // 使用与编辑器相同的等宽字体配置
                 let mut title_edit = egui::TextEdit::singleline(&mut state.note_title)
-                    .desired_width(ui.available_width() - 50.0)
+                    .desired_width(ui.available_width() - 10.0)
                     .font(egui::FontId::monospace(16.0))  // 稍大的字体，更像标题
                     .hint_text("输入笔记标题...");
 
@@ -486,9 +486,12 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                     if state.markdown_preview {
                         // Markdown preview with search highlighting
                         let search_terms = state.get_search_terms();
+                        let available_height = ui.available_height();
                         egui::ScrollArea::vertical()
                             .id_source("markdown_preview_scroll")
                             .auto_shrink([false, false])  // 不自动收缩，占满可用空间
+                            .max_height(available_height)  // 设置最大高度为可用高度
+                            .min_scrolled_height(available_height)  // 设置最小高度，确保填充可用空间
                             .show(ui, |ui| {
                                 ui.add_space(10.0);
                                 crate::markdown::render_markdown_with_highlight(ui, &state.note_content, &search_terms);
@@ -496,9 +499,12 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                             });
                     } else {
                         // Editor mode - 使用 ScrollArea 包装编辑器
+                        let available_height = ui.available_height();
                         egui::ScrollArea::vertical()
                             .id_source("editor_scroll")
                             .auto_shrink([false, false])  // 不自动收缩，占满可用空间
+                            .max_height(available_height)  // 设置最大高度为可用高度
+                            .min_scrolled_height(available_height)  // 设置最小高度，确保填充可用空间
                             .show(ui, |ui| {
                     // 获取搜索关键字（在创建 layouter 之前）
                     let search_terms = state.get_search_terms();
@@ -547,7 +553,14 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
                     text_edit = text_edit.layouter(&mut layouter);
 
-                    let response = ui.add(text_edit);
+                    // 使用allocate_ui强制TextEdit占用全部可用高度
+                    let response = ui.allocate_ui_with_layout(
+                        egui::Vec2::new(ui.available_width(), available_height),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| {
+                            ui.add_sized([ui.available_width(), ui.available_height()], text_edit)
+                        }
+                    ).inner;
 
                     // Check for keyboard shortcuts - 改进IME支持
                     ui.input(|i| {
