@@ -461,10 +461,13 @@ fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
                     .max_height(remaining_height.max(200.0)) // Ensure minimum height of 200px
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        // Calculate available width for table layout
+                        let table_width = ui.available_width() - 20.0;
+
                         // Render results based on view mode
                         match state.view_mode {
                             ViewMode::Detailed => render_detailed_view(ui, state),
-                            ViewMode::List => render_list_view(ui, state),
+                            ViewMode::List => render_list_view(ui, state, table_width),
                         }
                     });
                         // Results will be rendered by the appropriate view function
@@ -862,7 +865,7 @@ fn render_detailed_view(ui: &mut egui::Ui, state: &mut ISearchState) {
 }
 
 /// Render search results in list view (table-style) using egui_extras::TableBuilder
-fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState) {
+fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState, available_width: f32) {
     // Clone the results to avoid borrowing issues
     let results = state.search_results.clone();
 
@@ -873,28 +876,143 @@ fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState) {
 
     use egui_extras::{TableBuilder, Column};
 
+    // Calculate dynamic column widths based on available space
+    let total_available = available_width - 20.0; // Reserve space for margins
+
+    // Define column width strategy based on available space
+    let (filename_width, path_width, size_width, time_width, actions_width) = if total_available < 600.0 {
+        // Compact layout for narrow screens
+        let filename_w = (total_available * 0.30).max(120.0).min(180.0);
+        let path_w = (total_available * 0.40).max(150.0);
+        let size_w = (total_available * 0.12).max(60.0).min(80.0);
+        let time_w = (total_available * 0.12).max(80.0).min(100.0);
+        let actions_w = total_available - filename_w - path_w - size_w - time_w;
+        (filename_w, path_w, size_w, time_w, actions_w.max(80.0))
+    } else if total_available < 900.0 {
+        // Medium layout for normal screens
+        let filename_w = (total_available * 0.25).max(150.0).min(220.0);
+        let path_w = (total_available * 0.45).max(200.0);
+        let size_w = 80.0;
+        let time_w = 100.0;
+        let actions_w = total_available - filename_w - path_w - size_w - time_w;
+        (filename_w, path_w, size_w, time_w, actions_w.max(120.0))
+    } else {
+        // Wide layout for large screens
+        let filename_w = (total_available * 0.22).max(180.0).min(280.0);
+        let path_w = (total_available * 0.50).max(250.0);
+        let size_w = 90.0;
+        let time_w = 120.0;
+        let actions_w = total_available - filename_w - path_w - size_w - time_w;
+        (filename_w, path_w, size_w, time_w, actions_w.max(140.0))
+    };
+
+    // Calculate max scroll height before creating TableBuilder
+    let max_scroll_height = ui.available_height() - 10.0;
+
     TableBuilder::new(ui)
         .striped(true)
         .resizable(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::auto().at_least(180.0).at_most(250.0)) // 文件名列
-        .column(Column::remainder().at_least(200.0)) // 路径列 - 使用剩余空间
-        .column(Column::auto().at_least(80.0).at_most(100.0)) // 大小列
-        .column(Column::auto().at_least(100.0).at_most(120.0)) // 修改时间列
-        .column(Column::auto().at_least(120.0).at_most(150.0)) // 操作列
+        .max_scroll_height(max_scroll_height) // Reserve space for statistics
+        .column(Column::exact(filename_width)) // 文件名列 - 动态宽度
+        .column(Column::exact(path_width)) // 路径列 - 动态宽度
+        .column(Column::exact(size_width)) // 大小列 - 动态宽度
+        .column(Column::exact(time_width)) // 修改时间列 - 动态宽度
+        .column(Column::exact(actions_width)) // 操作列 - 动态宽度
         .header(20.0, |mut header| {
+            // File name header - clickable for sorting
             header.col(|ui| {
-                ui.strong("文件名");
+                let is_current_sort = state.sort_by == SortBy::FileName;
+                let header_text = if is_current_sort {
+                    format!("文件名 {}", state.sort_order.icon())
+                } else {
+                    "文件名".to_string()
+                };
+
+                let header_response = if is_current_sort {
+                    ui.add(egui::Button::new(egui::RichText::new(header_text).strong())
+                        .fill(ui.visuals().selection.bg_fill)
+                        .frame(false))
+                } else {
+                    ui.add(egui::Button::new(egui::RichText::new(header_text).strong())
+                        .frame(false))
+                };
+
+                if header_response.clicked() {
+                    state.set_sort_by(SortBy::FileName);
+                }
             });
+
+            // Path header - clickable for sorting
             header.col(|ui| {
-                ui.strong("路径");
+                let is_current_sort = state.sort_by == SortBy::DirectoryName;
+                let header_text = if is_current_sort {
+                    format!("路径 {}", state.sort_order.icon())
+                } else {
+                    "路径".to_string()
+                };
+
+                let header_response = if is_current_sort {
+                    ui.add(egui::Button::new(egui::RichText::new(header_text).strong())
+                        .fill(ui.visuals().selection.bg_fill)
+                        .frame(false))
+                } else {
+                    ui.add(egui::Button::new(egui::RichText::new(header_text).strong())
+                        .frame(false))
+                };
+
+                if header_response.clicked() {
+                    state.set_sort_by(SortBy::DirectoryName);
+                }
             });
+
+            // Size header - clickable for sorting
             header.col(|ui| {
-                ui.strong("大小");
+                let is_current_sort = state.sort_by == SortBy::FileSize;
+                let header_text = if is_current_sort {
+                    format!("大小 {}", state.sort_order.icon())
+                } else {
+                    "大小".to_string()
+                };
+
+                let header_response = if is_current_sort {
+                    ui.add(egui::Button::new(egui::RichText::new(header_text).strong())
+                        .fill(ui.visuals().selection.bg_fill)
+                        .frame(false))
+                } else {
+                    ui.add(egui::Button::new(egui::RichText::new(header_text).strong())
+                        .frame(false))
+                };
+
+                if header_response.clicked() {
+                    state.set_sort_by(SortBy::FileSize);
+                }
             });
+
+            // Modified time header - clickable for sorting
             header.col(|ui| {
-                ui.strong("修改时间");
+                let is_current_sort = state.sort_by == SortBy::ModifiedTime;
+                let header_text = if is_current_sort {
+                    format!("修改时间 {}", state.sort_order.icon())
+                } else {
+                    "修改时间".to_string()
+                };
+
+                let header_response = if is_current_sort {
+                    ui.add(egui::Button::new(egui::RichText::new(header_text).strong())
+                        .fill(ui.visuals().selection.bg_fill)
+                        .frame(false))
+                } else {
+                    ui.add(egui::Button::new(egui::RichText::new(header_text).strong())
+                        .frame(false))
+                };
+
+                if header_response.clicked() {
+                    state.set_sort_by(SortBy::ModifiedTime);
+                }
             });
+
+            // Actions header - not sortable
             header.col(|ui| {
                 ui.strong("操作");
             });
@@ -918,8 +1036,9 @@ fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState) {
                             };
                             ui.label(icon);
 
-                            // File name with highlighting
-                            let truncated_filename = utils::truncate_with_ellipsis(&result.filename, 25);
+                            // File name with highlighting - dynamic truncation based on column width
+                            let max_filename_chars = ((filename_width - 30.0) / 8.0) as usize; // Estimate chars based on width
+                            let truncated_filename = utils::truncate_with_ellipsis(&result.filename, max_filename_chars.max(10));
                             if !state.search_query.trim().is_empty() {
                                 let search_terms = utils::extract_search_terms(&state.search_query);
                                 let filename_lower = truncated_filename.to_lowercase();
@@ -937,9 +1056,10 @@ fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState) {
                         });
                     });
 
-                    // File path column
+                    // File path column - dynamic truncation based on column width
                     row.col(|ui| {
-                        let truncated_path = utils::truncate_with_ellipsis(&result.path, 50);
+                        let max_path_chars = ((path_width - 20.0) / 7.0) as usize; // Estimate chars based on width
+                        let truncated_path = utils::truncate_with_ellipsis(&result.path, max_path_chars.max(15));
                         ui.label(truncated_path).on_hover_text(&result.path);
                     });
 
