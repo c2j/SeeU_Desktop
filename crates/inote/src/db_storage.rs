@@ -929,6 +929,16 @@ impl DbStorageManager {
             [],
         )?;
 
+        // Create settings table for storing application settings
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
         // Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON", [])?;
 
@@ -1251,5 +1261,35 @@ impl DbStorageManager {
         )?;
 
         Ok(())
+    }
+
+    /// Save a setting
+    pub fn save_setting(&self, key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+            params![key, value, now],
+        )?;
+
+        Ok(())
+    }
+
+    /// Load a setting
+    pub fn load_setting(&self, key: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+
+        match conn.query_row(
+            "SELECT value FROM settings WHERE key = ?",
+            params![key],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(Box::new(e)),
+        }
     }
 }

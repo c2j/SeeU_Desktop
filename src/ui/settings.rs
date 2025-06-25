@@ -1218,6 +1218,70 @@ fn render_notes_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
             }
         });
     });
+
+    ui.add_space(15.0);
+
+    // 幻灯片设置
+    ui.group(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("幻灯片设置").strong());
+            ui.add_space(5.0);
+
+            // 当前选中的样式模板
+            let current_template = app.inote_state.slide_style_manager.get_selected_template();
+            ui.horizontal(|ui| {
+                ui.label("当前样式模板:");
+                ui.label(egui::RichText::new(&current_template.name).strong());
+            });
+
+            ui.add_space(5.0);
+
+            // 样式模板管理
+            ui.horizontal(|ui| {
+                if ui.button("📝 管理样式模板").clicked() {
+                    // TODO: 打开样式模板管理对话框
+                    log::info!("Opening slide template manager");
+                }
+
+                if ui.button("🎨 创建新模板").clicked() {
+                    // TODO: 打开创建新模板对话框
+                    log::info!("Creating new slide template");
+                }
+            });
+
+            ui.add_space(5.0);
+
+            // 快速样式选择
+            ui.label("快速选择样式:");
+            ui.horizontal_wrapped(|ui| {
+                let all_templates = app.inote_state.slide_style_manager.get_all_templates();
+                for template in all_templates {
+                    let is_selected = template.id == app.inote_state.slide_style_manager.selected_template_id;
+                    let button_text = if is_selected {
+                        format!("● {}", template.name)
+                    } else {
+                        template.name.clone()
+                    };
+
+                    let button = egui::Button::new(button_text)
+                        .fill(if is_selected {
+                            ui.style().visuals.selection.bg_fill
+                        } else {
+                            ui.style().visuals.widgets.inactive.bg_fill
+                        });
+
+                    if ui.add(button).clicked() && !is_selected {
+                        app.inote_state.slide_style_manager.set_selected_template(template.id.clone());
+                        // 保存设置
+                        if let Err(e) = app.inote_state.save_slide_style_config() {
+                            log::error!("Failed to save slide style config: {}", e);
+                        }
+                        log::info!("Selected slide template: {}", template.name);
+                    }
+                }
+            });
+        });
+    });
 }
 
 /// Render advanced settings

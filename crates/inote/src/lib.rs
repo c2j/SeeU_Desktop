@@ -10,6 +10,7 @@ pub mod db_ui;
 pub mod db_ui_import;
 pub mod tree_ui;
 pub mod markdown;
+pub mod slide;
 pub mod siyuan_import;
 pub mod mcp_server;
 pub mod mcp_sync;
@@ -461,7 +462,14 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
     // Ensure data is loaded when needed (lazy loading)
     state.ensure_data_loaded();
 
-
+    // 检查是否处于幻灯片播放模式
+    if state.slide_play_state.is_playing {
+        let should_close = crate::slide::SlideRenderer::render_slideshow(ui, &mut state.slide_play_state);
+        if should_close {
+            state.stop_slideshow();
+        }
+        return; // 在幻灯片模式下，不渲染其他UI
+    }
 
     // 检查是否处于全窗口最大化模式
     if state.editor_maximized && state.current_note.is_some() {

@@ -11,6 +11,7 @@ use crate::db_storage::DbStorageManager;
 use crate::clipboard::ClipboardManager;
 use crate::migration::DataMigration;
 use crate::db_ui_import::SiyuanImportState;
+use crate::slide::{SlidePlayState, SlideParser, SlideStyleManager};
 
 /// 删除确认类型
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +68,9 @@ pub struct DbINoteState {
     pub combined_editor: bool,       // Whether title and content are combined in editor
     pub siyuan_import: SiyuanImportState, // 思源笔记导入状态
     pub show_markdown_help: bool,    // Whether to show the Markdown help popup
+    pub slide_play_state: SlidePlayState, // 幻灯片播放状态
+    pub slide_parser: SlideParser,   // 幻灯片解析器
+    pub slide_style_manager: SlideStyleManager, // 幻灯片样式管理器
 
     // 删除确认对话框
     pub show_delete_confirmation: bool,
@@ -117,6 +121,9 @@ impl Default for DbINoteState {
             combined_editor: false,  // 默认使用分离标题模式
             siyuan_import: SiyuanImportState::default(),
             show_markdown_help: false,
+            slide_play_state: SlidePlayState::default(),
+            slide_parser: SlideParser::new(),
+            slide_style_manager: SlideStyleManager::default(),
             show_delete_confirmation: false,
             delete_confirmation: None,
 
@@ -142,6 +149,11 @@ impl DbINoteState {
         // Load settings first
         if let Err(err) = crate::load_settings(self) {
             log::warn!("Failed to load note settings: {}", err);
+        }
+
+        // Load slide style configuration
+        if let Err(err) = self.load_slide_style_config() {
+            log::warn!("Failed to load slide style config: {}", err);
         }
 
         // Don't load data here - it will be loaded asynchronously
@@ -1091,5 +1103,111 @@ fn main() {
     pub fn toggle_note_tree(&mut self) {
         self.show_note_tree = !self.show_note_tree;
         log::info!("Note tree visibility toggled to: {}", self.show_note_tree);
+    }
+
+    /// 检查当前笔记是否支持幻灯片模式
+    pub fn is_current_note_slideshow(&self) -> bool {
+        if self.note_content.trim().is_empty() {
+            return false;
+        }
+        self.slide_parser.is_slideshow(&self.note_content)
+    }
+
+    /// 开始播放当前笔记的幻灯片
+    pub fn start_slideshow(&mut self) -> Result<(), String> {
+        if !self.is_current_note_slideshow() {
+            return Err("当前笔记不支持幻灯片模式".to_string());
+        }
+
+        let slideshow = self.slide_parser.parse(&self.note_content)?;
+        let selected_template = self.slide_style_manager.get_selected_template();
+        self.slide_play_state.start_slideshow_with_template(slideshow, selected_template);
+
+        log::info!("Started slideshow with {} slides using template: {}",
+                  self.slide_play_state.get_slide_count(),
+                  self.slide_style_manager.selected_template_id);
+        Ok(())
+    }
+
+    /// 开始播放幻灯片（带样式选择）
+    pub fn start_slideshow_with_style(&mut self, template_id: &str) -> Result<(), String> {
+        if !self.is_current_note_slideshow() {
+            return Err("当前笔记不支持幻灯片模式".to_string());
+        }
+
+        let slideshow = self.slide_parser.parse(&self.note_content)?;
+
+        if let Some(template) = self.slide_style_manager.get_template(template_id) {
+            self.slide_play_state.start_slideshow_with_template(slideshow, template);
+            log::info!("Started slideshow with template: {}", template_id);
+            Ok(())
+        } else {
+            Err(format!("样式模板不存在: {}", template_id))
+        }
+    }
+
+    /// 停止播放幻灯片
+    pub fn stop_slideshow(&mut self) {
+        self.slide_play_state.stop_slideshow();
+        log::info!("Stopped slideshow");
+    }
+
+    /// 获取幻灯片播放状态的可变引用
+    pub fn get_slide_play_state_mut(&mut self) -> &mut SlidePlayState {
+        &mut self.slide_play_state
+    }
+
+    /// 获取幻灯片播放状态的不可变引用
+    pub fn get_slide_play_state(&self) -> &SlidePlayState {
+        &self.slide_play_state
+    }
+
+    /// 保存幻灯片样式配置
+    pub fn save_slide_style_config(&self) -> Result<(), String> {
+        let config_json = serde_json::to_string(&self.slide_style_manager)
+            .map_err(|e| format!("序列化样式配置失败: {}", e))?;
+
+        if let Ok(storage) = self.storage.lock() {
+            storage.save_setting("slide_style_config", &config_json)
+                .map_err(|e| format!("保存样式配置失败: {}", e))?;
+
+            log::info!("Slide style configuration saved");
+            Ok(())
+        } else {
+            Err("无法锁定存储".to_string())
+        }
+    }
+
+    /// 加载幻灯片样式配置
+    pub fn load_slide_style_config(&mut self) -> Result<(), String> {
+        if let Ok(storage) = self.storage.lock() {
+            match storage.load_setting("slide_style_config") {
+                Ok(Some(config_json)) => {
+                    match serde_json::from_str::<SlideStyleManager>(&config_json) {
+                        Ok(style_manager) => {
+                            self.slide_style_manager = style_manager;
+                            log::info!("Slide style configuration loaded");
+                            Ok(())
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to deserialize slide style config: {}", e);
+                            // 使用默认配置
+                            self.slide_style_manager = SlideStyleManager::default();
+                            Ok(())
+                        }
+                    }
+                }
+                Ok(None) => {
+                    log::info!("No slide style configuration found, using defaults");
+                    Ok(())
+                }
+                Err(e) => {
+                    log::warn!("Failed to load slide style config: {}", e);
+                    Ok(()) // 不阻止应用启动
+                }
+            }
+        } else {
+            Err("无法锁定存储".to_string())
+        }
     }
 }

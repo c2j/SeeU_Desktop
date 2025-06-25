@@ -399,6 +399,50 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                     state.markdown_preview = true;
                 }
 
+                // 幻灯片播放按钮
+                ui.separator();
+                let is_slideshow = state.is_current_note_slideshow();
+
+                ui.horizontal(|ui| {
+                    let slide_button = ui.add_enabled(is_slideshow, egui::Button::new("🎬 播放幻灯片"))
+                        .on_hover_text(if is_slideshow {
+                            "以幻灯片模式播放当前笔记\n支持 --slide 分隔符和CSS样式"
+                        } else {
+                            "当前笔记不支持幻灯片模式\n请添加 --slide 分隔符或CSS样式块"
+                        });
+
+                    if slide_button.clicked() && is_slideshow {
+                        match state.start_slideshow() {
+                            Ok(()) => {
+                                log::info!("Started slideshow successfully");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to start slideshow: {}", e);
+                            }
+                        }
+                    }
+
+                    // 样式选择下拉菜单
+                    if is_slideshow {
+                        egui::ComboBox::from_id_source("slide_style_selector")
+                            .selected_text(format!("样式: {}", state.slide_style_manager.get_selected_template().name))
+                            .show_ui(ui, |ui| {
+                                let all_templates = state.slide_style_manager.get_all_templates();
+                                for template in all_templates {
+                                    let is_selected = template.id == state.slide_style_manager.selected_template_id;
+                                    if ui.selectable_label(is_selected, &template.name).clicked() {
+                                        state.slide_style_manager.set_selected_template(template.id.clone());
+                                        // 保存样式配置
+                                        if let Err(e) = state.save_slide_style_config() {
+                                            log::error!("Failed to save slide style config: {}", e);
+                                        }
+                                        log::info!("Selected slide template: {}", template.name);
+                                    }
+                                }
+                            });
+                    }
+                });
+
                 // 富文本粘贴按钮（仅在编辑模式下显示）
                 if !state.markdown_preview {
                     ui.separator();
