@@ -82,11 +82,11 @@ pub fn progress_bar(ui: &mut egui::Ui, progress: f32, text: &str) {
 
 /// Render an info box
 pub fn info_box(ui: &mut egui::Ui, title: &str, content: &str, icon: &str) {
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(ui.style().visuals.faint_bg_color)
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
-        .corner_radius(egui::Rounding::same(5))
-        .inner_margin(egui::Margin::same(10))
+        .rounding(egui::Rounding::same(5.0))
+        .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(icon).size(20.0));
@@ -100,11 +100,11 @@ pub fn info_box(ui: &mut egui::Ui, title: &str, content: &str, icon: &str) {
 
 /// Render a warning box
 pub fn warning_box(ui: &mut egui::Ui, title: &str, content: &str) {
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(egui::Color32::from_rgba_unmultiplied(255, 200, 100, 30))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 200, 100)))
-        .corner_radius(egui::Rounding::same(5))
-        .inner_margin(egui::Margin::same(10))
+        .rounding(egui::Rounding::same(5.0))
+        .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("⚠").size(20.0).color(egui::Color32::from_rgb(255, 200, 100)));
@@ -118,11 +118,11 @@ pub fn warning_box(ui: &mut egui::Ui, title: &str, content: &str) {
 
 /// Render an error box
 pub fn error_box(ui: &mut egui::Ui, title: &str, content: &str) {
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(egui::Color32::from_rgba_unmultiplied(255, 100, 100, 30))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 100, 100)))
-        .corner_radius(egui::Rounding::same(5))
-        .inner_margin(egui::Margin::same(10))
+        .rounding(egui::Rounding::same(5.0))
+        .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("❌").size(20.0));
@@ -136,11 +136,11 @@ pub fn error_box(ui: &mut egui::Ui, title: &str, content: &str) {
 
 /// Render a success box
 pub fn success_box(ui: &mut egui::Ui, title: &str, content: &str) {
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(egui::Color32::from_rgba_unmultiplied(100, 255, 100, 30))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 255, 100)))
-        .corner_radius(egui::Rounding::same(5))
-        .inner_margin(egui::Margin::same(10))
+        .rounding(egui::Rounding::same(5.0))
+        .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("✅").size(20.0));
@@ -169,11 +169,11 @@ pub fn card<R>(
     ui: &mut egui::Ui,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(ui.style().visuals.faint_bg_color)
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
-        .corner_radius(egui::Rounding::same(5))
-        .inner_margin(egui::Margin::same(15))
+        .rounding(egui::Rounding::same(5.0))
+        .inner_margin(egui::Margin::same(15.0))
         .show(ui, add_contents)
 }
 
@@ -192,10 +192,10 @@ pub fn metric_display(ui: &mut egui::Ui, label: &str, value: &str, icon: Option<
 pub fn tag(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) {
     let bg_color = color.unwrap_or(ui.style().visuals.selection.bg_fill);
 
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(bg_color)
-        .corner_radius(egui::Rounding::same(3))
-        .inner_margin(egui::Margin::symmetric(6, 2))
+        .rounding(egui::Rounding::same(3.0))
+        .inner_margin(egui::Margin::symmetric(6.0, 2.0))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(text).size(12.0));
         });

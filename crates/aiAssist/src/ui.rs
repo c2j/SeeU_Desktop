@@ -14,7 +14,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
     let available_height = ui.available_height() - 30.0;
 
     // 创建一个垂直布局容器，确保内容撑满高度但不超出
-    egui::containers::Frame::NONE
+    egui::containers::Frame::none()
         .fill(ui.style().visuals.window_fill)
         .show(ui, |ui| {
             // 设置最大高度，确保不会遮挡状态栏
@@ -54,12 +54,12 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                 // 显示历史会话下拉菜单
                 if state.show_history_dropdown {
-                    egui::Frame::NONE
+                    egui::Frame::none()
                         .fill(ui.style().visuals.window_fill)
                         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
-                                .id_salt("chat_history_dropdown")
+                                .id_source("chat_history_dropdown")
                                 .max_height(300.0)
                                 .show(ui, |ui| {
                                 let mut selected_idx = None;
@@ -114,9 +114,9 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                 ui.separator();
 
                 // 聊天消息区域
-                let chat_height = available_height - 120.0; // 减去标题栏、工具栏和输入框的高度
+                let chat_height = available_height - 175.0; // 减去标题栏、工具栏和输入框的高度
                 egui::ScrollArea::vertical()
-                    .id_salt("main_chat_messages")
+                    .id_source("main_chat_messages")
                     .auto_shrink([false, false])
                     .stick_to_bottom(true)
                     .max_height(chat_height)
@@ -166,10 +166,10 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                 };
 
                                 // 创建圆角方框
-                                let frame = egui::Frame::NONE
+                                let frame = egui::Frame::none()
                                     .fill(frame_fill)
-                                    .corner_radius(egui::Rounding::same(8))
-                                    .inner_margin(egui::Margin::same(10))
+                                    .rounding(egui::Rounding::same(8.0))
+                                    .inner_margin(egui::Margin::same(10.0))
                                     .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color));
 
                                 frame.show(ui, |ui| {
@@ -203,6 +203,12 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                                         // 用户消息内容
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                                            // 计算用户消息的最大宽度，与AI消息保持一致
+                                            let available_width = ui.available_width();
+                                            let max_content_width = (available_width - 40.0).max(200.0); // 预留40px边距，最小200px
+
+                                            // 使用与AI消息相同的宽度控制，但不强制限制布局宽度
+                                            ui.set_max_width(max_content_width);
                                             let user_text = egui::RichText::new(&message.content)
                                                 .strong()
                                                 .color(text_color);
@@ -258,24 +264,25 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                                         // AI消息内容
                                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                                            // 设置固定的最大宽度，避免工具调用面板导致宽度不断增加
-                                            // 使用固定的宽度限制，而不是动态的 available_width
-                                            let max_content_width = 280.0; // 固定最大宽度
-                                            ui.set_max_width(max_content_width);
+                                            // 根据AI侧边栏的实际宽度动态调整对话框宽度
+                                            // 预留一些边距，确保内容不会贴边
+                                            let available_width = ui.available_width();
+                                            let max_content_width = (available_width - 0.0).max(200.0); // 预留40px边距，最小200px
+                                            // 移除 ui.set_max_width，让内容可以自然流动到最大可用宽度
 
                                             // 如果是流式输出中的消息，显示动画效果
                                             if is_streaming && state.is_sending {
                                                 let text = &message.content;
 
                                                 // 处理消息内容
-                                                render_formatted_message(ui, text, max_content_width - 10.0, true, text_color);
+                                                render_formatted_message(ui, text, max_content_width - 0.0, true, text_color);
 
                                                 // 添加闪烁的光标
                                                 let cursor = if (ui.input(|i| i.time) * 2.0).sin() > 0.0 { "▋" } else { " " };
                                                 ui.label(egui::RichText::new(cursor).color(text_color));
                                             } else {
                                                 // 处理消息内容
-                                                render_formatted_message(ui, &message.content, max_content_width - 10.0, false, text_color);
+                                                render_formatted_message(ui, &message.content, max_content_width - 0.0, false, text_color);
 
                                                 // 如果消息包含工具调用，显示工具调用信息（包括相关的执行结果）
                                                 if let Some(tool_calls) = &message.tool_calls {
@@ -362,15 +369,33 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     // 设置输入框的最大宽度
                     let available_width = ui.available_width();
 
-                    let response = ui.add(
-                        egui::TextEdit::multiline(&mut state.chat_input)
-                            .id(egui::Id::new("main_chat_input"))
-                            .hint_text("输入消息...")
-                            .desired_width(available_width) // 使用全部可用宽度
-                            .desired_rows(2)
-                            // 如果正在发送，禁用输入框
-                            .interactive(!state.is_sending)
-                    );
+                    // 计算输入框的动态高度
+                    let line_height = ui.text_style_height(&egui::TextStyle::Body);
+                    let min_rows = 2;
+                    let max_rows = 8;
+
+                    // 计算当前文本的行数
+                    let text_lines = state.chat_input.lines().count().max(1);
+                    let actual_rows = text_lines.clamp(min_rows, max_rows);
+
+                    // 计算输入框高度（包括内边距）
+                    let input_height = (actual_rows as f32 * line_height) + 16.0; // 16.0为内边距
+
+                    // 使用 ScrollArea 来强制限制高度并提供滚动功能
+                    let response = egui::ScrollArea::vertical()
+                        .id_source("chat_input_scroll")
+                        .max_height(input_height)
+                        .show(ui, |ui| {
+                            ui.add_sized(
+                                [available_width, input_height],
+                                egui::TextEdit::multiline(&mut state.chat_input)
+                                    .id(egui::Id::new("main_chat_input"))
+                                    .hint_text("输入消息...")
+                                    .desired_rows(actual_rows) // 使用计算出的行数
+                                    // 如果正在发送，禁用输入框
+                                    .interactive(!state.is_sending)
+                            )
+                        }).inner;
 
                     // 如果需要聚焦，则请求焦点
                     if state.should_focus_chat {
@@ -395,44 +420,60 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     if state.command_menu.is_visible && response.has_focus() {
                         // 当菜单可见时，优先处理菜单相关的键盘事件
                         ui.input_mut(|i| {
-                            if i.key_pressed(egui::Key::ArrowUp) {
-                                menu_handled = true;
-                                state.handle_command_menu_input(egui::Key::ArrowUp);
-                            } else if i.key_pressed(egui::Key::ArrowDown) {
-                                menu_handled = true;
-                                state.handle_command_menu_input(egui::Key::ArrowDown);
-                            } else if i.key_pressed(egui::Key::Enter) && !i.modifiers.alt {
-                                // 消费回车键事件，防止被正常发送逻辑处理
-                                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
-                                menu_handled = true;
-                                state.handle_command_menu_input(egui::Key::Enter);
-                            } else if i.key_pressed(egui::Key::Tab) {
-                                // 消费Tab键事件，防止焦点转移
-                                i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
-                                menu_handled = true;
-                                state.handle_command_menu_input(egui::Key::Tab);
-                            } else if i.key_pressed(egui::Key::Escape) {
-                                menu_handled = true;
-                                state.handle_command_menu_input(egui::Key::Escape);
+                            // 检查是否有IME组合状态，如果有则不处理特殊键
+                            let has_ime_composition = i.events.iter().any(|event| {
+                                matches!(event, egui::Event::Ime(egui::ImeEvent::Preedit(_)))
+                            });
+
+                            if !has_ime_composition {
+                                if i.key_pressed(egui::Key::ArrowUp) {
+                                    menu_handled = true;
+                                    state.handle_command_menu_input(egui::Key::ArrowUp);
+                                } else if i.key_pressed(egui::Key::ArrowDown) {
+                                    menu_handled = true;
+                                    state.handle_command_menu_input(egui::Key::ArrowDown);
+                                } else if i.key_pressed(egui::Key::Enter) && !i.modifiers.alt {
+                                    // 消费回车键事件，防止被正常发送逻辑处理
+                                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+                                    menu_handled = true;
+                                    state.handle_command_menu_input(egui::Key::Enter);
+                                } else if i.key_pressed(egui::Key::Tab) {
+                                    // 消费Tab键事件，防止焦点转移
+                                    i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+                                    menu_handled = true;
+                                    state.handle_command_menu_input(egui::Key::Tab);
+                                } else if i.key_pressed(egui::Key::Escape) {
+                                    menu_handled = true;
+                                    state.handle_command_menu_input(egui::Key::Escape);
+                                }
                             }
                         });
                     }
 
                     // 只有在菜单没有处理输入时，才处理正常的键盘输入
                     if !menu_handled && response.has_focus() && !state.is_sending {
-                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        let alt_pressed = ui.input(|i| i.modifiers.alt);
+                        // 检查IME组合状态
+                        let has_ime_composition = ui.input(|i| {
+                            i.events.iter().any(|event| {
+                                matches!(event, egui::Event::Ime(egui::ImeEvent::Preedit(_)))
+                            })
+                        });
 
-                        if enter_pressed {
-                            if alt_pressed {
-                                // Alt+回车：添加换行符
-                                state.chat_input.push('\n');
-                            } else {
-                                // 单独的回车：发送消息
-                                if let Some(cmd) = state.send_message() {
-                                    // Return the slash command to be handled by the parent
-                                    if let Some(callback) = &mut state.slash_command_callback {
-                                        callback(cmd);
+                        if !has_ime_composition {
+                            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let alt_pressed = ui.input(|i| i.modifiers.alt);
+
+                            if enter_pressed {
+                                if alt_pressed {
+                                    // Alt+回车：添加换行符
+                                    state.chat_input.push('\n');
+                                } else {
+                                    // 单独的回车：发送消息
+                                    if let Some(cmd) = state.send_message() {
+                                        // Return the slash command to be handled by the parent
+                                        if let Some(callback) = &mut state.slash_command_callback {
+                                            callback(cmd);
+                                        }
                                     }
                                 }
                             }
@@ -880,197 +921,6 @@ fn render_slash_commands(ctx: &egui::Context, state: &mut AIAssistState) {
     }
 }
 
-/// 渲染工具调用确认对话框
-// fn render_tool_call_confirmation(ctx: &egui::Context, state: &mut AIAssistState) {
-//     let mut open = true;
-
-//     let _response = egui::Window::new("🔧 工具调用确认")
-//         .open(&mut open)
-//         .resizable(true)
-//         .default_width(750.0)
-//         .default_height(550.0)
-//         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-//         .show(ctx, |ui| {
-//             // 标题区域
-//             ui.vertical_centered(|ui| {
-//                 ui.add_space(10.0);
-//                 ui.horizontal(|ui| {
-//                     ui.label(egui::RichText::new("🤖").size(24.0));
-//                     ui.add_space(8.0);
-//                     ui.heading(egui::RichText::new("AI助手工具调用请求").size(20.0));
-//                 });
-//                 ui.add_space(5.0);
-//                 ui.label(egui::RichText::new("AI助手请求执行以下工具，请仔细检查后确认")
-//                     .color(egui::Color32::GRAY));
-//             });
-
-//             ui.add_space(15.0);
-//             ui.separator();
-
-//             if let Some(batch) = &state.current_tool_call_batch {
-//                 // 统计信息
-//                 ui.horizontal(|ui| {
-//                     ui.label(egui::RichText::new("📊").size(16.0));
-//                     ui.label("工具调用数量:");
-//                     ui.colored_label(egui::Color32::from_rgb(0, 100, 200),
-//                         egui::RichText::new(format!("{} 个", batch.tool_calls.len())).strong());
-
-//                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-//                         if let Some(server_id) = state.selected_mcp_server {
-//                             if let Some(server_name) = state.server_names.get(&server_id) {
-//                                 ui.label(egui::RichText::new(format!("目标服务器: {}", server_name))
-//                                     .small()
-//                                     .color(egui::Color32::GRAY));
-//                             }
-//                         }
-//                     });
-//                 });
-//                 ui.add_space(12.0);
-
-//                 // 工具列表
-//                 egui::ScrollArea::vertical()
-//                     .id_salt("tool_call_confirmation_list")
-//                     .max_height(300.0)
-//                     .show(ui, |ui| {
-//                     for (index, pending_call) in batch.tool_calls.iter().enumerate() {
-//                         // 使用更好的视觉分组
-//                         egui::Frame::none()
-//                             .fill(egui::Color32::from_rgb(248, 252, 255))
-//                             .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)))
-//                             .inner_margin(egui::Margin::same(12))
-//                             .rounding(egui::Rounding::same(8))
-//                             .show(ui, |ui| {
-//                                 ui.vertical(|ui| {
-//                                     // 工具标题行，带图标
-//                                     ui.horizontal(|ui| {
-//                                         // 工具图标
-//                                         let tool_icon = match pending_call.mcp_info.call_type {
-//                                             crate::mcp_tools::McpCallType::CallTool => "🔧",
-//                                             crate::mcp_tools::McpCallType::ReadResource => "📄",
-//                                             crate::mcp_tools::McpCallType::GetPrompt => "💬",
-//                                         };
-//                                         ui.label(egui::RichText::new(tool_icon).size(20.0));
-
-//                                         ui.label(egui::RichText::new(format!("{}.", index + 1)).strong());
-//                                         ui.label(egui::RichText::new(&pending_call.tool_call.function.name)
-//                                             .color(egui::Color32::BLUE)
-//                                             .strong()
-//                                             .size(16.0));
-//                                     });
-
-//                                     ui.add_space(8.0);
-
-//                                     // 服务器信息
-//                                     ui.horizontal(|ui| {
-//                                         ui.label("🖥️ 服务器:");
-//                                         ui.colored_label(egui::Color32::DARK_GREEN, &pending_call.server_name);
-//                                     });
-
-//                                     // 工具类型
-//                                     ui.horizontal(|ui| {
-//                                         ui.label("🏷️ 类型:");
-//                                         let (call_type, type_color) = match pending_call.mcp_info.call_type {
-//                                             crate::mcp_tools::McpCallType::CallTool => ("工具调用", egui::Color32::BLUE),
-//                                             crate::mcp_tools::McpCallType::ReadResource => ("读取资源", egui::Color32::GREEN),
-//                                             crate::mcp_tools::McpCallType::GetPrompt => ("获取提示", egui::Color32::YELLOW),
-//                                         };
-//                                         ui.colored_label(type_color, call_type);
-//                                     });
-
-//                                     // 参数信息（可折叠）
-//                                     egui::CollapsingHeader::new(egui::RichText::new("📋 参数详情").color(egui::Color32::from_rgb(60, 60, 60)))
-//                                         .id_salt(format!("tool_confirmation_params_{}", pending_call.tool_call.id))
-//                                         .default_open(true)
-//                                         .show(ui, |ui| {
-//                                             egui::Frame::none()
-//                                                 .fill(egui::Color32::from_rgb(250, 250, 250))
-//                                                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200)))
-//                                                 .inner_margin(egui::Margin::same(8))
-//                                                 .rounding(egui::Rounding::same(4))
-//                                                 .show(ui, |ui| {
-//                                                     egui::ScrollArea::vertical()
-//                                                         .id_salt(format!("tool_confirmation_args_scroll_{}", pending_call.tool_call.id))
-//                                                         .max_height(120.0)
-//                                                         .show(ui, |ui| {
-//                                                             // 尝试格式化JSON参数
-//                                                             let formatted_args = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&pending_call.tool_call.function.arguments) {
-//                                                                 serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| pending_call.tool_call.function.arguments.clone())
-//                                                             } else {
-//                                                                 pending_call.tool_call.function.arguments.clone()
-//                                                             };
-
-//                                                             ui.add(egui::TextEdit::multiline(&mut formatted_args.as_str())
-//                                                                 .id(egui::Id::new(format!("tool_confirmation_args_text_{}", pending_call.tool_call.id)))
-//                                                                 .desired_rows(4)
-//                                                                 .font(egui::TextStyle::Monospace)
-//                                                                 .interactive(false));
-//                                                         });
-//                                                 });
-//                                         });
-//                                 });
-//                             });
-//                         ui.add_space(8.0);
-//                     }
-//                 });
-
-//                 ui.separator();
-
-//                 // 警告信息
-//                 egui::Frame::none()
-//                     .fill(egui::Color32::from_rgb(255, 248, 220))
-//                     .inner_margin(egui::Margin::same(8))
-//                     .show(ui, |ui| {
-//                         ui.horizontal(|ui| {
-//                             ui.label(egui::RichText::new("⚠️").size(18.0).color(egui::Color32::from_rgb(255, 140, 0)));
-//                             ui.vertical(|ui| {
-//                                 ui.label(egui::RichText::new("安全提醒").strong().color(egui::Color32::from_rgb(255, 140, 0)));
-//                                 ui.label("执行这些工具可能会修改系统状态或访问敏感信息。请仔细检查参数后再确认执行。");
-//                             });
-//                         });
-//                     });
-
-//                 ui.add_space(15.0);
-
-//                 // 操作按钮
-//                 ui.horizontal(|ui| {
-//                     if ui.add_sized([120.0, 35.0], egui::Button::new(
-//                         egui::RichText::new("✅ 确认执行")
-//                             .color(egui::Color32::WHITE)
-//                             .strong()
-//                     ).fill(egui::Color32::from_rgb(34, 139, 34))).clicked() {
-//                         state.approve_tool_calls();
-//                     }
-
-//                     ui.add_space(10.0);
-
-//                     if ui.add_sized([120.0, 35.0], egui::Button::new(
-//                         egui::RichText::new("❌ 拒绝执行")
-//                             .color(egui::Color32::WHITE)
-//                             .strong()
-//                     ).fill(egui::Color32::from_rgb(220, 20, 60))).clicked() {
-//                         state.reject_tool_calls();
-//                     }
-
-//                     ui.add_space(20.0);
-
-//                     if ui.add_sized([80.0, 35.0], egui::Button::new("取消")).clicked() {
-//                         state.show_tool_call_confirmation = false;
-//                     }
-//                 });
-//             } else {
-//                 ui.vertical_centered(|ui| {
-//                     ui.add_space(50.0);
-//                     ui.label(egui::RichText::new("🤷‍♂️").size(48.0));
-//                     ui.add_space(10.0);
-//                     ui.label(egui::RichText::new("没有待处理的工具调用").size(16.0));
-//                 });
-//             }
-//         });
-
-//     if !open {
-//         state.show_tool_call_confirmation = false;
-//     }
-// }
 
 /// 渲染MCP状态面板
 fn render_mcp_status_panel(ui: &mut egui::Ui, state: &AIAssistState) {
@@ -1084,7 +934,7 @@ fn render_mcp_status_panel(ui: &mut egui::Ui, state: &AIAssistState) {
                 .unwrap_or_else(|| format!("服务器 {}", server_id.to_string().chars().take(8).collect::<String>()));
 
             egui::CollapsingHeader::new(format!("🟢 MCP服务器状态 - {}", server_name))
-                .id_salt(format!("mcp_server_status_{}", server_id))
+                .id_source(format!("mcp_server_status_{}", server_id))
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -1126,7 +976,7 @@ fn render_mcp_status_panel(ui: &mut egui::Ui, state: &AIAssistState) {
                         ui.label(egui::RichText::new("工具列表:").strong());
 
                         egui::ScrollArea::vertical()
-                            .id_salt(format!("mcp_tools_list_{}", server_id))
+                            .id_source(format!("mcp_tools_list_{}", server_id))
                             .max_height(100.0)
                             .show(ui, |ui| {
                                 for (index, tool) in capabilities.tools.iter().enumerate() {
@@ -1147,7 +997,7 @@ fn render_mcp_status_panel(ui: &mut egui::Ui, state: &AIAssistState) {
                         ui.label(egui::RichText::new("资源列表:").strong());
 
                         egui::ScrollArea::vertical()
-                            .id_salt(format!("mcp_resources_list_{}", server_id))
+                            .id_source(format!("mcp_resources_list_{}", server_id))
                             .max_height(100.0)
                             .show(ui, |ui| {
                                 for (index, resource) in capabilities.resources.iter().enumerate() {
@@ -1168,7 +1018,7 @@ fn render_mcp_status_panel(ui: &mut egui::Ui, state: &AIAssistState) {
                         ui.label(egui::RichText::new("提示列表:").strong());
 
                         egui::ScrollArea::vertical()
-                            .id_salt(format!("mcp_prompts_list_{}", server_id))
+                            .id_source(format!("mcp_prompts_list_{}", server_id))
                             .max_height(100.0)
                             .show(ui, |ui| {
                                 for (index, prompt) in capabilities.prompts.iter().enumerate() {
@@ -1213,22 +1063,16 @@ fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, _i
         text_color
     };
 
-    // 使用严格的宽度控制来防止撑宽对话框
-    ui.allocate_ui_with_layout(
-        egui::Vec2::new(max_width, 0.0),
-        egui::Layout::top_down(egui::Align::LEFT),
-        |ui| {
-            ui.set_max_width(max_width);
-            ui.set_min_width(max_width);
+    // 使用动态宽度控制，允许内容自适应但不超过最大宽度
+    // 不使用 allocate_ui_with_layout，直接设置最大宽度让内容自然流动
+    ui.set_max_width(max_width);
 
-            // 使用 Label 并强制换行
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(content)
-                        .color(display_color)
-                ).wrap()
-            );
-        }
+    // 使用 Label 并强制换行
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(content)
+                .color(display_color)
+        ).wrap()
     );
 }
 
@@ -1240,13 +1084,12 @@ pub struct ToolCallExecutionRequest {
 }
 
 /// 在消息中渲染工具调用信息，包括相关的执行结果
-fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::ToolCall], _max_width: f32, tool_results: Option<&[crate::state::ToolCallResult]>, mcp_server_info: Option<&crate::state::McpServerInfo>) -> Option<ToolCallExecutionRequest> {
+fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::ToolCall], max_width: f32, tool_results: Option<&[crate::state::ToolCallResult]>, mcp_server_info: Option<&crate::state::McpServerInfo>) -> Option<ToolCallExecutionRequest> {
     // 减少日志频率，只在第一次渲染时记录
     log::debug!("🎨 开始渲染工具调用信息，工具数量: {}", tool_calls.len());
 
-    // 使用固定的最大宽度，避免宽度不断增加的问题
-    let fixed_max_width = 280.0;
-    ui.set_max_width(fixed_max_width);
+    // 使用传入的最大宽度，确保与对话框宽度一致
+    ui.set_max_width(max_width);
     ui.add_space(8.0);
 
     // 获取当前主题的颜色
@@ -1297,10 +1140,10 @@ fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::Too
             egui::Frame::none()
                 .fill(background_color)
                 .stroke(egui::Stroke::new(1.5, border_color))
-                .inner_margin(egui::Margin::same(12))
-                .corner_radius(8.0)
+                .inner_margin(egui::Margin::same(12.0))
+                .rounding(8.0)
                 .show(ui, |ui| {
-                    ui.set_max_width(fixed_max_width - 24.0); // 使用固定宽度，确保不超出父容器宽度
+                    ui.set_max_width(max_width - 24.0); // 确保不超出父容器宽度
 
                     ui.vertical(|ui| {
                         // 工具名称行，包含MCP Server信息
@@ -1332,8 +1175,8 @@ fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::Too
                         egui::Frame::none()
                             .fill(if is_dark_mode { egui::Color32::from_rgb(35, 40, 50) } else { egui::Color32::from_rgb(250, 250, 250) })
                             .stroke(egui::Stroke::new(1.0, if is_dark_mode { egui::Color32::from_rgb(60, 60, 60) } else { egui::Color32::from_rgb(220, 220, 220) }))
-                            .inner_margin(egui::Margin::same(8))
-                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::same(8.0))
+                            .rounding(4.0)
                             .show(ui, |ui| {
                                 ui.vertical(|ui| {
                                     ui.label(egui::RichText::new("参数:")
@@ -1445,8 +1288,8 @@ fn render_single_tool_result(ui: &mut egui::Ui, result: &crate::state::ToolCallR
     egui::Frame::none()
         .fill(bg_color)
         .stroke(egui::Stroke::new(1.0, border_color))
-        .inner_margin(egui::Margin::same(8))
-        .corner_radius(4.0)
+        .inner_margin(egui::Margin::same(8.0))
+        .rounding(4.0)
         .show(ui, |ui| {
             ui.vertical(|ui| {
                 // 结果标题行，包含时间戳
@@ -1477,11 +1320,11 @@ fn render_single_tool_result(ui: &mut egui::Ui, result: &crate::state::ToolCallR
                     // 使用时间戳和索引创建唯一ID，避免多次执行同一工具时的ID冲突
                     let unique_id = format!("{}_{}_{}_{}", result.tool_call_id, result.timestamp.timestamp_millis(), result_index, result.success);
                     egui::CollapsingHeader::new("结果详情")
-                        .id_salt(format!("tool_result_details_{}", unique_id))
+                        .id_source(format!("tool_result_details_{}", unique_id))
                         .default_open(true)
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
-                                .id_salt(format!("tool_result_scroll_{}", unique_id))
+                                .id_source(format!("tool_result_scroll_{}", unique_id))
                                 .max_height(120.0)
                                 .show(ui, |ui| {
                                     ui.add(egui::TextEdit::multiline(&mut result.result.as_str())
@@ -1540,10 +1383,9 @@ pub fn format_precise_timestamp(timestamp: &chrono::DateTime<chrono::Utc>) -> St
 }
 
 /// 在消息中渲染工具调用结果
-fn render_tool_call_results_in_message(ui: &mut egui::Ui, tool_results: &[crate::state::ToolCallResult], _max_width: f32) {
-    // 使用固定的最大宽度，避免宽度不断增加的问题
-    let fixed_max_width = 580.0;
-    ui.set_max_width(fixed_max_width);
+fn render_tool_call_results_in_message(ui: &mut egui::Ui, tool_results: &[crate::state::ToolCallResult], max_width: f32) {
+    // 使用传入的最大宽度，确保与对话框宽度一致
+    ui.set_max_width(max_width);
     ui.add_space(8.0);
 
     for (index, result) in tool_results.iter().enumerate() {
@@ -1557,7 +1399,7 @@ fn render_tool_call_results_in_message(ui: &mut egui::Ui, tool_results: &[crate:
         egui::Frame::none()
             .fill(bg_color)
             .stroke(egui::Stroke::new(1.0, border_color))
-            .inner_margin(egui::Margin::same(8))
+            .inner_margin(egui::Margin::same(8.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // 结果图标
@@ -1573,11 +1415,11 @@ fn render_tool_call_results_in_message(ui: &mut egui::Ui, tool_results: &[crate:
                 // 结果内容
                 if !result.result.trim().is_empty() {
                     egui::CollapsingHeader::new("结果详情")
-                        .id_salt(format!("legacy_tool_result_details_{}_{}", result.tool_call_id, index))
+                        .id_source(format!("legacy_tool_result_details_{}_{}", result.tool_call_id, index))
                         .default_open(true)
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
-                                .id_salt(format!("legacy_tool_result_scroll_{}_{}", result.tool_call_id, index))
+                                .id_source(format!("legacy_tool_result_scroll_{}_{}", result.tool_call_id, index))
                                 .max_height(120.0)
                                 .show(ui, |ui| {
                                     ui.add(egui::TextEdit::multiline(&mut result.result.as_str())

@@ -1,7 +1,6 @@
 pub mod notebook;
 pub mod note;
 pub mod tag;
-pub mod ui;
 pub mod storage;
 pub mod clipboard;
 pub mod db_storage;
@@ -454,11 +453,11 @@ pub fn render_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut INoteState,
 
 /// Render the iNote module with SQLite storage
 pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
-    render_db_inote_with_sidebar_info(ui, state, false);
+    render_db_inote_with_sidebar_info(ui, state, false, None);
 }
 
 /// Render the iNote module with SQLite storage and sidebar information
-pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteState, right_sidebar_open: bool) {
+pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteState, right_sidebar_open: bool, right_sidebar_width: Option<f32>) {
     // Ensure data is loaded when needed (lazy loading)
     state.ensure_data_loaded();
 
@@ -543,7 +542,7 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
             // 在Linux下减少间距以解决100px间隔问题
             #[cfg(target_os = "linux")]
             {
-                side_panel = side_panel.frame(egui::Frame::none().inner_margin(egui::Margin::same(0)));
+                side_panel = side_panel.frame(egui::Frame::none().inner_margin(egui::Margin::same(0.0)));
             }
 
             side_panel.show_inside(ui, |ui| {
@@ -570,7 +569,10 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
             if right_sidebar_open {
                 // 当右侧边栏打开时，使用受限的中央面板
                 let available_rect = ui.available_rect_before_wrap();
-                let content_width = available_rect.width() - 320.0; // 为右侧边栏预留320px空间
+                // 使用传递的实际侧边栏宽度，如果没有传递则使用默认值
+                let sidebar_width = right_sidebar_width.unwrap_or(300.0);
+                let margin = 10.0; // 减少边距，因为现在使用实际宽度
+                let content_width = available_rect.width() - sidebar_width - margin;
 
                 ui.allocate_ui_with_layout(
                     egui::Vec2::new(content_width.max(200.0), available_rect.height()),

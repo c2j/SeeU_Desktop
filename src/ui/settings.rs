@@ -2,6 +2,7 @@ use eframe::egui;
 use crate::app::SeeUApp;
 use crate::ui::theme::Theme;
 
+
 /// Settings categories
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SettingsCategory {

@@ -247,4 +247,14 @@ impl TerminalManager {
     pub fn has_active_commands(&self) -> bool {
         !self.pending_commands.is_empty()
     }
+
+    /// Get all sessions
+    pub fn get_sessions(&self) -> &HashMap<Uuid, TerminalSession> {
+        &self.sessions
+    }
+
+    /// Get the active session ID
+    pub fn get_active_session_id(&self) -> Option<Uuid> {
+        self.active_session_id
+    }
 }

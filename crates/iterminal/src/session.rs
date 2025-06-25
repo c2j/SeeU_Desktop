@@ -250,11 +250,11 @@ impl TerminalSession {
     /// Execute current input as command
     pub fn execute_current_input(&mut self) -> String {
         let command = self.current_input.clone();
-        
+
         // Add command to output as input line
         if !command.trim().is_empty() {
             self.add_output(format!("$ {}", command), true);
-            
+
             // Add to history
             self.history.add_command(command.clone(), self.working_directory.clone());
         }
@@ -263,5 +263,27 @@ impl TerminalSession {
         self.clear_input();
 
         command
+    }
+
+    /// Navigate to previous command in history
+    pub fn history_previous(&mut self) -> Option<String> {
+        if let Some(command) = self.history.previous() {
+            Some(command)
+        } else {
+            None
+        }
+    }
+
+    /// Navigate to next command in history
+    pub fn history_next(&mut self) -> Option<String> {
+        self.history.next()
+    }
+
+    /// Get output as string vector for compatibility
+    pub fn output(&self) -> Vec<String> {
+        self.output_buffer
+            .iter()
+            .map(|line| line.content.clone())
+            .collect()
     }
 }

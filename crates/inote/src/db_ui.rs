@@ -171,7 +171,7 @@ pub fn render_tag_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
     ui.separator();
 
     // Tag list
-    egui::ScrollArea::vertical().id_salt("db_tags_scroll").show(ui, |ui| {
+    egui::ScrollArea::vertical().id_source("db_tags_scroll").show(ui, |ui| {
         let tags = state.tags.clone();
 
         for tag in &tags {
@@ -258,7 +258,7 @@ pub fn render_note_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
             let has_notes = !note_data.is_empty();
 
-            egui::ScrollArea::vertical().id_salt("db_notes_scroll").show(ui, |ui| {
+            egui::ScrollArea::vertical().id_source("db_notes_scroll").show(ui, |ui| {
                 for (note_id, title) in note_data {
                     let is_selected = current_note.as_ref().map_or(false, |id| id == &note_id);
                     let note_id_clone = note_id.clone();
@@ -331,7 +331,7 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
     let has_results = !result_data.is_empty();
 
-    egui::ScrollArea::vertical().id_salt("db_search_results_scroll").show(ui, |ui| {
+    egui::ScrollArea::vertical().id_source("db_search_results_scroll").show(ui, |ui| {
         for (note_id, title, notebook_name) in result_data {
             let is_selected = current_note.as_ref().map_or(false, |id| id == &note_id);
 
@@ -353,205 +353,153 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
 /// Render the note editor
 pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
     if let Some(note_id) = state.current_note.clone() {
-        // 顶部工具栏 - 固定不随内容滚动
-        ui.horizontal(|ui| {
-            // 只有在非全窗口最大化模式下才显示最大化按钮
-            // 因为全窗口最大化模式下，返回按钮在外层UI中
-            if !state.editor_maximized {
-                // 全窗口最大化按钮
-                if ui.button("🔍 全屏").clicked() {
-                    state.toggle_editor_maximized();
-                }
-            }
-
-            // 编辑/预览切换按钮 - 添加背景色区分
-            let edit_button_color = if state.markdown_preview {
-                // 预览模式下，编辑按钮使用默认色
-                ui.style().visuals.widgets.inactive.bg_fill
-            } else {
-                // 编辑模式下，编辑按钮使用高亮色
-                ui.style().visuals.selection.bg_fill
-            };
-
-            let preview_button_color = if state.markdown_preview {
-                // 预览模式下，预览按钮使用高亮色
-                ui.style().visuals.selection.bg_fill
-            } else {
-                // 编辑模式下，预览按钮使用默认色
-                ui.style().visuals.widgets.inactive.bg_fill
-            };
-
-            // 编辑按钮
-            let edit_button = egui::Button::new("📝 编辑")
-                .fill(edit_button_color);
-            if ui.add(edit_button).clicked() && state.markdown_preview {
-                state.auto_save_if_modified();
-                state.markdown_preview = false;
-            }
-
-            // 预览按钮
-            let preview_button = egui::Button::new("👁 预览")
-                .fill(preview_button_color);
-            if ui.add(preview_button).clicked() && !state.markdown_preview {
-                state.auto_save_if_modified();
-                state.markdown_preview = true;
-            }
-
-            // 富文本粘贴按钮（仅在编辑模式下显示）
-            if !state.markdown_preview {
-                ui.separator();
-
-                // 检查剪贴板是否有富文本内容
-                let has_rich_content = state.clipboard_has_rich_content();
-
-                let paste_button = ui.button("📋 粘贴富文本")
-                    .on_hover_text("从剪贴板粘贴富文本内容并自动转换为Markdown格式\n支持：标题、段落、列表、表格、图片等");
-
-                if paste_button.clicked() {
-                    match state.paste_rich_text() {
-                        Ok(true) => {
-                            log::info!("Rich text pasted successfully");
-                        }
-                        Ok(false) => {
-                            log::debug!("No content to paste");
-                        }
-                        Err(e) => {
-                            log::error!("Failed to paste rich text: {}", e);
-                        }
+        // 使用垂直布局，让内容区域自动填充剩余空间
+        ui.vertical(|ui| {
+            // 顶部工具栏 - 固定高度
+            ui.horizontal(|ui| {
+                // 只有在非全窗口最大化模式下才显示最大化按钮
+                // 因为全窗口最大化模式下，返回按钮在外层UI中
+                if !state.editor_maximized {
+                    // 全窗口最大化按钮
+                    if ui.button("🔍 全屏").clicked() {
+                        state.toggle_editor_maximized();
                     }
                 }
 
-                // 如果剪贴板有富文本内容，显示提示
-                if has_rich_content {
-                    ui.label("💡 检测到富文本内容");
-                }
-            }
-
-            // 在工具栏中显示标题输入框
-            // ui.add_space(10.0);
-            // ui.label("标题:");
-            // // 使用与编辑器相同的等宽字体配置
-            // let mut title_edit = egui::TextEdit::singleline(&mut state.note_title)
-            //     .desired_width(ui.available_width() - 100.0)
-            //     .font(egui::FontId::monospace(14.0))
-            //     .hint_text("输入笔记标题...");
-
-            // 在工具栏中显示标题输入框
-            ui.add_space(10.0);
-            // ui.label("标题:");
-
-            // // 使用简单的布局器处理文本
-            // let mut title_layouter = move |ui: &egui::Ui, text: &str, wrap_width: f32| {
-            //     // 创建一个简单的布局作业
-            //     let mut layout_job = egui::text::LayoutJob::default();
-
-            //     // 设置基本字体格式
-            //     let text_format = egui::TextFormat {
-            //         font_id: egui::FontId::monospace(14.0),
-            //         color: ui.visuals().text_color(),
-            //         ..Default::default()
-            //     };
-
-            //     // 设置换行属性
-            //     layout_job.wrap.max_width = wrap_width;
-
-            //     // 直接添加整个文本，让字体系统处理字符宽度
-            //     layout_job.append(text, 0.0, text_format);
-
-            //     ui.fonts(|f| f.layout_job(layout_job))
-            // };
-
-            // // 使用与编辑器相同的等宽字体配置
-            // let title_edit = egui::TextEdit::singleline(&mut state.note_title)
-            //     .desired_width(ui.available_width() - 100.0)
-            //     .font(egui::FontId::monospace(14.0))
-            //     .hint_text("输入笔记标题...")
-            //     .layouter(&mut title_layouter);
-
-            // let title_response = ui.add(title_edit);
-
-            // // Check for title changes and mark as modified
-            // if title_response.changed() {
-            //     state.check_note_modified();
-            // }
-        });
-
-        ui.separator();
-
-        // 计算编辑器高度
-        let available_height = ui.available_height();
-        let editor_height = if state.editor_maximized {
-            // 最大化模式，几乎占满整个窗口
-            available_height - 80.0
-        } else {
-            // 正常模式，占据大部分空间但留出空间给标签和提示
-            available_height - 120.0
-        };
-
-        // 始终显示可编辑的标题 - 固定在顶部不随内容滚动
-        ui.horizontal(|ui| {
-            ui.label("标题:");
-
-            // 使用与编辑器相同的等宽字体配置
-            let mut title_edit = egui::TextEdit::singleline(&mut state.note_title)
-                .desired_width(ui.available_width() - 50.0)
-                .font(egui::FontId::monospace(16.0))  // 稍大的字体，更像标题
-                .hint_text("输入笔记标题...");
-
-            // 使用简单的布局器处理文本
-            let mut title_layouter = move |ui: &egui::Ui, text: &str, wrap_width: f32| {
-                // 创建一个简单的布局作业
-                let mut layout_job = egui::text::LayoutJob::default();
-
-                // 设置基本字体格式 - 使用粗体
-                let text_format = egui::TextFormat {
-                    font_id: egui::FontId::monospace(16.0),
-                    color: ui.visuals().text_color(),
-                    ..Default::default()
+                // 编辑/预览切换按钮 - 添加背景色区分
+                let edit_button_color = if state.markdown_preview {
+                    // 预览模式下，编辑按钮使用默认色
+                    ui.style().visuals.widgets.inactive.bg_fill
+                } else {
+                    // 编辑模式下，编辑按钮使用高亮色
+                    ui.style().visuals.selection.bg_fill
                 };
 
-                // 设置换行属性
-                layout_job.wrap.max_width = wrap_width;
+                let preview_button_color = if state.markdown_preview {
+                    // 预览模式下，预览按钮使用高亮色
+                    ui.style().visuals.selection.bg_fill
+                } else {
+                    // 编辑模式下，预览按钮使用默认色
+                    ui.style().visuals.widgets.inactive.bg_fill
+                };
 
-                // 直接添加整个文本，让字体系统处理字符宽度
-                layout_job.append(text, 0.0, text_format);
-
-                ui.fonts(|f| f.layout_job(layout_job))
-            };
-
-            title_edit = title_edit.layouter(&mut title_layouter);
-            let title_response = ui.add(title_edit);
-
-            // Check for title changes and mark as modified
-            if title_response.changed() {
-                state.check_note_modified();
-
-                // Immediate auto-save on title change
-                if state.save_status == crate::db_state::SaveStatus::Modified {
+                // 编辑按钮
+                let edit_button = egui::Button::new("📝 编辑")
+                    .fill(edit_button_color);
+                if ui.add(edit_button).clicked() && state.markdown_preview {
                     state.auto_save_if_modified();
+                    state.markdown_preview = false;
                 }
-            }
-        });
-        ui.separator();
 
-        // Note content - either editor or preview
-        if state.markdown_preview {
-            // Markdown preview with search highlighting
-            let search_terms = state.get_search_terms();
-            egui::ScrollArea::vertical()
-                .id_salt("markdown_preview_scroll")
-                .max_height(editor_height)
-                .show(ui, |ui| {
-                    ui.add_space(10.0);
-                    crate::markdown::render_markdown_with_highlight(ui, &state.note_content, &search_terms);
-                    ui.add_space(10.0);
-                });
-        } else {
-            // Editor mode - 使用 ScrollArea 包装编辑器
-            egui::ScrollArea::vertical()
-                .id_salt("editor_scroll")
-                .max_height(editor_height)
-                .show(ui, |ui| {
+                // 预览按钮
+                let preview_button = egui::Button::new("👁 预览")
+                    .fill(preview_button_color);
+                if ui.add(preview_button).clicked() && !state.markdown_preview {
+                    state.auto_save_if_modified();
+                    state.markdown_preview = true;
+                }
+
+                // 富文本粘贴按钮（仅在编辑模式下显示）
+                if !state.markdown_preview {
+                    ui.separator();
+
+                    // 检查剪贴板是否有富文本内容
+                    let has_rich_content = state.clipboard_has_rich_content();
+
+                    let paste_button = ui.button("📋 粘贴富文本")
+                        .on_hover_text("从剪贴板粘贴富文本内容并自动转换为Markdown格式\n支持：标题、段落、列表、表格、图片等");
+
+                    if paste_button.clicked() {
+                        match state.paste_rich_text() {
+                            Ok(true) => {
+                                log::info!("Rich text pasted successfully");
+                            }
+                            Ok(false) => {
+                                log::debug!("No content to paste");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to paste rich text: {}", e);
+                            }
+                        }
+                    }
+
+                    // 如果剪贴板有富文本内容，显示提示
+                    if has_rich_content {
+                        ui.label("💡 检测到富文本内容");
+                    }
+                }
+            });
+
+            ui.separator();
+
+            // 标题区域 - 固定高度
+            ui.horizontal(|ui| {
+                ui.label("标题:");
+
+                // 使用与编辑器相同的等宽字体配置
+                let mut title_edit = egui::TextEdit::singleline(&mut state.note_title)
+                    .desired_width(ui.available_width() - 50.0)
+                    .font(egui::FontId::monospace(16.0))  // 稍大的字体，更像标题
+                    .hint_text("输入笔记标题...");
+
+                // 使用简单的布局器处理文本
+                let mut title_layouter = move |ui: &egui::Ui, text: &str, wrap_width: f32| {
+                    // 创建一个简单的布局作业
+                    let mut layout_job = egui::text::LayoutJob::default();
+
+                    // 设置基本字体格式 - 使用粗体
+                    let text_format = egui::TextFormat {
+                        font_id: egui::FontId::monospace(16.0),
+                        color: ui.visuals().text_color(),
+                        ..Default::default()
+                    };
+
+                    // 设置换行属性
+                    layout_job.wrap.max_width = wrap_width;
+
+                    // 直接添加整个文本，让字体系统处理字符宽度
+                    layout_job.append(text, 0.0, text_format);
+
+                    ui.fonts(|f| f.layout_job(layout_job))
+                };
+
+                title_edit = title_edit.layouter(&mut title_layouter);
+                let title_response = ui.add(title_edit);
+
+                // Check for title changes and mark as modified
+                if title_response.changed() {
+                    state.check_note_modified();
+
+                    // Immediate auto-save on title change
+                    if state.save_status == crate::db_state::SaveStatus::Modified {
+                        state.auto_save_if_modified();
+                    }
+                }
+            });
+
+            // 内容区域 - 自动填充剩余空间
+            ui.allocate_ui_with_layout(
+                egui::Vec2::new(ui.available_width(), ui.available_height()),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    // Note content - either editor or preview
+                    if state.markdown_preview {
+                        // Markdown preview with search highlighting
+                        let search_terms = state.get_search_terms();
+                        egui::ScrollArea::vertical()
+                            .id_source("markdown_preview_scroll")
+                            .auto_shrink([false, false])  // 不自动收缩，占满可用空间
+                            .show(ui, |ui| {
+                                ui.add_space(10.0);
+                                crate::markdown::render_markdown_with_highlight(ui, &state.note_content, &search_terms);
+                                ui.add_space(10.0);
+                            });
+                    } else {
+                        // Editor mode - 使用 ScrollArea 包装编辑器
+                        egui::ScrollArea::vertical()
+                            .id_source("editor_scroll")
+                            .auto_shrink([false, false])  // 不自动收缩，占满可用空间
+                            .show(ui, |ui| {
                     // 获取搜索关键字（在创建 layouter 之前）
                     let search_terms = state.get_search_terms();
 
@@ -601,20 +549,28 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
                     let response = ui.add(text_edit);
 
-                    // Check for keyboard shortcuts
+                    // Check for keyboard shortcuts - 改进IME支持
                     ui.input(|i| {
-                        // Check for Ctrl+V (Cmd+V on Mac) for rich text paste
-                        if i.modifiers.command && i.key_pressed(egui::Key::V) {
-                            // Prevent default paste behavior and handle rich text paste
-                            match state.paste_rich_text() {
-                                Ok(true) => {
-                                    log::info!("Rich text pasted via keyboard shortcut");
-                                }
-                                Ok(false) => {
-                                    log::debug!("No rich content to paste via keyboard shortcut");
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to paste rich text via keyboard shortcut: {}", e);
+                        // 检查是否有IME组合状态
+                        let has_ime_composition = i.events.iter().any(|event| {
+                            matches!(event, egui::Event::Ime(egui::ImeEvent::Preedit(_)))
+                        });
+
+                        // 只有在没有IME组合状态时才处理快捷键
+                        if !has_ime_composition {
+                            // Check for Ctrl+V (Cmd+V on Mac) for rich text paste
+                            if i.modifiers.command && i.key_pressed(egui::Key::V) {
+                                // Prevent default paste behavior and handle rich text paste
+                                match state.paste_rich_text() {
+                                    Ok(true) => {
+                                        log::info!("Rich text pasted via keyboard shortcut");
+                                    }
+                                    Ok(false) => {
+                                        log::debug!("No rich content to paste via keyboard shortcut");
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to paste rich text via keyboard shortcut: {}", e);
+                                    }
                                 }
                             }
                         }
@@ -631,14 +587,16 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                         }
                     }
 
-                    // Also auto-save when focus is lost
-                    if response.lost_focus() && state.save_status == crate::db_state::SaveStatus::Modified {
-                        state.auto_save_if_modified();
-                    }
-                });
-        }
+                        // Also auto-save when focus is lost
+                        if response.lost_focus() && state.save_status == crate::db_state::SaveStatus::Modified {
+                            state.auto_save_if_modified();
+                        }
+                    });
+                }
+            }
+        );
 
-        // 底部区域
+        // 底部区域 - 标签和帮助信息
         ui.separator();
 
         // Tags for this note
@@ -679,7 +637,7 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
             }
 
             // Add tag dropdown
-            egui::ComboBox::from_id_salt("add_tag_dropdown")
+            egui::ComboBox::from_id_source("add_tag_dropdown")
                 .selected_text("+ 添加标签")
                 .show_ui(ui, |ui| {
                     // Clone all tags to avoid borrowing issues
@@ -1031,6 +989,7 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 state.show_markdown_help = false;
             }
         }
+        });  // 关闭垂直布局
     } else {
         ui.centered_and_justified(|ui| {
             ui.label("选择或创建一个笔记");

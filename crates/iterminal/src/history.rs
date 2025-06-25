@@ -155,4 +155,14 @@ impl CommandHistory {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Alias for get_previous for compatibility
+    pub fn previous(&mut self) -> Option<String> {
+        self.get_previous()
+    }
+
+    /// Alias for get_next for compatibility
+    pub fn next(&mut self) -> Option<String> {
+        self.get_next()
+    }
 }

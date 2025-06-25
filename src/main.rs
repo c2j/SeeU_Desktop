@@ -59,6 +59,8 @@ fn main() -> Result<(), eframe::Error> {
 
     let native_options = eframe::NativeOptions {
         viewport: viewport_builder,
+        // Note: In egui 0.28.1, event_loop_builder API has changed
+        // IME support is now handled differently
         ..Default::default()
     };
 

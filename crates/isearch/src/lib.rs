@@ -1269,11 +1269,11 @@ impl ISearchState {
 
 /// Render the iSearch module
 pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
-    render_isearch_with_sidebar_info(ui, state, false);
+    render_isearch_with_sidebar_info(ui, state, false, None);
 }
 
 /// Render the iSearch module with right sidebar awareness
-pub fn render_isearch_with_sidebar_info(ui: &mut egui::Ui, state: &mut ISearchState, right_sidebar_open: bool) {
+pub fn render_isearch_with_sidebar_info(ui: &mut egui::Ui, state: &mut ISearchState, right_sidebar_open: bool, right_sidebar_width: Option<f32>) {
     // Process directory dialog
     state.process_directory_dialog();
 
@@ -1507,7 +1507,10 @@ pub fn render_isearch_with_sidebar_info(ui: &mut egui::Ui, state: &mut ISearchSt
         if right_sidebar_open {
             // 当右侧边栏打开时，使用受限的布局
             let available_rect = ui.available_rect_before_wrap();
-            let content_width = available_rect.width() - 320.0; // 为右侧边栏预留320px空间
+            // 使用传递的实际侧边栏宽度，如果没有传递则使用默认值
+            let sidebar_width = right_sidebar_width.unwrap_or(320.0);
+            let margin = 10.0; // 减少边距，因为现在使用实际宽度
+            let content_width = available_rect.width() - sidebar_width - margin;
 
             ui.allocate_ui_with_layout(
                 egui::Vec2::new(content_width.max(200.0), available_rect.height()),
@@ -1716,9 +1719,9 @@ fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
                     for result in &results {
                         ui.push_id(&result.id, |ui| {
                             // Create a frame for the search result item with hover effect
-                            let frame_response = egui::Frame::NONE
-                                .inner_margin(egui::Margin::same(8))
-                                .corner_radius(egui::Rounding::same(4))
+                            let frame_response = egui::Frame::none()
+                                .inner_margin(egui::Margin::same(8.0))
+                                .rounding(egui::Rounding::same(4.0))
                                 .show(ui, |ui| {
                                     // File name and icon
                                     ui.horizontal(|ui| {
@@ -1885,7 +1888,7 @@ fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
                                 } else {
                                     egui::Color32::from_rgba_unmultiplied(50, 100, 200, 20) // Blue overlay for light mode
                                 };
-                                ui.painter().rect_filled(rect, egui::Rounding::same(4), hover_color);
+                                ui.painter().rect_filled(rect, egui::Rounding::same(4.0), hover_color);
 
                                 // Add a subtle border when hovered
                                 let border_color = if ui.visuals().dark_mode {
@@ -1893,7 +1896,7 @@ fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
                                 } else {
                                     egui::Color32::from_rgba_unmultiplied(80, 120, 220, 80)
                                 };
-                                ui.painter().rect_stroke(rect, egui::Rounding::same(4), egui::Stroke::new(1.0, border_color), egui::StrokeKind::Outside);
+                                ui.painter().rect_stroke(rect, egui::Rounding::same(4.0), egui::Stroke::new(1.0, border_color));
                             }
 
                             ui.add_space(4.0);

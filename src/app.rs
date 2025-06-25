@@ -303,11 +303,13 @@ impl SeeUApp {
 
         // Apply loaded settings
         // First set the egui built-in theme
-        let egui_theme = match app.theme {
-            Theme::DarkModern | Theme::Dark => egui::Theme::Dark,
-            Theme::LightModern | Theme::Light => egui::Theme::Light,
+        // Note: egui 0.28.1 doesn't have Theme enum or set_theme method
+        // Theme is handled through visuals instead
+        let visuals = match app.theme {
+            Theme::DarkModern | Theme::Dark => egui::Visuals::dark(),
+            Theme::LightModern | Theme::Light => egui::Visuals::light(),
         };
-        cc.egui_ctx.set_theme(egui_theme);
+        cc.egui_ctx.set_visuals(visuals);
 
         // Then apply our custom visuals
         configure_visuals(&cc.egui_ctx, app.theme);
@@ -1425,12 +1427,12 @@ impl SeeUApp {
     pub fn set_theme(&mut self, ctx: &egui::Context, new_theme: Theme) {
         self.theme = new_theme;
 
-        // First, set the egui built-in theme to ensure proper base styling
-        let egui_theme = match new_theme {
-            Theme::DarkModern | Theme::Dark => egui::Theme::Dark,
-            Theme::LightModern | Theme::Light => egui::Theme::Light,
+        // First, set the egui built-in visuals to ensure proper base styling
+        let visuals = match new_theme {
+            Theme::DarkModern | Theme::Dark => egui::Visuals::dark(),
+            Theme::LightModern | Theme::Light => egui::Visuals::light(),
         };
-        ctx.set_theme(egui_theme);
+        ctx.set_visuals(visuals);
 
         // Then apply our custom visuals on top
         configure_visuals(ctx, new_theme);
@@ -1508,11 +1510,11 @@ impl SeeUApp {
         self.theme = Theme::DarkModern;
 
         // Set egui built-in theme
-        let egui_theme = match self.theme {
-            Theme::DarkModern | Theme::Dark => egui::Theme::Dark,
-            Theme::LightModern | Theme::Light => egui::Theme::Light,
+        let visuals = match self.theme {
+            Theme::DarkModern | Theme::Dark => egui::Visuals::dark(),
+            Theme::LightModern | Theme::Light => egui::Visuals::light(),
         };
-        ctx.set_theme(egui_theme);
+        ctx.set_visuals(visuals);
 
         // Apply custom visuals
         configure_visuals(ctx, self.theme);
@@ -1925,21 +1927,24 @@ impl eframe::App for SeeUApp {
         // 让 egui 自动处理面板高度
 
         // 右侧边栏 (如果启用) - 放在主面板之前
-        if self.show_right_sidebar {
-            egui::SidePanel::right("right_sidebar")
+        let right_sidebar_width = if self.show_right_sidebar {
+            let response = egui::SidePanel::right("right_sidebar")
                 .resizable(true)
                 .default_width(300.0)
                 .show(ctx, |ui| {
                     render_right_sidebar(ui, self);
                 });
-        }
+            Some(response.response.rect.width())
+        } else {
+            None
+        };
 
         // 主面板 - 放在最后，确保它填充剩余空间
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(ctx.style().visuals.window_fill))
             .show(ctx, |ui| {
-                // 渲染工作区，让 egui 自动处理高度
-                render_workspace(ui, &current_module, self);
+                // 渲染工作区，传递右侧边栏宽度信息
+                render_workspace(ui, &current_module, self, right_sidebar_width);
             });
     }
 

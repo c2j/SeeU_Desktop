@@ -486,9 +486,9 @@ impl<'a> MarkdownRenderer<'a> {
         let min_cell_width = 80.0;
 
         // Use a frame to create table border
-        egui::Frame::new()
+        egui::Frame::none()
             .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
-            .inner_margin(egui::Margin::same(1))
+            .inner_margin(egui::Margin::same(1.0))
             .show(self.ui, |ui| {
                 // Create unique grid ID for each table
                 let grid_id = format!("markdown_table_{}", self.table_counter);
@@ -508,17 +508,17 @@ impl<'a> MarkdownRenderer<'a> {
 
                                 // Create a frame for each cell with borders
                                 let cell_frame = if *is_header {
-                                    egui::Frame::new()
+                                    egui::Frame::none()
                                         .fill(Color32::from_rgb(248, 249, 250))
                                         .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
                                         .inner_margin(cell_padding)
                                 } else if row_index % 2 == 0 {
-                                    egui::Frame::new()
+                                    egui::Frame::none()
                                         .fill(Color32::from_rgb(255, 255, 255))
                                         .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
                                         .inner_margin(cell_padding)
                                 } else {
-                                    egui::Frame::new()
+                                    egui::Frame::none()
                                         .fill(Color32::from_rgb(249, 249, 249))
                                         .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
                                         .inner_margin(cell_padding)
@@ -532,7 +532,7 @@ impl<'a> MarkdownRenderer<'a> {
 
                             // Fill empty cells with borders
                             for _ in row.len()..max_cols {
-                                egui::Frame::new()
+                                egui::Frame::none()
                                     .fill(Color32::from_rgb(255, 255, 255))
                                     .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
                                     .inner_margin(cell_padding)

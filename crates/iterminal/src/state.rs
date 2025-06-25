@@ -13,12 +13,18 @@ pub struct ITerminalState {
     pub history_search: String,
     /// Whether the terminal has focus
     pub has_focus: bool,
-    /// Last update time for cursor blinking
-    pub last_cursor_blink: std::time::Instant,
     /// Whether cursor is visible (for blinking)
     pub cursor_visible: bool,
     /// Font size scale factor
     pub font_scale: f32,
+    /// Last update time for cursor blinking
+    pub last_cursor_blink: std::time::Instant,
+    /// Command input for the interface
+    pub command_input: String,
+    /// Terminal history for display
+    pub terminal_history: Vec<String>,
+    /// Current session name
+    pub current_session: String,
 }
 
 impl ITerminalState {
@@ -32,9 +38,12 @@ impl ITerminalState {
             show_history: false,
             history_search: String::new(),
             has_focus: false,
-            last_cursor_blink: std::time::Instant::now(),
             cursor_visible: true,
             font_scale: 1.0,
+            last_cursor_blink: std::time::Instant::now(),
+            command_input: String::new(),
+            terminal_history: Vec::new(),
+            current_session: "主会话".to_string(),
         }
     }
 
@@ -79,114 +88,81 @@ impl ITerminalState {
         self.terminal_manager.execute_command(command)
     }
 
-    /// Handle keyboard input
-    pub fn handle_key_input(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
-        // Get session ID first to avoid borrowing conflicts
-        let session_id = if let Some(session) = self.terminal_manager.get_active_session() {
-            session.id
-        } else {
-            return false;
-        };
-
+    /// Execute command in current session
+    pub fn execute_current_input(&mut self) -> bool {
         if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            match key {
-                egui::Key::Enter => {
-                    let command = session.execute_current_input();
-                    if !command.trim().is_empty() {
-                        // Drop the mutable borrow before calling execute_command_in_session
-                        let _ = session;
-                        self.terminal_manager.execute_command_in_session(session_id, command);
-                    }
-                    true
-                }
-                egui::Key::Backspace => {
-                    session.delete_char_before_cursor();
-                    true
-                }
-                egui::Key::Delete => {
-                    session.delete_char_at_cursor();
-                    true
-                }
-                egui::Key::ArrowLeft => {
-                    session.move_cursor_left();
-                    true
-                }
-                egui::Key::ArrowRight => {
-                    session.move_cursor_right();
-                    true
-                }
-                egui::Key::ArrowUp => {
-                    if let Some(prev_command) = session.history.get_previous() {
-                        session.set_input(prev_command);
-                    }
-                    true
-                }
-                egui::Key::ArrowDown => {
-                    if let Some(next_command) = session.history.get_next() {
-                        session.set_input(next_command);
-                    }
-                    true
-                }
-                egui::Key::Home => {
-                    if modifiers.ctrl {
-                        session.scroll_to_top();
-                    } else {
-                        session.move_cursor_to_start();
-                    }
-                    true
-                }
-                egui::Key::End => {
-                    if modifiers.ctrl {
-                        session.scroll_to_bottom();
-                    } else {
-                        session.move_cursor_to_end();
-                    }
-                    true
-                }
-                egui::Key::PageUp => {
-                    session.scroll_up(10);
-                    true
-                }
-                egui::Key::PageDown => {
-                    session.scroll_down(10);
-                    true
-                }
-                _ => false,
+            let command = session.execute_current_input();
+            if !command.trim().is_empty() {
+                let session_id = session.id;
+                // Drop the mutable borrow before calling execute_command_in_session
+                let _ = session;
+                self.terminal_manager.execute_command_in_session(session_id, command);
+                return true;
             }
+        }
+        false
+    }
+
+    /// Insert character at cursor position
+    pub fn insert_char(&mut self, ch: char) -> bool {
+        if let Some(session) = self.terminal_manager.get_active_session_mut() {
+            session.insert_char(ch);
+            true
         } else {
             false
         }
     }
 
-    /// Handle character input
-    pub fn handle_char_input(&mut self, ch: char) -> bool {
+    /// Delete character before cursor
+    pub fn delete_char_before_cursor(&mut self) -> bool {
         if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            // Handle special characters
-            match ch {
-                '\u{08}' => {
-                    // Backspace
-                    session.delete_char_before_cursor();
-                }
-                '\u{7f}' => {
-                    // Delete
-                    session.delete_char_at_cursor();
-                }
-                '\r' | '\n' => {
-                    // Enter - handled in key input
-                    return false;
-                }
-                _ => {
-                    // Regular character
-                    if ch.is_control() {
-                        return false;
-                    }
-                    session.insert_char(ch);
-                }
-            }
+            session.delete_char_before_cursor();
             true
         } else {
             false
         }
+    }
+
+    /// Move cursor left
+    pub fn move_cursor_left(&mut self) -> bool {
+        if let Some(session) = self.terminal_manager.get_active_session_mut() {
+            session.move_cursor_left();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Move cursor right
+    pub fn move_cursor_right(&mut self) -> bool {
+        if let Some(session) = self.terminal_manager.get_active_session_mut() {
+            session.move_cursor_right();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Navigate to previous command in history
+    pub fn history_previous(&mut self) -> bool {
+        if let Some(session) = self.terminal_manager.get_active_session_mut() {
+            if let Some(prev_command) = session.history.get_previous() {
+                session.set_input(prev_command);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Navigate to next command in history
+    pub fn history_next(&mut self) -> bool {
+        if let Some(session) = self.terminal_manager.get_active_session_mut() {
+            if let Some(next_command) = session.history.get_next() {
+                session.set_input(next_command);
+                return true;
+            }
+        }
+        false
     }
 
     /// Toggle history dialog
@@ -222,6 +198,19 @@ impl ITerminalState {
     /// Reset font size
     pub fn reset_font_size(&mut self) {
         self.font_scale = 1.0;
+    }
+
+    /// Execute command directly
+    pub fn execute_command_direct(&mut self, command: String) {
+        if let Some(session) = self.terminal_manager.get_active_session_mut() {
+            let session_id = session.id;
+            session.current_input = command.clone();
+            let executed_command = session.execute_current_input();
+            if !executed_command.trim().is_empty() {
+                let _ = session;
+                self.terminal_manager.execute_command_in_session(session_id, executed_command);
+            }
+        }
     }
 
     /// Check if there are any running commands

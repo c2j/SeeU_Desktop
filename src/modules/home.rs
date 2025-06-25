@@ -138,7 +138,7 @@ fn render_dashboard_blocks(ui: &mut egui::Ui, app: &mut SeeUApp) {
 /// 渲染笔记豆腐块
 fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
     let block_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
+        .inner_margin(egui::Margin::same(12.0))
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
@@ -234,7 +234,7 @@ fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
 /// 渲染搜索豆腐块
 fn render_search_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
     let block_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
+        .inner_margin(egui::Margin::same(12.0))
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
@@ -297,7 +297,7 @@ fn render_feature_card_compact(ui: &mut egui::Ui, icon: &str, title: &str, descr
     let is_current = app.active_module == module;
 
     let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(8))
+        .inner_margin(egui::Margin::same(8.0))
         .stroke(egui::Stroke::new(
             if is_current { 1.5 } else { 0.5 },
             if is_current {
@@ -354,7 +354,7 @@ fn render_feature_card(ui: &mut egui::Ui, icon: &str, title: &str, description: 
     let is_current = app.active_module == module;
 
     let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(16))
+        .inner_margin(egui::Margin::same(16.0))
         .stroke(egui::Stroke::new(
             if is_current { 2.0 } else { 1.0 },
             if is_current {
@@ -423,7 +423,7 @@ fn render_feature_card(ui: &mut egui::Ui, icon: &str, title: &str, description: 
 /// 渲染MCP工具豆腐块
 fn render_mcp_tools_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
     let block_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
+        .inner_margin(egui::Margin::same(12.0))
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
@@ -507,7 +507,7 @@ fn render_mcp_tools_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
 /// 渲染快速操作豆腐块
 fn render_quick_actions_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
     let block_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
+        .inner_margin(egui::Margin::same(12.0))
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
@@ -566,7 +566,7 @@ fn render_quick_actions_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
 /// 渲染紧凑版快速操作区域
 fn render_quick_actions_compact(ui: &mut egui::Ui, app: &mut SeeUApp) {
     let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(8))
+        .inner_margin(egui::Margin::same(8.0))
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
@@ -642,7 +642,7 @@ fn render_quick_actions_compact(ui: &mut egui::Ui, app: &mut SeeUApp) {
 /// 渲染快速操作区域（保留原版本）
 fn render_quick_actions(ui: &mut egui::Ui, app: &mut SeeUApp) {
     let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(15))
+        .inner_margin(egui::Margin::same(15.0))
         .stroke(egui::Stroke::new(1.5, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
@@ -723,7 +723,7 @@ fn render_inote_results(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
     for result in &app.global_search_results.inote_results {
         let card_frame = egui::Frame::group(ui.style())
-            .inner_margin(egui::Margin::same(10))
+            .inner_margin(egui::Margin::same(10.0))
             .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color));
 
         card_frame.show(ui, |ui| {
@@ -754,7 +754,7 @@ fn render_itools_results(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
     for result in &app.global_search_results.itools_results {
         let card_frame = egui::Frame::group(ui.style())
-            .inner_margin(egui::Margin::same(10))
+            .inner_margin(egui::Margin::same(10.0))
             .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color));
 
         card_frame.show(ui, |ui| {
@@ -786,7 +786,7 @@ fn render_isearch_results(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
     for result in &app.global_search_results.isearch_results {
         let card_frame = egui::Frame::group(ui.style())
-            .inner_margin(egui::Margin::same(10))
+            .inner_margin(egui::Margin::same(10.0))
             .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color));
 
         card_frame.show(ui, |ui| {
@@ -850,7 +850,7 @@ fn render_footer_section(ui: &mut egui::Ui) {
 
     // 提示信息卡片
     let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
+        .inner_margin(egui::Margin::same(12.0))
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 

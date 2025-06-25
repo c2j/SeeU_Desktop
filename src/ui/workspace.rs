@@ -11,7 +11,7 @@ use itools;
 use iterminal;
 
 /// Render the main workspace area
-pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut crate::app::SeeUApp) {
+pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut crate::app::SeeUApp, right_sidebar_width: Option<f32>) {
     // 创建一个垂直布局容器
     egui::containers::Frame::none()
         .fill(ui.style().visuals.window_fill)
@@ -47,14 +47,14 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                         Module::Files => render_file_manager(ui),
                         Module::DataAnalysis => render_data_analysis(ui),
                         Module::Note => {
-                            // 传递右侧边栏状态给笔记模块
-                            inote::render_db_inote_with_sidebar_info(ui, &mut app.inote_state, app.show_right_sidebar);
+                            // 传递右侧边栏状态和宽度给笔记模块
+                            inote::render_db_inote_with_sidebar_info(ui, &mut app.inote_state, app.show_right_sidebar, right_sidebar_width);
 
                             // 渲染思源笔记导入对话框
                             inote::db_ui_import::render_siyuan_import_dialog(ui, &mut app.inote_state);
                         },
                         Module::Search => {
-                            isearch::render_isearch_with_sidebar_info(ui, &mut app.isearch_state, app.show_right_sidebar);
+                            isearch::render_isearch_with_sidebar_info(ui, &mut app.isearch_state, app.show_right_sidebar, right_sidebar_width);
                         },
                         Module::ITools => {
                             itools::render_itools(ui, &mut app.itools_state);

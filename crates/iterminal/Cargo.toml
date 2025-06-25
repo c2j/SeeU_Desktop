@@ -6,10 +6,7 @@ authors = ["SeeU Team"]
 description = "Terminal module for SeeU Desktop - Cross-platform terminal emulator"
 
 [dependencies]
-# GUI Framework
-egui = "0.31.1"
-eframe = "0.31.1"
-egui_extras = "0.31.1"
+# GUI Framework - using egui through eframe
 
 # Async runtime
 tokio = { version = "1.32.0", features = ["full"] }
@@ -45,3 +42,6 @@ regex = "1.10.0"
 # System information
 hostname = "0.3.1"
 sysinfo = "0.30.0"
+
+# For egui compatibility - 升级版本以改善IME支持
+eframe = { version = "0.28.1", default-features = false, features = ["default_fonts"] }

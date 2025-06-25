@@ -85,10 +85,10 @@ fn render_component_card(ui: &mut egui::Ui, component: &UiComponent, state: &ITo
         UiComponent::PolicyConfiguration => ("策略配置", "配置安全和访问策略", "⚙️"),
     };
 
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(ui.style().visuals.faint_bg_color)
-        .corner_radius(egui::Rounding::same(5))
-        .inner_margin(egui::Margin::same(10))
+        .rounding(egui::Rounding::same(5.0))
+        .inner_margin(egui::Margin::same(10.0))
         .show(ui, |ui| {
             ui.set_min_size(egui::Vec2::new(200.0, 80.0));
 

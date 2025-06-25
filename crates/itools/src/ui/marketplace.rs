@@ -216,11 +216,11 @@ fn render_plugin_list(ui: &mut egui::Ui, state: &mut IToolsState) {
 
 /// Render a plugin card
 fn render_plugin_card(ui: &mut egui::Ui, plugin: &crate::plugins::marketplace::MarketplacePlugin, state: &mut IToolsState) {
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(ui.style().visuals.faint_bg_color)
         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
-        .corner_radius(egui::Rounding::same(5))
-        .inner_margin(egui::Margin::same(15))
+        .rounding(egui::Rounding::same(5.0))
+        .inner_margin(egui::Margin::same(15.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Plugin icon

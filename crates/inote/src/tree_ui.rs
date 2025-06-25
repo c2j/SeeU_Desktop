@@ -19,7 +19,7 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
     ui.separator();
 
     // 笔记本和笔记的树状视图
-    egui::ScrollArea::vertical().id_salt("notebooks_tree_scroll").show(ui, |ui| {
+    egui::ScrollArea::vertical().id_source("notebooks_tree_scroll").show(ui, |ui| {
         let notebooks = state.notebooks.clone();
 
         if notebooks.is_empty() {
@@ -213,7 +213,7 @@ pub fn render_tag_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
     ui.separator();
 
     // 标签列表
-    egui::ScrollArea::vertical().id_salt("tags_list_scroll").show(ui, |ui| {
+    egui::ScrollArea::vertical().id_source("tags_list_scroll").show(ui, |ui| {
         let tags = state.tags.clone();
 
         for tag in &tags {

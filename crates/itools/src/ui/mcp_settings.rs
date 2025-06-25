@@ -1878,7 +1878,7 @@ impl McpSettingsUi {
                 ui.indent("tools", |ui| {
                     // 为工具列表添加滚动区域，支持长列表和长描述
                     ScrollArea::vertical()
-                        .id_salt("server_capabilities_tools")
+                        .id_source("server_capabilities_tools")
                         .max_height(150.0)  // 限制最大高度为150像素
                         .show(ui, |ui| {
                             for tool in &capabilities.tools {
@@ -1904,7 +1904,7 @@ impl McpSettingsUi {
                 ui.indent("resources", |ui| {
                     // 为资源列表添加滚动区域，支持长列表和长描述
                     ScrollArea::vertical()
-                        .id_salt("server_capabilities_resources")
+                        .id_source("server_capabilities_resources")
                         .max_height(150.0)  // 限制最大高度为150像素
                         .show(ui, |ui| {
                             for resource in &capabilities.resources {
@@ -1930,7 +1930,7 @@ impl McpSettingsUi {
                 ui.indent("prompts", |ui| {
                     // 为提示列表添加滚动区域，支持长列表和长描述
                     ScrollArea::vertical()
-                        .id_salt("server_capabilities_prompts")
+                        .id_source("server_capabilities_prompts")
                         .max_height(150.0)  // 限制最大高度为150像素
                         .show(ui, |ui| {
                             for prompt in &capabilities.prompts {
@@ -2202,7 +2202,7 @@ impl McpSettingsUi {
 
                                         // 为参数输入区域添加滚动区域，防止参数过多时挤出按钮
                                         ScrollArea::vertical()
-                                            .id_salt(format!("tool_test_parameters_{}", selected_tool_index))
+                                            .id_source(format!("tool_test_parameters_{}", selected_tool_index))
                                             .max_height(200.0)  // 限制最大高度为200像素
                                             .show(ui, |ui| {
                                                 // Parse inputSchema to generate parameter inputs
@@ -2305,7 +2305,7 @@ impl McpSettingsUi {
 
                                                 // 为提示参数输入区域添加滚动区域，防止参数过多时挤出按钮
                                                 ScrollArea::vertical()
-                                                    .id_salt(format!("prompt_test_parameters_{}", selected_prompt_index))
+                                                    .id_source(format!("prompt_test_parameters_{}", selected_prompt_index))
                                                     .max_height(200.0)  // 限制最大高度为200像素
                                                     .show(ui, |ui| {
                                                         for arg in arguments {
@@ -3435,7 +3435,7 @@ impl McpSettingsUi {
                 // 为工具描述添加滚动区域，支持长描述
                 let description = tool.description.as_deref().unwrap_or("无描述");
                 ScrollArea::vertical()
-                    .id_salt(format!("tool_description_{}", tool_index))
+                    .id_source(format!("tool_description_{}", tool_index))
                     .max_height(120.0)  // 限制最大高度为120像素
                     .show(ui, |ui| {
                         ui.label(description);
@@ -3448,7 +3448,7 @@ impl McpSettingsUi {
 
                     // 为参数输入区域添加滚动区域，防止参数过多时挤出按钮
                     ScrollArea::vertical()
-                        .id_salt(format!("tool_parameters_{}", tool_index))
+                        .id_source(format!("tool_parameters_{}", tool_index))
                         .max_height(200.0)  // 限制最大高度为200像素
                         .show(ui, |ui| {
                             Self::render_tool_parameters_static(ui, input_schema, &mut dialog.parameter_inputs);
