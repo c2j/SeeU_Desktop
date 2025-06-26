@@ -796,18 +796,22 @@ impl SlideRenderer {
                         play_state.previous_slide();
                     }
 
-                    // 绘制左箭头
-                    let arrow_color = if left_response.hovered() {
-                        eframe::egui::Color32::WHITE
-                    } else {
-                        eframe::egui::Color32::LIGHT_GRAY
-                    };
+                    // 绘制左箭头 - 使用自适应颜色和透明度
+                    let arrow_color = Self::get_adaptive_arrow_color(&play_state.current_template, left_response.hovered());
+
+                    // 添加半透明背景圆圈以提高可见性
+                    let bg_color = Self::get_arrow_background_color(&play_state.current_template, left_response.hovered());
+                    ui.painter().circle_filled(
+                        left_arrow_rect.center(),
+                        25.0,
+                        bg_color,
+                    );
 
                     ui.painter().text(
                         left_arrow_rect.center(),
                         eframe::egui::Align2::CENTER_CENTER,
                         "◀",
-                        eframe::egui::FontId::proportional(40.0),
+                        eframe::egui::FontId::proportional(32.0), // 稍微减小字体大小
                         arrow_color,
                     );
                 }
@@ -824,18 +828,22 @@ impl SlideRenderer {
                         play_state.next_slide();
                     }
 
-                    // 绘制右箭头
-                    let arrow_color = if right_response.hovered() {
-                        eframe::egui::Color32::WHITE
-                    } else {
-                        eframe::egui::Color32::LIGHT_GRAY
-                    };
+                    // 绘制右箭头 - 使用自适应颜色和透明度
+                    let arrow_color = Self::get_adaptive_arrow_color(&play_state.current_template, right_response.hovered());
+
+                    // 添加半透明背景圆圈以提高可见性
+                    let bg_color = Self::get_arrow_background_color(&play_state.current_template, right_response.hovered());
+                    ui.painter().circle_filled(
+                        right_arrow_rect.center(),
+                        25.0,
+                        bg_color,
+                    );
 
                     ui.painter().text(
                         right_arrow_rect.center(),
                         eframe::egui::Align2::CENTER_CENTER,
                         "▶",
-                        eframe::egui::FontId::proportional(40.0),
+                        eframe::egui::FontId::proportional(32.0), // 稍微减小字体大小
                         arrow_color,
                     );
                 }
@@ -1170,5 +1178,73 @@ impl SlideRenderer {
                 play_state.goto_slide(last_index);
             }
         });
+    }
+
+    /// 获取自适应的箭头颜色
+    fn get_adaptive_arrow_color(template: &Option<SlideTemplate>, is_hovered: bool) -> eframe::egui::Color32 {
+        if let Some(template) = template {
+            // 根据模板背景色计算合适的箭头颜色
+            let bg_color = Self::parse_color(&template.background_color).unwrap_or(eframe::egui::Color32::from_rgb(20, 20, 20));
+
+            // 计算背景亮度
+            let brightness = (bg_color.r() as f32 * 0.299 + bg_color.g() as f32 * 0.587 + bg_color.b() as f32 * 0.114) / 255.0;
+
+            if brightness < 0.5 {
+                // 深色背景：使用浅色箭头，但降低透明度
+                if is_hovered {
+                    eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200) // 白色，80%透明度
+                } else {
+                    eframe::egui::Color32::from_rgba_unmultiplied(200, 200, 200, 120) // 浅灰色，47%透明度
+                }
+            } else {
+                // 浅色背景：使用深色箭头
+                if is_hovered {
+                    eframe::egui::Color32::from_rgba_unmultiplied(60, 60, 60, 200)   // 深灰色，80%透明度
+                } else {
+                    eframe::egui::Color32::from_rgba_unmultiplied(100, 100, 100, 120) // 中灰色，47%透明度
+                }
+            }
+        } else {
+            // 默认样式：深色背景
+            if is_hovered {
+                eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200)
+            } else {
+                eframe::egui::Color32::from_rgba_unmultiplied(200, 200, 200, 120)
+            }
+        }
+    }
+
+    /// 获取箭头背景圆圈颜色
+    fn get_arrow_background_color(template: &Option<SlideTemplate>, is_hovered: bool) -> eframe::egui::Color32 {
+        if let Some(template) = template {
+            // 根据模板背景色计算合适的背景圆圈颜色
+            let bg_color = Self::parse_color(&template.background_color).unwrap_or(eframe::egui::Color32::from_rgb(20, 20, 20));
+
+            // 计算背景亮度
+            let brightness = (bg_color.r() as f32 * 0.299 + bg_color.g() as f32 * 0.587 + bg_color.b() as f32 * 0.114) / 255.0;
+
+            if brightness < 0.5 {
+                // 深色背景：使用半透明的浅色背景
+                if is_hovered {
+                    eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40) // 白色，16%透明度
+                } else {
+                    eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20) // 白色，8%透明度
+                }
+            } else {
+                // 浅色背景：使用半透明的深色背景
+                if is_hovered {
+                    eframe::egui::Color32::from_rgba_unmultiplied(0, 0, 0, 40)     // 黑色，16%透明度
+                } else {
+                    eframe::egui::Color32::from_rgba_unmultiplied(0, 0, 0, 20)     // 黑色，8%透明度
+                }
+            }
+        } else {
+            // 默认样式：深色背景
+            if is_hovered {
+                eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40)
+            } else {
+                eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20)
+            }
+        }
     }
 }

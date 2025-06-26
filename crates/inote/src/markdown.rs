@@ -2,6 +2,17 @@ use pulldown_cmark::{Parser, Options, html, Alignment};
 use eframe::egui::{self, TextFormat, Color32, Ui, FontFamily};
 use eframe::egui::text::LayoutJob;
 
+/// 表格自适应颜色配置
+#[derive(Debug, Clone)]
+struct TableColors {
+    border: Color32,
+    header_bg: Color32,
+    even_row_bg: Color32,
+    odd_row_bg: Color32,
+    text: Color32,
+    header_text: Color32,
+}
+
 /// Render markdown text to HTML
 pub fn markdown_to_html(markdown: &str) -> String {
     // Set up options and parser
@@ -113,6 +124,9 @@ struct MarkdownRenderer<'a> {
     is_table_header: bool,
     table_counter: usize,
     search_terms: Vec<String>,
+    in_code_block: bool,
+    code_block_content: String,
+    code_block_language: String,
 }
 
 impl<'a> MarkdownRenderer<'a> {
@@ -134,6 +148,9 @@ impl<'a> MarkdownRenderer<'a> {
             is_table_header: false,
             table_counter: 0,
             search_terms: search_terms.to_vec(),
+            in_code_block: false,
+            code_block_content: String::new(),
+            code_block_language: String::new(),
         }
     }
 
@@ -152,7 +169,9 @@ impl<'a> MarkdownRenderer<'a> {
                     self.handle_end_tag(tag);
                 },
                 Text(text) => {
-                    if self.in_table {
+                    if self.in_code_block {
+                        self.code_block_content.push_str(&text);
+                    } else if self.in_table {
                         self.current_cell.add_text(&text);
                     } else {
                         self.current_text.push_str(&text);
@@ -198,6 +217,9 @@ impl<'a> MarkdownRenderer<'a> {
         if self.in_table {
             self.render_enhanced_table();
         }
+        if self.in_code_block {
+            self.render_code_block();
+        }
     }
 
     fn handle_start_tag(&mut self, tag: pulldown_cmark::Tag) {
@@ -210,7 +232,15 @@ impl<'a> MarkdownRenderer<'a> {
             },
             Emphasis => self.is_italic = true,
             Strong => self.is_bold = true,
-            CodeBlock(_) => self.is_code = true,
+            CodeBlock(kind) => {
+                self.in_code_block = true;
+                self.code_block_content.clear();
+                // Extract language from code block kind
+                self.code_block_language = match kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
+                    pulldown_cmark::CodeBlockKind::Indented => String::new(),
+                };
+            },
             Link(_, url, _) => {
                 self.is_link = true;
                 self.link_url = url.to_string();
@@ -257,7 +287,12 @@ impl<'a> MarkdownRenderer<'a> {
             },
             Emphasis => self.is_italic = false,
             Strong => self.is_bold = false,
-            CodeBlock(_) => self.is_code = false,
+            CodeBlock(_) => {
+                self.render_code_block();
+                self.in_code_block = false;
+                self.code_block_content.clear();
+                self.code_block_language.clear();
+            },
             Link(_, _, _) => {
                 self.is_link = false;
                 self.link_url.clear();
@@ -485,9 +520,12 @@ impl<'a> MarkdownRenderer<'a> {
         let cell_padding = egui::vec2(8.0, 4.0);
         let min_cell_width = 80.0;
 
+        // Get adaptive colors based on current UI theme
+        let table_colors = Self::get_adaptive_table_colors(self.ui);
+
         // Use a frame to create table border
         egui::Frame::none()
-            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
+            .stroke(egui::Stroke::new(1.0, table_colors.border))
             .inner_margin(egui::Margin::same(1.0))
             .show(self.ui, |ui| {
                 // Create unique grid ID for each table
@@ -509,32 +547,32 @@ impl<'a> MarkdownRenderer<'a> {
                                 // Create a frame for each cell with borders
                                 let cell_frame = if *is_header {
                                     egui::Frame::none()
-                                        .fill(Color32::from_rgb(248, 249, 250))
-                                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
+                                        .fill(table_colors.header_bg)
+                                        .stroke(egui::Stroke::new(1.0, table_colors.border))
                                         .inner_margin(cell_padding)
                                 } else if row_index % 2 == 0 {
                                     egui::Frame::none()
-                                        .fill(Color32::from_rgb(255, 255, 255))
-                                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
+                                        .fill(table_colors.even_row_bg)
+                                        .stroke(egui::Stroke::new(1.0, table_colors.border))
                                         .inner_margin(cell_padding)
                                 } else {
                                     egui::Frame::none()
-                                        .fill(Color32::from_rgb(249, 249, 249))
-                                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
+                                        .fill(table_colors.odd_row_bg)
+                                        .stroke(egui::Stroke::new(1.0, table_colors.border))
                                         .inner_margin(cell_padding)
                                 };
 
                                 cell_frame.show(ui, |ui| {
                                     ui.set_min_width(min_cell_width);
-                                    Self::render_table_cell_static(ui, cell, *is_header, col_index, &column_alignments);
+                                    Self::render_table_cell_static(ui, cell, *is_header, col_index, &column_alignments, &table_colors);
                                 });
                             }
 
                             // Fill empty cells with borders
                             for _ in row.len()..max_cols {
                                 egui::Frame::none()
-                                    .fill(Color32::from_rgb(255, 255, 255))
-                                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(200, 200, 200)))
+                                    .fill(table_colors.even_row_bg)
+                                    .stroke(egui::Stroke::new(1.0, table_colors.border))
                                     .inner_margin(cell_padding)
                                     .show(ui, |ui| {
                                         ui.set_min_width(min_cell_width);
@@ -551,18 +589,51 @@ impl<'a> MarkdownRenderer<'a> {
         self.current_table = TableInfo::new();
     }
 
+    /// 获取自适应的表格颜色配置
+    fn get_adaptive_table_colors(ui: &egui::Ui) -> TableColors {
+        let visuals = ui.visuals();
+
+        // 检测当前是否为深色主题
+        let is_dark_theme = visuals.dark_mode;
+
+        if is_dark_theme {
+            // 深色主题配色
+            TableColors {
+                border: Color32::from_rgb(80, 80, 80),           // 深灰色边框
+                header_bg: Color32::from_rgb(60, 60, 60),        // 深灰色表头背景
+                even_row_bg: Color32::from_rgb(45, 45, 45),      // 深色偶数行背景
+                odd_row_bg: Color32::from_rgb(50, 50, 50),       // 稍浅的奇数行背景
+                text: Color32::from_rgb(220, 220, 220),          // 浅色文字
+                header_text: Color32::from_rgb(255, 255, 255),   // 白色表头文字
+            }
+        } else {
+            // 浅色主题配色（原有配色）
+            TableColors {
+                border: Color32::from_rgb(200, 200, 200),        // 浅灰色边框
+                header_bg: Color32::from_rgb(248, 249, 250),     // 浅灰色表头背景
+                even_row_bg: Color32::from_rgb(255, 255, 255),   // 白色偶数行背景
+                odd_row_bg: Color32::from_rgb(249, 249, 249),    // 浅灰色奇数行背景
+                text: Color32::from_rgb(40, 40, 40),             // 深色文字
+                header_text: Color32::from_rgb(40, 40, 40),      // 深色表头文字
+            }
+        }
+    }
+
     fn render_table_cell_static(
         ui: &mut egui::Ui,
         cell: &MarkdownTableCell,
         is_header: bool,
         col_index: usize,
-        column_alignments: &[Alignment]
+        column_alignments: &[Alignment],
+        table_colors: &TableColors
     ) {
         let mut rich_text = egui::RichText::new(&cell.content);
 
-        // Apply cell formatting
+        // Apply cell formatting with adaptive colors
         if is_header {
-            rich_text = rich_text.strong().color(Color32::from_rgb(40, 40, 40));
+            rich_text = rich_text.strong().color(table_colors.header_text);
+        } else {
+            rich_text = rich_text.color(table_colors.text);
         }
 
         if cell.is_bold {
@@ -574,11 +645,23 @@ impl<'a> MarkdownRenderer<'a> {
         }
 
         if cell.is_code {
-            rich_text = rich_text.monospace().background_color(Color32::from_rgb(245, 245, 245));
+            // Use adaptive background for code in tables
+            let code_bg = if ui.visuals().dark_mode {
+                Color32::from_rgb(70, 70, 70)  // 深色主题下的代码背景
+            } else {
+                Color32::from_rgb(245, 245, 245)  // 浅色主题下的代码背景
+            };
+            rich_text = rich_text.monospace().background_color(code_bg);
         }
 
         if cell.is_link {
-            rich_text = rich_text.color(Color32::from_rgb(0, 102, 204)).underline();
+            // Use adaptive link color
+            let link_color = if ui.visuals().dark_mode {
+                Color32::from_rgb(100, 150, 255)  // 深色主题下的链接颜色
+            } else {
+                Color32::from_rgb(0, 102, 204)    // 浅色主题下的链接颜色
+            };
+            rich_text = rich_text.color(link_color).underline();
         }
 
         // Apply column alignment if available
@@ -669,3 +752,328 @@ fn append_link(job: &mut LayoutJob, text: &str, url: &str) {
 
     job.append(text, 0.0, format);
 }
+
+impl<'a> MarkdownRenderer<'a> {
+    /// Render a code block with syntax highlighting and proper styling
+    fn render_code_block(&mut self) {
+        if self.code_block_content.is_empty() {
+            return;
+        }
+
+        // Add some spacing before the code block
+        self.ui.add_space(8.0);
+
+        // Create a frame for the code block
+        let frame = egui::Frame::none()
+            .fill(Color32::from_rgb(45, 45, 45)) // Dark background
+            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(80, 80, 80))) // Border
+            .rounding(egui::Rounding::same(6.0)) // Rounded corners
+            .inner_margin(egui::Margin::same(12.0)); // Padding
+
+        let code_content = self.code_block_content.clone();
+        let code_language = self.code_block_language.clone();
+
+        frame.show(self.ui, |ui| {
+            // Add language label if available
+            if !code_language.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(&code_language)
+                            .size(11.0)
+                            .color(Color32::from_rgb(150, 150, 150))
+                            .monospace()
+                    );
+                });
+                ui.add_space(6.0);
+            }
+
+            // Render the code with syntax highlighting
+            render_highlighted_code_static(ui, &code_content, &code_language);
+        });
+
+        // Add some spacing after the code block
+        self.ui.add_space(8.0);
+    }
+
+    /// Render code with basic syntax highlighting
+    fn render_highlighted_code(&self, ui: &mut egui::Ui, code: &str, language: &str) {
+        render_highlighted_code_static(ui, code, language);
+    }
+}
+
+/// Static function to render code with basic syntax highlighting
+fn render_highlighted_code_static(ui: &mut egui::Ui, code: &str, language: &str) {
+        let mut layout_job = LayoutJob::default();
+
+        // Define colors for syntax highlighting
+        let default_color = Color32::from_rgb(220, 220, 220);
+        let keyword_color = Color32::from_rgb(86, 156, 214);  // Blue
+        let string_color = Color32::from_rgb(206, 145, 120);  // Orange
+        let comment_color = Color32::from_rgb(106, 153, 85);  // Green
+        let number_color = Color32::from_rgb(181, 206, 168);  // Light green
+        let function_color = Color32::from_rgb(220, 220, 170); // Yellow
+
+        // Basic syntax highlighting based on language
+        match language.to_lowercase().as_str() {
+            "rust" => highlight_rust_code(&mut layout_job, code, keyword_color, string_color, comment_color, number_color, function_color, default_color),
+            "python" => highlight_python_code(&mut layout_job, code, keyword_color, string_color, comment_color, number_color, function_color, default_color),
+            "javascript" | "js" => highlight_js_code(&mut layout_job, code, keyword_color, string_color, comment_color, number_color, function_color, default_color),
+            "json" => highlight_json_code(&mut layout_job, code, keyword_color, string_color, comment_color, number_color, default_color),
+            _ => {
+                // Default monospace rendering without highlighting
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: default_color,
+                    ..Default::default()
+                };
+                layout_job.append(code, 0.0, format);
+            }
+        }
+
+        ui.add(egui::Label::new(layout_job));
+    }
+
+/// Highlight Rust code
+fn highlight_rust_code(layout_job: &mut LayoutJob, code: &str, keyword_color: Color32, string_color: Color32, comment_color: Color32, number_color: Color32, function_color: Color32, default_color: Color32) {
+    let rust_keywords = [
+        "fn", "let", "mut", "const", "static", "if", "else", "match", "for", "while", "loop",
+        "break", "continue", "return", "struct", "enum", "impl", "trait", "pub", "use", "mod",
+        "crate", "super", "self", "Self", "where", "async", "await", "move", "ref", "type",
+        "unsafe", "extern", "dyn", "Box", "Vec", "String", "Option", "Result", "Some", "None",
+        "Ok", "Err", "true", "false"
+    ];
+
+    highlight_code_generic(layout_job, code, &rust_keywords, "//", keyword_color, string_color, comment_color, number_color, function_color, default_color);
+}
+
+/// Highlight Python code
+fn highlight_python_code(layout_job: &mut LayoutJob, code: &str, keyword_color: Color32, string_color: Color32, comment_color: Color32, number_color: Color32, function_color: Color32, default_color: Color32) {
+    let python_keywords = [
+        "def", "class", "if", "elif", "else", "for", "while", "try", "except", "finally",
+        "with", "as", "import", "from", "return", "yield", "lambda", "and", "or", "not",
+        "in", "is", "True", "False", "None", "pass", "break", "continue", "global", "nonlocal",
+        "async", "await", "print", "len", "range", "str", "int", "float", "list", "dict", "set"
+    ];
+
+    highlight_code_generic(layout_job, code, &python_keywords, "#", keyword_color, string_color, comment_color, number_color, function_color, default_color);
+}
+
+/// Highlight JavaScript code
+fn highlight_js_code(layout_job: &mut LayoutJob, code: &str, keyword_color: Color32, string_color: Color32, comment_color: Color32, number_color: Color32, function_color: Color32, default_color: Color32) {
+    let js_keywords = [
+        "function", "var", "let", "const", "if", "else", "for", "while", "do", "switch",
+        "case", "default", "break", "continue", "return", "try", "catch", "finally",
+        "throw", "new", "this", "typeof", "instanceof", "true", "false", "null", "undefined",
+        "async", "await", "class", "extends", "super", "import", "export", "from", "console"
+    ];
+
+    highlight_code_generic(layout_job, code, &js_keywords, "//", keyword_color, string_color, comment_color, number_color, function_color, default_color);
+}
+
+/// Highlight JSON code
+fn highlight_json_code(layout_job: &mut LayoutJob, code: &str, keyword_color: Color32, string_color: Color32, _comment_color: Color32, number_color: Color32, default_color: Color32) {
+    let chars: Vec<char> = code.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+
+        match ch {
+            '"' => {
+                // String
+                let start = i;
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        i += 2; // Skip escaped character
+                    } else {
+                        i += 1;
+                    }
+                }
+                if i < chars.len() {
+                    i += 1; // Include closing quote
+                }
+
+                let text: String = chars[start..i].iter().collect();
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: string_color,
+                    ..Default::default()
+                };
+                layout_job.append(&text, 0.0, format);
+            },
+            '0'..='9' | '-' => {
+                // Number
+                let start = i;
+                if chars[i] == '-' {
+                    i += 1;
+                }
+                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.' || chars[i] == 'e' || chars[i] == 'E' || chars[i] == '+' || chars[i] == '-') {
+                    i += 1;
+                }
+
+                let text: String = chars[start..i].iter().collect();
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: number_color,
+                    ..Default::default()
+                };
+                layout_job.append(&text, 0.0, format);
+            },
+            't' | 'f' | 'n' => {
+                // Keywords: true, false, null
+                let start = i;
+                while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+
+                let text: String = chars[start..i].iter().collect();
+                let color = if text == "true" || text == "false" || text == "null" {
+                    keyword_color
+                } else {
+                    default_color
+                };
+
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color,
+                    ..Default::default()
+                };
+                layout_job.append(&text, 0.0, format);
+            },
+            _ => {
+                // Default character
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: default_color,
+                    ..Default::default()
+                };
+                layout_job.append(&ch.to_string(), 0.0, format);
+                i += 1;
+            }
+        }
+    }
+}
+
+/// Generic code highlighting function
+fn highlight_code_generic(layout_job: &mut LayoutJob, code: &str, keywords: &[&str], comment_prefix: &str, keyword_color: Color32, string_color: Color32, comment_color: Color32, number_color: Color32, function_color: Color32, default_color: Color32) {
+    let lines: Vec<&str> = code.lines().collect();
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx > 0 {
+            // Add newline
+            let format = egui::TextFormat {
+                font_id: egui::FontId::monospace(13.0),
+                color: default_color,
+                ..Default::default()
+            };
+            layout_job.append("\n", 0.0, format);
+        }
+
+        // Check if line is a comment
+        if line.trim_start().starts_with(comment_prefix) {
+            let format = egui::TextFormat {
+                font_id: egui::FontId::monospace(13.0),
+                color: comment_color,
+                ..Default::default()
+            };
+            layout_job.append(line, 0.0, format);
+            continue;
+        }
+
+        // Parse line for tokens
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            let ch = chars[i];
+
+            if ch.is_whitespace() {
+                // Whitespace
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: default_color,
+                    ..Default::default()
+                };
+                layout_job.append(&ch.to_string(), 0.0, format);
+                i += 1;
+            } else if ch == '"' || ch == '\'' {
+                // String literal
+                let quote = ch;
+                let start = i;
+                i += 1;
+                while i < chars.len() && chars[i] != quote {
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        i += 2; // Skip escaped character
+                    } else {
+                        i += 1;
+                    }
+                }
+                if i < chars.len() {
+                    i += 1; // Include closing quote
+                }
+
+                let text: String = chars[start..i].iter().collect();
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: string_color,
+                    ..Default::default()
+                };
+                layout_job.append(&text, 0.0, format);
+            } else if ch.is_ascii_digit() {
+                // Number
+                let start = i;
+                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.' || chars[i] == '_') {
+                    i += 1;
+                }
+
+                let text: String = chars[start..i].iter().collect();
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: number_color,
+                    ..Default::default()
+                };
+                layout_job.append(&text, 0.0, format);
+            } else if ch.is_ascii_alphabetic() || ch == '_' {
+                // Identifier or keyword
+                let start = i;
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+
+                let text: String = chars[start..i].iter().collect();
+
+                // Check if it's a keyword
+                let color = if keywords.contains(&text.as_str()) {
+                    keyword_color
+                } else if i < chars.len() && chars[i] == '(' {
+                    // Likely a function call
+                    function_color
+                } else {
+                    default_color
+                };
+
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color,
+                    ..Default::default()
+                };
+                layout_job.append(&text, 0.0, format);
+            } else {
+                // Other characters (operators, punctuation, etc.)
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: default_color,
+                    ..Default::default()
+                };
+                layout_job.append(&ch.to_string(), 0.0, format);
+                i += 1;
+            }
+        }
+    }
+}
+
+
+
+
