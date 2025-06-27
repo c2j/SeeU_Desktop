@@ -757,7 +757,8 @@ fn render_inote_results(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 ui.label("📝");
                 ui.add_space(8.0);
                 ui.vertical(|ui| {
-                    if ui.link(&result.title).clicked() {
+                    let truncated_title = inote::truncate_note_title(&result.title);
+                    if ui.link(&truncated_title).clicked() {
                         // Switch to Note module and select the note
                         app.active_module = Module::Note;
                         app.inote_state.select_note(&result.id);

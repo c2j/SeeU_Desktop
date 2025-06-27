@@ -346,7 +346,16 @@ impl SiyuanImporter {
         self.process_document_attachments(&document, &mut note)?;
 
         // 添加到笔记列表
+        let note_id = note.id.clone();
         self.notes.push((note, notebook_id.to_string()));
+
+        // 同时更新笔记本的note_ids字段
+        if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == notebook_id) {
+            notebook.add_note(note_id);
+            log::debug!("Added note to notebook '{}', total notes: {}", notebook.name, notebook.note_ids.len());
+        } else {
+            log::warn!("Could not find notebook '{}' to add note", notebook_id);
+        }
 
         Ok(())
     }
@@ -1019,21 +1028,29 @@ impl SiyuanImporter {
 
     /// 保存数据到数据库
     fn save_to_database(&self) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("开始保存导入数据到数据库...");
+
         // 保存笔记本
+        log::info!("保存 {} 个笔记本", self.notebooks.len());
         for notebook in &self.notebooks {
+            log::debug!("保存笔记本: {} (包含 {} 个笔记)", notebook.name, notebook.note_ids.len());
             self.storage.save_notebook(notebook)?;
         }
 
         // 保存标签
+        log::info!("保存 {} 个标签", self.tags.len());
         for tag in &self.tags {
             self.storage.save_tag(tag)?;
         }
 
         // 保存笔记
+        log::info!("保存 {} 个笔记", self.notes.len());
         for (note, notebook_id) in &self.notes {
+            log::debug!("保存笔记: {} 到笔记本: {}", note.title, notebook_id);
             self.storage.save_note(note, notebook_id)?;
         }
 
+        log::info!("所有导入数据已成功保存到数据库");
         Ok(())
     }
 }

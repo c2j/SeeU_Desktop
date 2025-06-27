@@ -191,6 +191,10 @@ fn start_import(state: &mut DbINoteState) {
 
             // 重新加载数据以显示导入的笔记
             log::info!("重新加载数据以显示导入的笔记...");
+
+            // 确保数据库操作完全完成
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
             state.force_reload_data();
             log::info!("数据重新加载完成");
         },

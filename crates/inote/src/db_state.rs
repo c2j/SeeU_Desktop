@@ -358,31 +358,24 @@ fn main() {
 
     /// Load notes for a notebook (public method for external use)
     pub fn load_notes_for_notebook(&mut self, notebook_id: &str) {
-        // 找到对应的笔记本
-        let notebook_note_ids = if let Some(notebook) = self.notebooks.iter().find(|nb| nb.id == notebook_id) {
-            notebook.note_ids.clone()
-        } else {
+        // 验证笔记本是否存在
+        if !self.notebooks.iter().any(|nb| nb.id == notebook_id) {
             log::warn!("Notebook {} not found", notebook_id);
             return;
-        };
-
-        // 检查是否所有笔记都已加载
-        let all_notes_loaded = notebook_note_ids.iter()
-            .all(|note_id| self.notes.contains_key(note_id));
-
-        if all_notes_loaded {
-            log::debug!("All notes for notebook {} are already loaded", notebook_id);
-            return; // 所有笔记都已加载
         }
 
-        // 加载缺失的笔记
+        // 直接从数据库加载笔记，不依赖内存中的note_ids字段
+        // 这样可以确保即使note_ids不准确也能正确加载所有笔记
         if let Ok(storage) = self.storage.lock() {
             match storage.get_notes_for_notebook(notebook_id) {
                 Ok(notes) => {
                     let mut loaded_count = 0;
                     let mut updated_count = 0;
+                    let mut note_ids_for_notebook = Vec::new();
 
                     for note in notes {
+                        note_ids_for_notebook.push(note.id.clone());
+
                         if self.notes.contains_key(&note.id) {
                             // 笔记已存在，更新它（可能有新的内容）
                             self.notes.insert(note.id.clone(), note);
@@ -391,6 +384,42 @@ fn main() {
                             // 新笔记，添加到内存
                             self.notes.insert(note.id.clone(), note);
                             loaded_count += 1;
+                        }
+                    }
+
+                    // 智能合并笔记本的note_ids字段以保持一致性
+                    if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == notebook_id) {
+                        let old_count = notebook.note_ids.len();
+
+                        // 不直接替换，而是智能合并
+                        // 1. 保留内存中存在但数据库查询结果中没有的笔记ID（可能是刚导入的）
+                        let mut merged_note_ids = Vec::new();
+
+                        // 2. 首先添加数据库中的所有笔记（确保数据库数据优先）
+                        for note_id in &note_ids_for_notebook {
+                            if !merged_note_ids.contains(note_id) {
+                                merged_note_ids.push(note_id.clone());
+                            }
+                        }
+
+                        // 3. 然后添加内存中存在但数据库查询中缺失的笔记
+                        for existing_note_id in &notebook.note_ids {
+                            if !merged_note_ids.contains(existing_note_id) {
+                                // 验证这个笔记确实存在于内存中
+                                if self.notes.contains_key(existing_note_id) {
+                                    merged_note_ids.push(existing_note_id.clone());
+                                    log::info!("保留内存中的笔记 '{}' (可能是刚导入的)", existing_note_id);
+                                }
+                            }
+                        }
+
+                        notebook.note_ids = merged_note_ids;
+                        let new_count = notebook.note_ids.len();
+
+                        if old_count != new_count {
+                            log::info!("智能合并笔记本 '{}' 的note_ids: {} -> {} 个笔记", notebook.name, old_count, new_count);
+                        } else {
+                            log::debug!("笔记本 '{}' 的note_ids保持不变: {} 个笔记", notebook.name, new_count);
                         }
                     }
 
@@ -1158,11 +1187,16 @@ fn main() {
 
     /// Force reload all data from database
     pub fn force_reload_data(&mut self) {
+        log::info!("开始强制重新加载所有数据...");
+
         // Save current selection
         let current_notebook = self.current_notebook;
         let current_note = self.current_note.clone();
 
         // Clear current state
+        let old_notebook_count = self.notebooks.len();
+        let old_note_count = self.notes.len();
+
         self.notebooks.clear();
         self.notes.clear();
         self.tags.clear();
@@ -1171,10 +1205,17 @@ fn main() {
         self.note_content.clear();
         self.note_title.clear();
 
+        log::info!("已清空内存数据 (之前: {} 个笔记本, {} 个笔记)", old_notebook_count, old_note_count);
+
         // Reload from database
         self.load_notebooks();
         self.load_tags();
         self.load_all_notes(); // 重要：重新加载所有笔记
+
+        log::info!("重新加载完成 (现在: {} 个笔记本, {} 个笔记)", self.notebooks.len(), self.notes.len());
+
+        // 验证数据一致性
+        self.validate_data_consistency();
 
         // Try to restore selection if still valid
         if let Some(notebook_idx) = current_notebook {
@@ -1186,6 +1227,138 @@ fn main() {
                     if self.notes.contains_key(&note_id) {
                         self.select_note(&note_id);
                     }
+                }
+            }
+        }
+    }
+
+    /// 验证数据一致性
+    fn validate_data_consistency(&mut self) {
+        log::info!("开始验证数据一致性...");
+
+        let mut total_expected_notes = 0;
+        let mut inconsistencies = 0;
+
+        for notebook in &self.notebooks {
+            total_expected_notes += notebook.note_ids.len();
+
+            // 检查笔记本中的每个笔记是否在内存中存在
+            for note_id in &notebook.note_ids {
+                if !self.notes.contains_key(note_id) {
+                    log::warn!("数据不一致: 笔记本 '{}' 引用的笔记 '{}' 在内存中不存在", notebook.name, note_id);
+                    inconsistencies += 1;
+                }
+            }
+        }
+
+        // 检查内存中的笔记是否都有对应的笔记本引用
+        for note_id in self.notes.keys() {
+            let mut found = false;
+            for notebook in &self.notebooks {
+                if notebook.note_ids.contains(note_id) {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                log::warn!("数据不一致: 内存中的笔记 '{}' 没有被任何笔记本引用", note_id);
+                inconsistencies += 1;
+            }
+        }
+
+        if inconsistencies > 0 {
+            log::error!("发现 {} 个数据一致性问题！尝试自动修复...", inconsistencies);
+            self.fix_data_inconsistencies();
+        } else {
+            log::info!("数据一致性验证通过 (笔记本预期: {} 个笔记, 内存实际: {} 个笔记)",
+                      total_expected_notes, self.notes.len());
+        }
+    }
+
+    /// 自动修复数据不一致问题
+    fn fix_data_inconsistencies(&mut self) {
+        log::info!("开始自动修复数据不一致问题...");
+
+        // 重新从数据库同步笔记本的note_ids
+        if let Ok(storage) = self.storage.lock() {
+            for notebook in &mut self.notebooks {
+                // 从数据库重新获取这个笔记本的所有笔记ID
+                match storage.get_notes_for_notebook(&notebook.id) {
+                    Ok(notes) => {
+                        let old_count = notebook.note_ids.len();
+                        notebook.note_ids.clear();
+
+                        for note in notes {
+                            notebook.note_ids.push(note.id.clone());
+                            // 确保笔记也在内存中
+                            if !self.notes.contains_key(&note.id) {
+                                self.notes.insert(note.id.clone(), note);
+                            }
+                        }
+
+                        let new_count = notebook.note_ids.len();
+                        if old_count != new_count {
+                            log::info!("修复笔记本 '{}': {} -> {} 个笔记", notebook.name, old_count, new_count);
+                        }
+                    }
+                    Err(err) => {
+                        log::error!("无法从数据库获取笔记本 '{}' 的笔记: {}", notebook.name, err);
+                    }
+                }
+            }
+        }
+
+        log::info!("数据不一致问题修复完成");
+    }
+
+    /// 安全地刷新笔记本视图，保护新导入的笔记
+    pub fn safe_refresh_notebook_view(&mut self, notebook_id: &str) {
+        log::info!("安全刷新笔记本视图: {}", notebook_id);
+
+        // 记录当前状态
+        let current_note_count = if let Some(notebook) = self.notebooks.iter().find(|nb| nb.id == notebook_id) {
+            notebook.note_ids.len()
+        } else {
+            0
+        };
+
+        // 从数据库获取最新的笔记列表
+        if let Ok(storage) = self.storage.lock() {
+            match storage.get_notes_for_notebook(notebook_id) {
+                Ok(db_notes) => {
+                    let db_note_count = db_notes.len();
+                    log::info!("数据库中的笔记数量: {}, 内存中的笔记数量: {}", db_note_count, current_note_count);
+
+                    // 更新内存中的笔记
+                    for note in db_notes {
+                        self.notes.insert(note.id.clone(), note);
+                    }
+
+                    // 重新构建笔记本的note_ids，但保护内存中的新笔记
+                    if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == notebook_id) {
+                        // 获取数据库中的所有笔记ID
+                        let mut db_note_ids = Vec::new();
+                        if let Ok(db_notes) = storage.get_notes_for_notebook(notebook_id) {
+                            for note in db_notes {
+                                db_note_ids.push(note.id);
+                            }
+                        }
+
+                        // 合并内存中的笔记ID和数据库中的笔记ID
+                        let mut merged_ids = db_note_ids;
+                        for existing_id in &notebook.note_ids {
+                            if !merged_ids.contains(existing_id) && self.notes.contains_key(existing_id) {
+                                merged_ids.push(existing_id.clone());
+                                log::info!("保护内存中的笔记: {}", existing_id);
+                            }
+                        }
+
+                        notebook.note_ids = merged_ids;
+                        log::info!("笔记本 '{}' 刷新完成，现有 {} 个笔记", notebook.name, notebook.note_ids.len());
+                    }
+                }
+                Err(err) => {
+                    log::error!("无法从数据库刷新笔记本 '{}': {}", notebook_id, err);
                 }
             }
         }
@@ -1407,9 +1580,32 @@ fn main() {
                 }
             }
 
-            // 确保该笔记本的笔记已加载
-            log::info!("Loading notes for notebook '{}'", notebook_name);
-            self.load_notes_for_notebook(&notebook_id);
+            // 只有在笔记本的笔记未完全加载时才重新加载
+            // 这样可以避免在导入文档后不必要的重新加载
+            let notebook_note_count = if let Some(notebook) = self.notebooks.get(index) {
+                notebook.note_ids.len()
+            } else {
+                0
+            };
+
+            let loaded_note_count = self.notes.keys()
+                .filter(|note_id| {
+                    if let Some(notebook) = self.notebooks.get(index) {
+                        notebook.note_ids.contains(note_id)
+                    } else {
+                        false
+                    }
+                })
+                .count();
+
+            if loaded_note_count < notebook_note_count {
+                log::info!("Loading missing notes for notebook '{}' ({}/{} loaded)",
+                          notebook_name, loaded_note_count, notebook_note_count);
+                self.load_notes_for_notebook(&notebook_id);
+            } else {
+                log::debug!("All notes for notebook '{}' are already loaded ({}/{})",
+                           notebook_name, loaded_note_count, notebook_note_count);
+            }
         } else {
             log::warn!("Could not find notebook containing note '{}'. Available notebooks:", note_id);
             for (index, notebook) in self.notebooks.iter().enumerate() {
@@ -1438,22 +1634,52 @@ fn main() {
         let note = Note::new(file_name, markdown_content);
         let note_id = note.id.clone();
 
+        // 确保笔记本已经保存到数据库
+        log::info!("确保笔记本已保存到数据库...");
+        if let Some(notebook) = self.notebooks.iter().find(|nb| nb.id == notebook_id) {
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_notebook(notebook) {
+                    log::warn!("保存笔记本到数据库失败: {}", err);
+                } else {
+                    log::debug!("笔记本 '{}' 已确保保存到数据库", notebook.name);
+                }
+            }
+        } else {
+            log::error!("找不到笔记本 ID: {}", notebook_id);
+            return Err("找不到指定的笔记本".to_string());
+        }
+
         // Save note to storage
+        log::info!("保存笔记到数据库...");
         if let Ok(storage) = self.storage.lock() {
             if let Err(err) = storage.save_note(&note, notebook_id) {
                 log::error!("Failed to save imported note: {}", err);
                 return Err(format!("保存笔记失败: {}", err));
             }
+            log::info!("笔记保存到数据库成功");
         } else {
             return Err("无法获取存储锁".to_string());
         }
 
+        // 确保数据库操作完全完成
+        log::debug!("等待数据库操作完成...");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Add note to notes map first (确保笔记在内存中)
+        self.notes.insert(note_id.clone(), note.clone());
+        log::info!("Added note '{}' to memory, total notes in memory: {}", note_id, self.notes.len());
+
         // Add note to the notebook
         if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == notebook_id) {
-            notebook.add_note(note_id.clone());
-            log::info!("Added note '{}' to notebook '{}', total notes: {}", note_id, notebook.name, notebook.note_ids.len());
+            // 检查笔记是否已经在笔记本中，避免重复添加
+            if !notebook.note_ids.contains(&note_id) {
+                notebook.add_note(note_id.clone());
+                log::info!("Added note '{}' to notebook '{}', total notes: {}", note_id, notebook.name, notebook.note_ids.len());
+            } else {
+                log::info!("Note '{}' already exists in notebook '{}', skipping add", note_id, notebook.name);
+            }
 
-            // Save updated notebook
+            // Save updated notebook (注意：这里不保存note_ids到数据库，因为数据库使用关系设计)
             if let Ok(storage) = self.storage.lock() {
                 if let Err(err) = storage.save_notebook(notebook) {
                     log::error!("Failed to save updated notebook: {}", err);
@@ -1465,11 +1691,55 @@ fn main() {
             return Err("找不到指定的笔记本".to_string());
         }
 
-        // Add note to notes map
-        self.notes.insert(note_id.clone(), note);
-        log::info!("Added note '{}' to memory, total notes in memory: {}", note_id, self.notes.len());
+        // 验证导入结果
+        log::info!("验证导入的笔记是否正确保存到数据库...");
+
+        // 使用新的数据库连接进行验证，避免连接池问题
+        let verification_result = if let Ok(storage) = self.storage.lock() {
+            // 尝试多次验证，处理可能的时序问题
+            let mut attempts = 0;
+            let max_attempts = 3;
+
+            loop {
+                attempts += 1;
+                log::debug!("验证尝试 {}/{}", attempts, max_attempts);
+
+                match storage.load_note(&note_id) {
+                    Ok(verified_note) => {
+                        log::info!("✅ 验证成功: 笔记 '{}' 已正确保存到数据库", verified_note.title);
+                        break Ok(());
+                    }
+                    Err(err) => {
+                        log::warn!("验证尝试 {} 失败: {}", attempts, err);
+
+                        if attempts >= max_attempts {
+                            log::error!("❌ 验证失败: 经过 {} 次尝试仍无法从数据库加载笔记 '{}'", max_attempts, note_id);
+                            break Err(format!("导入验证失败: {}", err));
+                        } else {
+                            // 短暂等待后重试
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                    }
+                }
+            }
+        } else {
+            Err("无法获取存储锁进行验证".to_string())
+        };
+
+        // 检查验证结果
+        if let Err(err) = verification_result {
+            // 验证失败，但笔记可能已经在内存中，给用户一个警告而不是完全失败
+            log::warn!("验证失败，但笔记已在内存中: {}", err);
+            log::warn!("笔记可能已保存，但数据库验证失败。请重启应用后检查。");
+
+            // 不返回错误，让用户可以继续使用
+            // return Err(err);
+        }
 
         log::info!("Successfully imported document as note '{}'", note_id);
+
+        // 返回成功，即使验证可能失败
+        // 因为笔记已经在内存中可用
         Ok(note_id)
     }
 

@@ -264,7 +264,8 @@ pub fn render_note_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
                     let note_id_clone = note_id.clone();
 
                     ui.horizontal(|ui| {
-                        if ui.selectable_label(is_selected, format!("📝 {}", title)).clicked() {
+                        let truncated_title = crate::truncate_note_title(&title);
+                        if ui.selectable_label(is_selected, format!("📝 {}", truncated_title)).clicked() {
                             state.select_note(&note_id);
                         }
 
@@ -336,7 +337,8 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
             let is_selected = current_note.as_ref().map_or(false, |id| id == &note_id);
 
             ui.horizontal(|ui| {
-                if ui.selectable_label(is_selected, format!("📝 {}", title)).clicked() {
+                let truncated_title = crate::truncate_note_title(&title);
+                if ui.selectable_label(is_selected, format!("📝 {}", truncated_title)).clicked() {
                     state.select_note(&note_id);
                 }
 

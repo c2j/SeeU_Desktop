@@ -231,15 +231,19 @@ impl DbStorageManager {
             };
 
             // Load note IDs for this notebook
-            let mut stmt = conn.prepare("SELECT id FROM notes WHERE notebook_id = ?")?;
+            let mut stmt = conn.prepare("SELECT id FROM notes WHERE notebook_id = ? ORDER BY updated_at DESC")?;
             let note_ids_iter = stmt.query_map(params![notebook.id], |row| {
                 let id: String = row.get(0)?;
                 Ok(id)
             })?;
 
+            let mut note_count = 0;
             for note_id in note_ids_iter {
                 notebook.note_ids.push(note_id?);
+                note_count += 1;
             }
+
+            log::debug!("Loaded notebook '{}' with {} notes", notebook.name, note_count);
 
             notebooks.push(notebook);
         }
@@ -249,15 +253,22 @@ impl DbStorageManager {
 
     /// Save a note
     pub fn save_note(&self, note: &Note, notebook_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("开始保存笔记: {} (标题: '{}') 到笔记本: {}", note.id, note.title, notebook_id);
+
         let mut conn = self.get_connection()?;
+        log::debug!("获取数据库连接成功");
 
         // Begin transaction
         let tx = conn.transaction()?;
+        log::debug!("开始数据库事务");
 
         // Save note
-        tx.execute(
-            "INSERT OR REPLACE INTO notes (id, notebook_id, title, content, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+        log::debug!("保存笔记主体数据...");
+        log::debug!("笔记内容长度: {} 字符", note.content.len());
+        log::debug!("笔记标题: '{}'", note.title);
+
+        let rows_affected = tx.execute(
+            "INSERT OR REPLACE INTO notes (id, notebook_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
             params![
                 note.id,
                 notebook_id,
@@ -266,33 +277,57 @@ impl DbStorageManager {
                 note.created_at.to_rfc3339(),
                 note.updated_at.to_rfc3339()
             ],
-        )?;
+        ).map_err(|e| {
+            log::error!("执行INSERT笔记语句失败: {}", e);
+            log::error!("笔记ID: {}", note.id);
+            log::error!("笔记本ID: {}", notebook_id);
+            log::error!("笔记标题: '{}'", note.title);
+            log::error!("笔记内容前100字符: '{}'", &note.content.chars().take(100).collect::<String>());
+            e
+        })?;
+        log::debug!("笔记主体数据保存完成，影响行数: {}", rows_affected);
 
         // Delete existing tag associations
+        log::debug!("删除现有标签关联...");
         tx.execute(
             "DELETE FROM note_tags WHERE note_id = ?",
             params![note.id],
-        )?;
+        ).map_err(|e| {
+            log::error!("执行DELETE标签关联语句失败: {}", e);
+            e
+        })?;
+        log::debug!("标签关联删除完成");
 
         // Add tag associations
+        log::debug!("添加 {} 个标签关联", note.tag_ids.len());
         for tag_id in &note.tag_ids {
             tx.execute(
                 "INSERT INTO note_tags (note_id, tag_id) VALUES (?, ?)",
                 params![note.id, tag_id],
-            )?;
+            ).map_err(|e| {
+                log::error!("执行INSERT标签关联语句失败: {}", e);
+                log::error!("笔记ID: {}, 标签ID: {}", note.id, tag_id);
+                e
+            })?;
         }
+        log::debug!("标签关联添加完成");
 
         // Delete existing attachments
+        log::debug!("删除现有附件...");
         tx.execute(
             "DELETE FROM attachments WHERE note_id = ?",
             params![note.id],
-        )?;
+        ).map_err(|e| {
+            log::error!("执行DELETE附件语句失败: {}", e);
+            e
+        })?;
+        log::debug!("附件删除完成");
 
         // Add attachments
+        log::debug!("添加 {} 个附件", note.attachments.len());
         for attachment in &note.attachments {
             tx.execute(
-                "INSERT INTO attachments (id, note_id, name, file_path, file_type, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO attachments (id, note_id, name, file_path, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 params![
                     attachment.id,
                     note.id,
@@ -301,19 +336,34 @@ impl DbStorageManager {
                     attachment.file_type,
                     attachment.created_at.to_rfc3339()
                 ],
-            )?;
+            ).map_err(|e| {
+                log::error!("执行INSERT附件语句失败: {}", e);
+                log::error!("附件ID: {}, 笔记ID: {}", attachment.id, note.id);
+                e
+            })?;
         }
+        log::debug!("附件添加完成");
 
         // Commit transaction
+        log::debug!("提交数据库事务...");
         tx.commit()?;
+
+        // 强制同步到磁盘，确保数据真正写入
+        log::debug!("强制同步数据到磁盘...");
+        conn.execute("PRAGMA wal_checkpoint(FULL)", [])?;
+
+        log::info!("✅ 笔记 '{}' 成功保存到数据库并同步到磁盘", note.id);
 
         Ok(())
     }
 
     /// Load a note
     pub fn load_note(&self, id: &str) -> Result<Note, Box<dyn std::error::Error>> {
+        log::debug!("开始加载笔记: {}", id);
         let conn = self.get_connection()?;
+        log::debug!("获取数据库连接成功");
 
+        log::debug!("执行查询笔记SQL: SELECT id, title, content, created_at, updated_at FROM notes WHERE id = '{}'", id);
         let note = conn.query_row(
             "SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ?",
             params![id],
@@ -360,8 +410,12 @@ impl DbStorageManager {
 
                 Ok(note)
             },
-        )?;
+        ).map_err(|e| {
+            log::error!("查询笔记 '{}' 失败: {}", id, e);
+            e
+        })?;
 
+        log::debug!("✅ 成功加载笔记: {} (标题: '{}')", note.id, note.title);
         Ok(note)
     }
 

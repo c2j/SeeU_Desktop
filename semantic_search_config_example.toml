@@ -1,0 +1,113 @@
+# 语义搜索配置示例
+# 将此文件复制到应用数据目录中的 semantic_search/config.toml
+
+# 是否启用语义搜索功能
+enabled = true
+
+# HelixDB数据库配置
+[helix_config]
+# 数据库路径（留空使用默认路径）
+database_path = ""
+# HelixDB服务端口
+port = 6969
+# 连接超时时间（秒）
+connection_timeout = 30
+# 查询超时时间（秒）
+query_timeout = 30
+
+# 向量化服务配置
+[embedding_config]
+# 向量化提供商: "openai" | "local" | "azure"
+provider = "openai"
+
+# OpenAI配置（当provider = "openai"时）
+api_key = "your-openai-api-key-here"
+model = "text-embedding-3-small"  # 或 "text-embedding-ada-002"
+api_base = "https://api.openai.com/v1"
+
+# 本地模型配置（当provider = "local"时）
+# api_key = ""  # 本地模型通常不需要API密钥
+# model = "text-embedding"
+# api_base = "http://localhost:11434/v1"  # Ollama默认地址
+
+# Azure OpenAI配置（当provider = "azure"时）
+# api_key = "your-azure-api-key"
+# model = "text-embedding-ada-002"
+# api_base = "https://your-resource.openai.azure.com"
+# api_version = "2023-05-15"
+
+# 批处理大小（一次处理多少个文档）
+batch_size = 10
+# 缓存大小（缓存多少个向量）
+cache_size = 1000
+
+# 搜索权重配置
+[search_weights]
+# 语义搜索权重（0.0-1.0）
+semantic_weight = 0.7
+# 关键词搜索权重（0.0-1.0）
+keyword_weight = 0.3
+
+# 注意：semantic_weight + keyword_weight 应该等于 1.0
+
+# ===== 配置说明 =====
+
+# 1. 向量化提供商选择：
+#    - openai: 高质量，需要API密钥，有使用费用
+#    - local: 免费，需要本地模型服务（如Ollama）
+#    - azure: 企业级，需要Azure订阅
+
+# 2. 模型选择建议：
+#    - text-embedding-3-small: 性价比高，适合大多数场景
+#    - text-embedding-3-large: 质量最高，成本较高
+#    - text-embedding-ada-002: 经典模型，稳定可靠
+
+# 3. 搜索权重调优：
+#    - 提高semantic_weight: 更注重语义相关性
+#    - 提高keyword_weight: 更注重精确匹配
+#    - 建议从 0.7/0.3 开始，根据使用体验调整
+
+# 4. 性能调优：
+#    - batch_size: 增大可提高吞吐量，但占用更多内存
+#    - cache_size: 增大可减少重复计算，但占用更多内存
+#    - connection_timeout: 网络不稳定时可适当增加
+
+# ===== 快速配置模板 =====
+
+# 模板1：OpenAI配置（推荐）
+# enabled = true
+# [helix_config]
+# port = 6969
+# [embedding_config]
+# provider = "openai"
+# api_key = "sk-..."
+# model = "text-embedding-3-small"
+# batch_size = 10
+# [search_weights]
+# semantic_weight = 0.7
+# keyword_weight = 0.3
+
+# 模板2：本地模型配置（免费）
+# enabled = true
+# [helix_config]
+# port = 6969
+# [embedding_config]
+# provider = "local"
+# api_base = "http://localhost:11434/v1"
+# model = "nomic-embed-text"  # 或其他本地模型
+# batch_size = 5
+# [search_weights]
+# semantic_weight = 0.6
+# keyword_weight = 0.4
+
+# 模板3：测试配置（最小化）
+# enabled = true
+# [helix_config]
+# port = 6969
+# [embedding_config]
+# provider = "local"
+# batch_size = 1
+# cache_size = 10
+# [search_weights]
+# semantic_weight = 0.5
+# keyword_weight = 0.5

@@ -91,6 +91,19 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 use chrono::Utc;
 
+/// 截断笔记标题，最多显示16个汉字，超过部分用...代替
+pub fn truncate_note_title(title: &str) -> String {
+    let max_chars = 16;
+    let chars: Vec<char> = title.chars().collect();
+
+    if chars.len() <= max_chars {
+        title.to_string()
+    } else {
+        let truncated: String = chars.iter().take(max_chars).collect();
+        format!("{}...", truncated)
+    }
+}
+
 /// iNote state
 pub struct INoteState {
     pub notebooks: Vec<Notebook>,
@@ -556,7 +569,8 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                 if let Some(note_id) = &state.current_note {
                     if let Some(note) = state.notes.get(note_id) {
                         ui.add_space(20.0);
-                        ui.heading(&note.title);
+                        let truncated_title = truncate_note_title(&note.title);
+                        ui.heading(&truncated_title);
                     }
                 }
             });

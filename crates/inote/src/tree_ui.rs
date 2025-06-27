@@ -115,8 +115,9 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
                             ui.horizontal(|ui| {
                                 ui.add_space(20.0); // 额外缩进
 
+                                let truncated_title = crate::truncate_note_title(&note_title);
                                 if ui.selectable_label(is_note_selected,
-                                                     format!("📝 {}", note_title)).clicked() {
+                                                     format!("📝 {}", truncated_title)).clicked() {
                                     state.select_notebook(notebook_idx);
                                     state.select_note(&note_id_clone);
                                 }
