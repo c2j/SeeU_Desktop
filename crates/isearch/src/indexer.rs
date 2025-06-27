@@ -449,9 +449,17 @@ impl Indexer {
             vec![self.path_field, self.filename_field, self.content_field],
         );
 
+        // Check if this is a potential filename pattern search
+        let is_filename_pattern = self.is_potential_filename_pattern(query);
+
         // Parse query
         let main_query = if !query.is_empty() {
-            query_parser.parse_query(query)?
+            if is_filename_pattern {
+                // For filename patterns, create a combined query that searches both filename and content
+                self.create_enhanced_filename_query(&query_parser, query)?
+            } else {
+                query_parser.parse_query(query)?
+            }
         } else {
             // If query is empty but we have filters, use a match all query
             use tantivy::query::AllQuery;
@@ -563,7 +571,79 @@ impl Indexer {
             results.push(result);
         }
 
+        // If this was a filename pattern search, sort results to prioritize filename matches
+        if self.is_potential_filename_pattern(query) {
+            results.sort_by(|a, b| {
+                let a_filename_match = self.filename_matches_pattern(&a.filename, query);
+                let b_filename_match = self.filename_matches_pattern(&b.filename, query);
+
+                match (a_filename_match, b_filename_match) {
+                    (true, false) => std::cmp::Ordering::Less,    // a has filename match, prioritize
+                    (false, true) => std::cmp::Ordering::Greater, // b has filename match, prioritize
+                    _ => b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal), // same priority, sort by score
+                }
+            });
+        }
+
         Ok(results)
+    }
+
+    /// Check if the query is potentially a filename pattern
+    fn is_potential_filename_pattern(&self, query: &str) -> bool {
+        let query = query.trim();
+
+        // Skip if it's an advanced query with operators
+        if query.contains(':') || query.contains('"') || query.contains('+') {
+            return false;
+        }
+
+        // Check if it's a simple term that could be part of a filename
+        // Filename patterns are typically:
+        // - Single words without spaces
+        // - May contain numbers, letters, dots, dashes, underscores
+        // - Relatively short (less than 50 characters)
+        if query.len() > 50 || query.contains(' ') {
+            return false;
+        }
+
+        // Check if it contains typical filename characters
+        let filename_chars = query.chars().all(|c| {
+            c.is_alphanumeric() || c == '.' || c == '-' || c == '_'
+        });
+
+        filename_chars
+    }
+
+    /// Create an enhanced query that prioritizes filename matches
+    fn create_enhanced_filename_query(
+        &self,
+        query_parser: &QueryParser,
+        query: &str
+    ) -> Result<Box<dyn Query>, Box<dyn std::error::Error>> {
+        use tantivy::query::{BooleanQuery, Occur, RegexQuery};
+
+        // Create a regex pattern for filename matching
+        // Convert the query to a case-insensitive regex that matches anywhere in the filename
+        let regex_pattern = format!("(?i).*{}.*", regex::escape(query));
+
+        // Create regex query for filename field
+        let filename_regex_query = RegexQuery::from_pattern(&regex_pattern, self.filename_field)?;
+
+        // Create regular text query for content
+        let content_query = query_parser.parse_query(query)?;
+
+        // Combine with OR logic, but filename matches will get higher scores due to sorting
+        let clauses = vec![
+            (Occur::Should, Box::new(filename_regex_query) as Box<dyn Query>),
+            (Occur::Should, content_query),
+        ];
+
+        Ok(Box::new(BooleanQuery::new(clauses)))
+    }
+
+    /// Check if a filename matches the pattern
+    fn filename_matches_pattern(&self, filename: &str, pattern: &str) -> bool {
+        filename.to_lowercase().contains(&pattern.to_lowercase())
     }
 
     /// Create content preview with highlighted matches

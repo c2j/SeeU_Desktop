@@ -22,3 +22,4 @@ walkdir = "2.4.0"
 # 使用更轻量级的文件对话框实现，避免 async-recursion 依赖
 open = "5.0.0"
 ignore = "0.4.20"
+regex = "1.10.0"

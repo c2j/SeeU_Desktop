@@ -128,6 +128,9 @@ pub struct AIAssistState {
     /// 待创建批次的响应
     pub pending_batch_response: Option<crate::api::ChatResponse>,
 
+    // API Key 掩码显示控制
+    pub show_api_key_masked: bool,
+
     // 存储最近的搜索查询和结果，用于 @search 引用
     pub last_search_query: Option<String>,
     pub last_search_results: Option<String>,
@@ -190,11 +193,36 @@ impl Default for AIAssistState {
             pending_batch_response: None,
             last_search_query: None,
             last_search_results: None,
+            show_api_key_masked: true, // 默认启用掩码显示
         }
     }
 }
 
 impl AIAssistState {
+    /// 获取用于显示的API Key（可能是掩码版本）
+    pub fn get_display_api_key(&self) -> String {
+        if self.show_api_key_masked && !self.ai_settings.api_key.is_empty() {
+            self.mask_api_key(&self.ai_settings.api_key)
+        } else {
+            self.ai_settings.api_key.clone()
+        }
+    }
+
+    /// 生成掩码版本的API Key
+    fn mask_api_key(&self, api_key: &str) -> String {
+        if api_key.is_empty() {
+            return String::new();
+        }
+
+        let len = api_key.len();
+        if len <= 8 {
+            // 如果API Key太短，只显示前2个字符
+            format!("{}****", &api_key[..2.min(len)])
+        } else {
+            // 显示前4个和后4个字符，中间用星号替代
+            format!("{}****{}", &api_key[..4], &api_key[len-4..])
+        }
+    }
 
     /// Send a message to the AI assistant
     pub fn send_message(&mut self) -> Option<SlashCommand> {

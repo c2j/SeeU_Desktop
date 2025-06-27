@@ -1026,8 +1026,27 @@ fn render_ai_assistant_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
                 ui.horizontal(|ui| {
                     ui.label("API Key:");
-                    if ui.text_edit_singleline(&mut ai_state.ai_settings.api_key).changed() {
+
+                    // 获取用于显示的API Key
+                    let mut display_key = ai_state.get_display_api_key();
+                    let response = ui.text_edit_singleline(&mut display_key);
+
+                    // 如果用户修改了显示的内容，更新实际的API Key
+                    if response.changed() {
+                        // 如果当前是掩码模式且用户修改了内容，切换到非掩码模式
+                        if ai_state.show_api_key_masked {
+                            ai_state.show_api_key_masked = false;
+                        }
+                        ai_state.ai_settings.api_key = display_key;
                         settings_changed = true;
+                    }
+
+                    // 添加显示/隐藏按钮
+                    let button_text = if ai_state.show_api_key_masked { "👁" } else { "🙈" };
+                    let button_tooltip = if ai_state.show_api_key_masked { "显示完整API Key" } else { "隐藏API Key" };
+
+                    if ui.button(button_text).on_hover_text(button_tooltip).clicked() {
+                        ai_state.show_api_key_masked = !ai_state.show_api_key_masked;
                     }
                 });
 

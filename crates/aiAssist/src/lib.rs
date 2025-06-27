@@ -87,7 +87,8 @@ pub fn save_settings(state: &AIAssistState) -> Result<(), Box<dyn std::error::Er
         "model": state.ai_settings.model,
         "temperature": state.ai_settings.temperature,
         "max_tokens": state.ai_settings.max_tokens,
-        "streaming": state.ai_settings.streaming
+        "streaming": state.ai_settings.streaming,
+        "show_api_key_masked": state.show_api_key_masked
     });
 
     let json = serde_json::to_string_pretty(&settings)?;
@@ -147,6 +148,9 @@ pub fn load_settings(state: &mut AIAssistState) -> Result<(), Box<dyn std::error
             }
             if let Some(value) = settings.get("streaming").and_then(|v| v.as_bool()) {
                 state.ai_settings.streaming = value;
+            }
+            if let Some(value) = settings.get("show_api_key_masked").and_then(|v| v.as_bool()) {
+                state.show_api_key_masked = value;
             }
 
             log::info!("AI assistant settings loaded successfully");

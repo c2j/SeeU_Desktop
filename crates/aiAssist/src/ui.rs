@@ -684,7 +684,27 @@ fn render_ai_settings(ctx: &egui::Context, state: &mut AIAssistState) {
 
             ui.horizontal(|ui| {
                 ui.label("API Key:");
-                ui.text_edit_singleline(&mut state.ai_settings.api_key);
+
+                // 获取用于显示的API Key
+                let mut display_key = state.get_display_api_key();
+                let response = ui.text_edit_singleline(&mut display_key);
+
+                // 如果用户修改了显示的内容，更新实际的API Key
+                if response.changed() {
+                    // 如果当前是掩码模式且用户修改了内容，切换到非掩码模式
+                    if state.show_api_key_masked {
+                        state.show_api_key_masked = false;
+                    }
+                    state.ai_settings.api_key = display_key;
+                }
+
+                // 添加显示/隐藏按钮
+                let button_text = if state.show_api_key_masked { "👁" } else { "🙈" };
+                let button_tooltip = if state.show_api_key_masked { "显示完整API Key" } else { "隐藏API Key" };
+
+                if ui.button(button_text).on_hover_text(button_tooltip).clicked() {
+                    state.show_api_key_masked = !state.show_api_key_masked;
+                }
             });
             ui.label("提示: 本地服务可以留空");
 
