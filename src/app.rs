@@ -438,11 +438,16 @@ impl SeeUApp {
         let progress = (elapsed.as_secs_f32() / target_duration.as_secs_f32()).min(1.0);
         self.startup_progress = progress;
 
-        // 更新进度消息
+        // 更新进度消息并执行相应的初始化任务
         if progress < 0.3 {
             self.startup_message = "正在初始化笔记模块...".to_string();
         } else if progress < 0.6 {
-            self.startup_message = "正在初始化搜索索引...".to_string();
+            self.startup_message = "正在预加载字体缓存...".to_string();
+            // 在这个阶段预加载Mermaid字体缓存
+            static FONT_CACHE_PRELOADED: std::sync::Once = std::sync::Once::new();
+            FONT_CACHE_PRELOADED.call_once(|| {
+                inote::mermaid::preload_font_cache();
+            });
         } else if progress < 0.9 {
             self.startup_message = "正在启动文件监控...".to_string();
         } else {

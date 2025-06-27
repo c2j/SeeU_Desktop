@@ -351,7 +351,7 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
 }
 
 /// Render the note editor
-pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
+pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_family: Option<&str>) {
     if let Some(note_id) = state.current_note.clone() {
         // 使用垂直布局，让内容区域自动填充剩余空间
         ui.vertical(|ui| {
@@ -538,7 +538,7 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState) {
                             .min_scrolled_height(available_height)  // 设置最小高度，确保填充可用空间
                             .show(ui, |ui| {
                                 ui.add_space(10.0);
-                                crate::markdown::render_markdown_with_highlight(ui, &state.note_content, &search_terms);
+                                crate::markdown::render_markdown_with_highlight(ui, &state.note_content, &search_terms, font_family);
                                 ui.add_space(10.0);
                             });
                     } else {

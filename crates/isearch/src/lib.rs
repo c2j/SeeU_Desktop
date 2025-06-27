@@ -77,6 +77,11 @@ pub struct ISearchState {
     // File type filter UI
     pub show_file_type_filter: bool,
     pub selected_file_types: Vec<String>,
+
+    // Document import functionality
+    pub show_document_import_dialog: bool,
+    pub import_file_path: String,
+    pub import_file_name: String,
 }
 
 /// Search result
@@ -291,6 +296,9 @@ impl Default for ISearchState {
             search_result_receiver: Some(search_result_receiver),
             show_file_type_filter: false,
             selected_file_types: Vec::new(),
+            show_document_import_dialog: false,
+            import_file_path: String::new(),
+            import_file_name: String::new(),
         }
     }
 }
@@ -1303,6 +1311,22 @@ impl ISearchState {
                 // But we could trigger a stats recalculation here if needed
             }
         }
+    }
+
+    /// Show document import dialog for a specific file
+    pub fn show_document_import_dialog(&mut self, file_path: String, file_name: String) {
+        log::info!("Showing document import dialog for file: {} ({})", file_name, file_path);
+        self.import_file_path = file_path;
+        self.import_file_name = file_name;
+        self.show_document_import_dialog = true;
+        log::info!("Document import dialog state set to: {}", self.show_document_import_dialog);
+    }
+
+    /// Reset document import dialog
+    pub fn reset_document_import_dialog(&mut self) {
+        self.show_document_import_dialog = false;
+        self.import_file_path.clear();
+        self.import_file_name.clear();
     }
 }
 

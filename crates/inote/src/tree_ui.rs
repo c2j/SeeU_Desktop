@@ -13,6 +13,10 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
             if ui.button("+ 新建笔记本").clicked() {
                 state.show_create_notebook = true;
             }
+
+            if ui.button("📥 导入文档").on_hover_text("导入文档到笔记").clicked() {
+                state.show_document_import_dialog = true;
+            }
         });
     });
 

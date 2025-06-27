@@ -10,6 +10,70 @@ pub mod db_ui;
 pub mod db_ui_import;
 pub mod tree_ui;
 pub mod markdown;
+pub mod mermaid;
+
+#[cfg(test)]
+mod tests {
+    use super::mermaid::MermaidDiagramType;
+
+    #[test]
+    fn test_class_diagram_detection() {
+        let code = "classDiagram\n    class Animal {\n        +String name\n    }";
+        let diagram_type = MermaidDiagramType::from_code(code);
+        assert_eq!(diagram_type, MermaidDiagramType::ClassDiagram);
+    }
+
+    #[test]
+    fn test_state_diagram_detection() {
+        let code = "stateDiagram-v2\n    [*] --> Idle";
+        let diagram_type = MermaidDiagramType::from_code(code);
+        assert_eq!(diagram_type, MermaidDiagramType::StateDiagram);
+    }
+
+    #[test]
+    fn test_git_graph_detection() {
+        let code = "gitGraph\n    commit id: \"Initial\"";
+        let diagram_type = MermaidDiagramType::from_code(code);
+        assert_eq!(diagram_type, MermaidDiagramType::GitGraph);
+    }
+
+    #[test]
+    fn test_user_journey_detection() {
+        let code = "journey\n    title My working day";
+        let diagram_type = MermaidDiagramType::from_code(code);
+        assert_eq!(diagram_type, MermaidDiagramType::UserJourney);
+    }
+
+    #[test]
+    fn test_entity_relationship_detection() {
+        let code = "erDiagram\n    CUSTOMER {\n        string name\n    }";
+        let diagram_type = MermaidDiagramType::from_code(code);
+        assert_eq!(diagram_type, MermaidDiagramType::EntityRelationship);
+    }
+
+    #[test]
+    fn test_flowchart_detection() {
+        let code = "flowchart TD\n    A --> B";
+        let diagram_type = MermaidDiagramType::from_code(code);
+        assert_eq!(diagram_type, MermaidDiagramType::Flowchart);
+    }
+
+    #[test]
+    fn test_sequence_detection() {
+        let code = "sequenceDiagram\n    participant A";
+        let diagram_type = MermaidDiagramType::from_code(code);
+        assert_eq!(diagram_type, MermaidDiagramType::Sequence);
+    }
+
+    #[test]
+    fn test_unknown_detection() {
+        let code = "unknownDiagram\n    some content";
+        let diagram_type = MermaidDiagramType::from_code(code);
+        assert_eq!(diagram_type, MermaidDiagramType::Unknown);
+    }
+}
+pub mod document_converter;
+pub mod notebook_selector;
 pub mod slide;
 pub mod siyuan_import;
 pub mod mcp_server;
@@ -454,11 +518,11 @@ pub fn render_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut INoteState,
 
 /// Render the iNote module with SQLite storage
 pub fn render_db_inote(ui: &mut egui::Ui, state: &mut DbINoteState) {
-    render_db_inote_with_sidebar_info(ui, state, false, None);
+    render_db_inote_with_sidebar_info(ui, state, false, None, None);
 }
 
 /// Render the iNote module with SQLite storage and sidebar information
-pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteState, right_sidebar_open: bool, right_sidebar_width: Option<f32>) {
+pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteState, right_sidebar_open: bool, right_sidebar_width: Option<f32>, font_family: Option<&str>) {
     // Ensure data is loaded when needed (lazy loading)
     state.ensure_data_loaded();
 
@@ -500,7 +564,7 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
             ui.separator();
 
             // 在全屏模式下显示笔记编辑器
-            crate::db_ui::render_note_editor(ui, state);
+            crate::db_ui::render_note_editor(ui, state, font_family);
         });
     } else {
         // 正常模式
@@ -595,7 +659,7 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                     bottom: 8.0,
                 }))
                 .show_inside(ui, |ui| {
-                    render_note_content_area(ui, state);
+                    render_note_content_area(ui, state, font_family);
                 });
         });
     }
@@ -605,12 +669,12 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
 }
 
 /// 渲染笔记内容区域（提取的公共逻辑）
-fn render_note_content_area(ui: &mut egui::Ui, state: &mut DbINoteState) {
+fn render_note_content_area(ui: &mut egui::Ui, state: &mut DbINoteState, font_family: Option<&str>) {
     // 检查是否正在搜索
     if state.is_searching {
         // 如果选中了搜索结果中的笔记，显示笔记编辑器
         if let Some(_note_id) = &state.current_note {
-            crate::db_ui::render_note_editor(ui, state);
+            crate::db_ui::render_note_editor(ui, state, font_family);
         } else {
             // 如果笔记树隐藏，在中央面板显示搜索结果
             if !state.show_note_tree {
@@ -624,7 +688,7 @@ fn render_note_content_area(ui: &mut egui::Ui, state: &mut DbINoteState) {
         }
     } else if let Some(_note_id) = &state.current_note {
         // 直接显示笔记编辑器
-        crate::db_ui::render_note_editor(ui, state);
+        crate::db_ui::render_note_editor(ui, state, font_family);
     } else if state.current_notebook.is_some() {
         // 显示笔记本信息
         if let Some(notebook_idx) = state.current_notebook {
@@ -928,6 +992,128 @@ fn process_dialogs(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 state.cancel_deletion();
             }
         }
+    }
+
+    // 显示文档导入对话框
+    if state.show_document_import_dialog {
+        render_document_import_dialog(ui, state);
+    }
+
+    // 显示笔记本选择对话框（用于文档导入）
+    if state.notebook_selector.show_dialog {
+        let notebooks = state.notebooks.clone();
+        if let Some(import_action) = crate::notebook_selector::render_notebook_selector_dialog(
+            ui.ctx(),
+            &mut state.notebook_selector,
+            &notebooks,
+        ) {
+            let (selected_notebook_id, should_edit) = match import_action {
+                crate::notebook_selector::ImportAction::Import(notebook_id) => (notebook_id, false),
+                crate::notebook_selector::ImportAction::ImportAndEdit(notebook_id) => (notebook_id, true),
+            };
+
+            // 导入文档
+            let file_path = state.notebook_selector.file_path.clone();
+            match state.import_document_as_note(&file_path, &selected_notebook_id) {
+                Ok(note_id) => {
+                    log::info!("Successfully imported document as note: {}", note_id);
+
+                    // 如果选择了"导入并编辑"，选择导入的笔记
+                    if should_edit {
+                        state.select_note(&note_id);
+                        log::info!("Selected imported note for editing: {}", note_id);
+                    }
+
+                    // 重置对话框状态
+                    state.notebook_selector.import_success = true;
+                    state.notebook_selector.import_in_progress = false;
+                },
+                Err(error) => {
+                    log::error!("Failed to import document: {}", error);
+                    state.notebook_selector.import_error = Some(error);
+                    state.notebook_selector.import_in_progress = false;
+                }
+            }
+        }
+    }
+}
+
+/// 渲染文档导入对话框
+fn render_document_import_dialog(ui: &mut egui::Ui, state: &mut DbINoteState) {
+    let mut file_selected = false;
+    let mut dialog_closed = false;
+    let mut selected_file_path = String::new();
+
+    egui::Window::new("导入文档")
+        .collapsible(false)
+        .resizable(false)
+        .fixed_size([400.0, 300.0])
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .open(&mut state.show_document_import_dialog)
+        .show(ui.ctx(), |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(10.0);
+                ui.heading("选择要导入的文档");
+                ui.add_space(10.0);
+
+                ui.label("支持的文档格式：");
+                ui.horizontal(|ui| {
+                    ui.label("📄 PDF");
+                    ui.label("📝 DOCX");
+                    ui.label("📊 PPTX");
+                    ui.label("📄 TXT");
+                    ui.label("📝 MD");
+                });
+
+                ui.add_space(20.0);
+
+                // 文件选择按钮
+                if ui.button("📁 选择文件").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("支持的文档", &["pdf", "docx", "pptx", "txt", "md"])
+                        .add_filter("PDF文件", &["pdf"])
+                        .add_filter("Word文档", &["docx"])
+                        .add_filter("PowerPoint文档", &["pptx"])
+                        .add_filter("文本文件", &["txt"])
+                        .add_filter("Markdown文件", &["md"])
+                        .pick_file()
+                    {
+                        selected_file_path = path.to_string_lossy().to_string();
+                        file_selected = true;
+                    }
+                }
+
+                ui.add_space(20.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("取消").clicked() {
+                            dialog_closed = true;
+                        }
+                    });
+                });
+            });
+        });
+
+    if file_selected {
+        // 关闭当前对话框
+        state.show_document_import_dialog = false;
+
+        // 获取文件名
+        let file_name = std::path::Path::new(&selected_file_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("未知文件")
+            .to_string();
+
+        // 显示笔记本选择对话框
+        state.notebook_selector.show_for_file(selected_file_path, file_name);
+    }
+
+    if dialog_closed {
+        state.show_document_import_dialog = false;
     }
 }
 

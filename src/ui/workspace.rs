@@ -47,14 +47,21 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                         Module::Files => render_file_manager(ui),
                         Module::DataAnalysis => render_data_analysis(ui),
                         Module::Note => {
-                            // 传递右侧边栏状态和宽度给笔记模块
-                            inote::render_db_inote_with_sidebar_info(ui, &mut app.inote_state, app.show_right_sidebar, right_sidebar_width);
+                            // 传递右侧边栏状态、宽度和字体设置给笔记模块
+                            let font_family = Some(app.app_settings.font_family.as_str());
+                            inote::render_db_inote_with_sidebar_info(ui, &mut app.inote_state, app.show_right_sidebar, right_sidebar_width, font_family);
 
                             // 渲染思源笔记导入对话框
                             inote::db_ui_import::render_siyuan_import_dialog(ui, &mut app.inote_state);
                         },
                         Module::Search => {
                             isearch::ui::render_isearch_with_sidebar_info(ui, &mut app.isearch_state, app.show_right_sidebar, right_sidebar_width);
+
+                            // 渲染文档导入对话框
+                            if app.isearch_state.show_document_import_dialog {
+                                log::info!("Rendering document import dialog");
+                                render_document_import_dialog(ui, app);
+                            }
                         },
                         Module::ITools => {
                             itools::render_itools(ui, &mut app.itools_state);
@@ -68,4 +75,65 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                     }
                 });
         });
+}
+
+/// Render document import dialog
+fn render_document_import_dialog(ui: &mut egui::Ui, app: &mut crate::app::SeeUApp) {
+    let ctx = ui.ctx();
+
+    // Clone necessary data to avoid borrowing issues
+    let file_path = app.isearch_state.import_file_path.clone();
+    let file_name = app.isearch_state.import_file_name.clone();
+    let notebooks = app.inote_state.notebooks.clone();
+
+    // Initialize the notebook selector dialog if it's not already shown
+    if !app.inote_state.notebook_selector.show_dialog {
+        app.inote_state.notebook_selector.show_for_file(file_path.clone(), file_name);
+    }
+
+    // Show notebook selector dialog and check if an action was selected
+    if let Some(import_action) = inote::notebook_selector::render_notebook_selector_dialog(
+        ctx,
+        &mut app.inote_state.notebook_selector,
+        &notebooks,
+    ) {
+        let (selected_notebook_id, should_edit) = match import_action {
+            inote::notebook_selector::ImportAction::Import(notebook_id) => (notebook_id, false),
+            inote::notebook_selector::ImportAction::ImportAndEdit(notebook_id) => (notebook_id, true),
+        };
+
+        // Import the document
+        match app.inote_state.import_document_as_note(&file_path, &selected_notebook_id) {
+            Ok(note_id) => {
+                log::info!("Successfully imported document as note: {}", note_id);
+
+                // If "Import and Edit" was selected, switch to note editing
+                if should_edit {
+                    // Switch to note module
+                    app.active_module = crate::app::Module::Note;
+
+                    // Select the imported note for editing
+                    app.inote_state.select_note(&note_id);
+                    log::info!("Switched to editing imported note: {}", note_id);
+                }
+
+                // Reset the isearch dialog state
+                app.isearch_state.reset_document_import_dialog();
+
+                // Mark import as successful
+                app.inote_state.notebook_selector.import_success = true;
+                app.inote_state.notebook_selector.import_in_progress = false;
+            },
+            Err(error) => {
+                log::error!("Failed to import document: {}", error);
+                app.inote_state.notebook_selector.import_error = Some(error);
+                app.inote_state.notebook_selector.import_in_progress = false;
+            }
+        }
+    }
+
+    // If the notebook selector dialog was closed, also close the isearch dialog
+    if !app.inote_state.notebook_selector.show_dialog {
+        app.isearch_state.reset_document_import_dialog();
+    }
 }

@@ -2,6 +2,13 @@ use eframe::egui;
 use crate::{ISearchState, SortBy, ViewMode};
 use crate::utils;
 
+/// Check if a file format is supported for document import
+fn is_supported_document_format(file_type: &str) -> bool {
+    let supported = matches!(file_type.to_lowercase().as_str(), "docx" | "pptx" | "pdf" | "txt" | "md");
+    log::debug!("Checking file type '{}': supported = {}", file_type, supported);
+    supported
+}
+
 /// Render the iSearch module
 pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
     render_isearch_with_sidebar_info(ui, state, false, None);
@@ -803,6 +810,14 @@ fn render_detailed_view(ui: &mut egui::Ui, state: &mut ISearchState) {
                             state.open_folder(&path);
                         }
 
+                        // Import to note button (for supported document formats)
+                        if is_supported_document_format(&result.file_type) {
+                            if ui.button("📥 导入到笔记").clicked() {
+                                log::info!("Import button clicked for file: {} (type: {})", result.filename, result.file_type);
+                                state.show_document_import_dialog(result.path.clone(), result.filename.clone());
+                            }
+                        }
+
                         // Add space to push the menu button to the right
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             // Context menu button - use a more reliable approach
@@ -1091,6 +1106,14 @@ fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState, available_width
                             if ui.small_button("📁").on_hover_text("打开文件夹").clicked() {
                                 let path = result.path.clone();
                                 state.open_folder(&path);
+                            }
+
+                            // Import to note button (for supported document formats)
+                            if is_supported_document_format(&result.file_type) {
+                                if ui.small_button("📥").on_hover_text("导入到笔记").clicked() {
+                                    log::info!("Import button clicked for file: {} (type: {})", result.filename, result.file_type);
+                                    state.show_document_import_dialog(result.path.clone(), result.filename.clone());
+                                }
                             }
 
                             // Context menu

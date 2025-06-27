@@ -33,11 +33,11 @@ pub fn markdown_to_html(markdown: &str) -> String {
 
 /// Render markdown text directly to egui
 pub fn render_markdown(ui: &mut Ui, markdown: &str) {
-    render_markdown_with_highlight(ui, markdown, &[]);
+    render_markdown_with_highlight(ui, markdown, &[], None);
 }
 
 /// Render markdown text directly to egui with search term highlighting
-pub fn render_markdown_with_highlight(ui: &mut Ui, markdown: &str, search_terms: &[String]) {
+pub fn render_markdown_with_highlight(ui: &mut Ui, markdown: &str, search_terms: &[String], font_family: Option<&str>) {
     // Set up options and parser
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -48,7 +48,7 @@ pub fn render_markdown_with_highlight(ui: &mut Ui, markdown: &str, search_terms:
     let parser = Parser::new_ext(markdown, options);
 
     // Process markdown events and render them
-    let mut renderer = MarkdownRenderer::new(ui, search_terms);
+    let mut renderer = MarkdownRenderer::new(ui, search_terms, font_family);
     renderer.render(parser);
 }
 
@@ -127,10 +127,13 @@ struct MarkdownRenderer<'a> {
     in_code_block: bool,
     code_block_content: String,
     code_block_language: String,
+    mermaid_renderer: crate::mermaid::MermaidRenderer,
+    svg_test_renderer: crate::mermaid::SvgTestRenderer,
+    font_family: Option<String>,
 }
 
 impl<'a> MarkdownRenderer<'a> {
-    fn new(ui: &'a mut Ui, search_terms: &[String]) -> Self {
+    fn new(ui: &'a mut Ui, search_terms: &[String], font_family: Option<&str>) -> Self {
         Self {
             ui,
             current_text: String::new(),
@@ -151,6 +154,9 @@ impl<'a> MarkdownRenderer<'a> {
             in_code_block: false,
             code_block_content: String::new(),
             code_block_language: String::new(),
+            mermaid_renderer: crate::mermaid::MermaidRenderer::new(),
+            svg_test_renderer: crate::mermaid::SvgTestRenderer::new(),
+            font_family: font_family.map(|s| s.to_string()),
         }
     }
 
@@ -760,6 +766,21 @@ impl<'a> MarkdownRenderer<'a> {
             return;
         }
 
+        let code_content = self.code_block_content.clone();
+        let code_language = self.code_block_language.clone();
+
+        // Check if this is a Mermaid diagram
+        if code_language.to_lowercase() == "mermaid" {
+            self.mermaid_renderer.render_diagram(self.ui, &code_content, self.font_family.as_deref());
+            return;
+        }
+
+        // Check if this is an SVG test
+        if code_language.to_lowercase() == "svg-test" || code_language.to_lowercase() == "svgtest" {
+            self.svg_test_renderer.render_test_svg(self.ui, self.font_family.as_deref());
+            return;
+        }
+
         // Add some spacing before the code block
         self.ui.add_space(8.0);
 
@@ -769,9 +790,6 @@ impl<'a> MarkdownRenderer<'a> {
             .stroke(egui::Stroke::new(1.0, Color32::from_rgb(80, 80, 80))) // Border
             .rounding(egui::Rounding::same(6.0)) // Rounded corners
             .inner_margin(egui::Margin::same(12.0)); // Padding
-
-        let code_content = self.code_block_content.clone();
-        let code_language = self.code_block_language.clone();
 
         frame.show(self.ui, |ui| {
             // Add language label if available

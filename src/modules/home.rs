@@ -202,13 +202,13 @@ fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 }
             });
 
-            // 最近编辑的笔记
+            // 最近打开的笔记本（TOP3）
             if !app.inote_state.notebooks.is_empty() {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("最近编辑").size(12.0).weak());
+                ui.label(egui::RichText::new("最近笔记本").size(12.0).weak());
                 ui.add_space(4.0);
 
-                // 显示最多3个最近的笔记（简化版本，显示笔记本信息）
+                // 显示最多3个最近的笔记本
                 let notebooks_info: Vec<_> = app.inote_state.notebooks.iter()
                     .take(3)
                     .map(|nb| (nb.id.clone(), nb.name.clone(), nb.note_ids.len()))
@@ -224,6 +224,32 @@ fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
                             }
                         }
                         ui.label(egui::RichText::new(format!("({} 篇笔记)", note_count)).size(10.0).weak());
+                    });
+                }
+            }
+
+            // 最近打开的笔记（TOP5）
+            let recent_notes: Vec<_> = app.inote_state.get_recent_notes(5)
+                .into_iter()
+                .map(|note| (note.note_id.clone(), note.note_title.clone(), note.notebook_name.clone()))
+                .collect();
+
+            if !recent_notes.is_empty() {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("最近笔记").size(12.0).weak());
+                ui.add_space(4.0);
+
+                for (note_id, note_title, notebook_name) in recent_notes {
+                    ui.horizontal(|ui| {
+                        // 笔记标题按钮
+                        if ui.small_button(&note_title).clicked() {
+                            app.active_module = Module::Note;
+                            // 直接选择并编辑笔记
+                            app.inote_state.select_note(&note_id);
+                        }
+
+                        // 显示笔记本名称
+                        ui.label(egui::RichText::new(format!("({})", notebook_name)).size(10.0).weak());
                     });
                 }
             }

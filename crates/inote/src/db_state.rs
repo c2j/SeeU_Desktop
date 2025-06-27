@@ -1,7 +1,7 @@
 use eframe::egui;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use log;
 
 use crate::notebook::Notebook;
@@ -12,6 +12,8 @@ use crate::clipboard::ClipboardManager;
 use crate::migration::DataMigration;
 use crate::db_ui_import::SiyuanImportState;
 use crate::slide::{SlidePlayState, SlideParser, SlideStyleManager};
+use crate::document_converter::{DocumentConverter, ConversionError};
+use crate::notebook_selector::NotebookSelectorState;
 
 /// 删除确认类型
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +38,15 @@ pub enum SaveStatus {
     Saved,      // Content is saved
     Saving,     // Currently saving
     Modified,   // Content is modified but not yet saved
+}
+
+/// 最近访问的笔记记录
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecentNoteAccess {
+    pub note_id: String,
+    pub note_title: String,
+    pub notebook_name: String,
+    pub accessed_at: DateTime<Utc>,
 }
 
 // SaveStatus is already exported as part of the module
@@ -86,6 +97,14 @@ pub struct DbINoteState {
 
     // UI 布局设置
     pub show_note_tree: bool,                      // 是否显示笔记树
+
+    // 最近访问的笔记
+    pub recent_notes: VecDeque<RecentNoteAccess>,  // 最近访问的笔记列表，最多保存20个
+
+    // 文档导入功能
+    pub document_converter: DocumentConverter,     // 文档转换器
+    pub notebook_selector: NotebookSelectorState,  // 笔记本选择对话框状态
+    pub show_document_import_dialog: bool,         // 显示文档导入对话框
 }
 
 impl Default for DbINoteState {
@@ -137,6 +156,14 @@ impl Default for DbINoteState {
 
             // UI 布局设置默认值
             show_note_tree: true,                       // 默认显示笔记树
+
+            // 最近访问笔记初始化
+            recent_notes: VecDeque::new(),
+
+            // 文档导入功能初始化
+            document_converter: DocumentConverter::new(),
+            notebook_selector: NotebookSelectorState::default(),
+            show_document_import_dialog: false,
         }
     }
 }
@@ -199,6 +226,7 @@ impl DbINoteState {
         // Load data from storage
         self.load_notebooks();
         self.load_tags();
+        self.load_recent_notes();
         // Don't load all notes - use lazy loading instead
 
         // Create default data if database is empty
@@ -330,22 +358,44 @@ fn main() {
 
     /// Load notes for a notebook (public method for external use)
     pub fn load_notes_for_notebook(&mut self, notebook_id: &str) {
-        // Check if notes for this notebook are already loaded
-        let notebook_notes_loaded = self.notes.values()
-            .any(|note| self.notebooks.iter().any(|nb| nb.id == notebook_id &&
-                 nb.note_ids.contains(&note.id)));
+        // 找到对应的笔记本
+        let notebook_note_ids = if let Some(notebook) = self.notebooks.iter().find(|nb| nb.id == notebook_id) {
+            notebook.note_ids.clone()
+        } else {
+            log::warn!("Notebook {} not found", notebook_id);
+            return;
+        };
 
-        if notebook_notes_loaded {
-            return; // Already loaded
+        // 检查是否所有笔记都已加载
+        let all_notes_loaded = notebook_note_ids.iter()
+            .all(|note_id| self.notes.contains_key(note_id));
+
+        if all_notes_loaded {
+            log::debug!("All notes for notebook {} are already loaded", notebook_id);
+            return; // 所有笔记都已加载
         }
 
+        // 加载缺失的笔记
         if let Ok(storage) = self.storage.lock() {
             match storage.get_notes_for_notebook(notebook_id) {
                 Ok(notes) => {
-                    // Lazy loading notes for notebook
+                    let mut loaded_count = 0;
+                    let mut updated_count = 0;
+
                     for note in notes {
-                        self.notes.insert(note.id.clone(), note);
+                        if self.notes.contains_key(&note.id) {
+                            // 笔记已存在，更新它（可能有新的内容）
+                            self.notes.insert(note.id.clone(), note);
+                            updated_count += 1;
+                        } else {
+                            // 新笔记，添加到内存
+                            self.notes.insert(note.id.clone(), note);
+                            loaded_count += 1;
+                        }
                     }
+
+                    log::info!("Loaded {} new notes and updated {} existing notes for notebook '{}'",
+                              loaded_count, updated_count, notebook_id);
                 }
                 Err(err) => {
                     log::error!("Failed to load notes for notebook {}: {}", notebook_id, err);
@@ -688,6 +738,7 @@ fn main() {
 
     /// Select a note
     pub fn select_note(&mut self, note_id: &str) {
+        // First try to get the note from memory
         if let Some(note) = self.notes.get(note_id) {
             self.current_note = Some(note_id.to_string());
 
@@ -699,6 +750,47 @@ fn main() {
             self.last_saved_content = self.note_content.clone();
             self.last_saved_title = self.note_title.clone();
             self.save_status = SaveStatus::Saved;
+
+            // 添加到最近访问记录
+            self.add_to_recent_notes(note_id);
+            return;
+        }
+
+        // If note is not in memory, try to load it from database
+        let loaded_note = if let Ok(storage) = self.storage.lock() {
+            match storage.load_note(note_id) {
+                Ok(note) => {
+                    log::info!("Loaded note '{}' from database for selection", note.title);
+                    Some(note)
+                }
+                Err(e) => {
+                    log::error!("Failed to load note {} from database: {}", note_id, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(note) = loaded_note {
+            // Add the note to memory
+            self.notes.insert(note_id.to_string(), note.clone());
+
+            // Set as current note
+            self.current_note = Some(note_id.to_string());
+            self.note_content = note.content.clone();
+            self.note_title = note.title.clone();
+
+            // Initialize last saved content and title
+            self.last_saved_content = self.note_content.clone();
+            self.last_saved_title = self.note_title.clone();
+            self.save_status = SaveStatus::Saved;
+
+            // 添加到最近访问记录
+            self.add_to_recent_notes(note_id);
+
+            // Also need to ensure the notebook containing this note is selected
+            self.select_notebook_for_note(note_id);
         }
     }
 
@@ -1209,5 +1301,186 @@ fn main() {
         } else {
             Err("无法锁定存储".to_string())
         }
+    }
+
+    /// 添加笔记到最近访问记录
+    pub fn add_to_recent_notes(&mut self, note_id: &str) {
+        if let Some(note) = self.notes.get(note_id) {
+            // 查找笔记所属的笔记本
+            let notebook_name = self.notebooks.iter()
+                .find(|nb| nb.note_ids.contains(&note_id.to_string()))
+                .map(|nb| nb.name.clone())
+                .unwrap_or_else(|| "未知笔记本".to_string());
+
+            let recent_access = RecentNoteAccess {
+                note_id: note_id.to_string(),
+                note_title: note.title.clone(),
+                notebook_name,
+                accessed_at: Utc::now(),
+            };
+
+            // 移除已存在的相同笔记记录
+            self.recent_notes.retain(|access| access.note_id != note_id);
+
+            // 添加到队列前端
+            self.recent_notes.push_front(recent_access);
+
+            // 保持最多20个记录
+            while self.recent_notes.len() > 20 {
+                self.recent_notes.pop_back();
+            }
+
+            // 保存到数据库
+            self.save_recent_notes();
+        }
+    }
+
+    /// 获取最近访问的笔记列表
+    pub fn get_recent_notes(&self, limit: usize) -> Vec<&RecentNoteAccess> {
+        self.recent_notes.iter().take(limit).collect()
+    }
+
+    /// 保存最近访问记录到数据库
+    fn save_recent_notes(&self) {
+        if let Ok(storage) = self.storage.lock() {
+            if let Ok(json) = serde_json::to_string(&self.recent_notes) {
+                if let Err(e) = storage.save_setting("recent_notes", &json) {
+                    log::error!("Failed to save recent notes: {}", e);
+                }
+            }
+        }
+    }
+
+    /// 从数据库加载最近访问记录
+    pub fn load_recent_notes(&mut self) {
+        if let Ok(storage) = self.storage.lock() {
+            match storage.load_setting("recent_notes") {
+                Ok(Some(json)) => {
+                    match serde_json::from_str::<VecDeque<RecentNoteAccess>>(&json) {
+                        Ok(recent_notes) => {
+                            self.recent_notes = recent_notes;
+                            log::info!("Loaded {} recent notes", self.recent_notes.len());
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to deserialize recent notes: {}", e);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    log::debug!("No recent notes found in database");
+                }
+                Err(e) => {
+                    log::error!("Failed to load recent notes: {}", e);
+                }
+            }
+        }
+    }
+
+    /// 选择包含指定笔记的笔记本
+    fn select_notebook_for_note(&mut self, note_id: &str) {
+        log::info!("Looking for notebook containing note '{}'", note_id);
+
+        // 查找包含该笔记的笔记本
+        let mut found_notebook: Option<(usize, String, String)> = None;
+
+        for (index, notebook) in self.notebooks.iter().enumerate() {
+            log::debug!("Checking notebook '{}' (index: {}) with {} notes: {:?}",
+                       notebook.name, index, notebook.note_ids.len(), notebook.note_ids);
+            if notebook.note_ids.contains(&note_id.to_string()) {
+                found_notebook = Some((index, notebook.name.clone(), notebook.id.clone()));
+                log::info!("Found note '{}' in notebook '{}' (index: {})", note_id, notebook.name, index);
+                break;
+            }
+        }
+
+        if let Some((index, notebook_name, notebook_id)) = found_notebook {
+            self.current_notebook = Some(index);
+            log::info!("Selected notebook '{}' for note '{}'", notebook_name, note_id);
+
+            // 自动展开该笔记本，便于用户知道自己在哪里
+            if let Some(notebook) = self.notebooks.get_mut(index) {
+                if !notebook.expanded {
+                    notebook.expanded = true;
+                    log::info!("Expanded notebook '{}' to show user location", notebook_name);
+                } else {
+                    log::info!("Notebook '{}' was already expanded", notebook_name);
+                }
+            }
+
+            // 确保该笔记本的笔记已加载
+            log::info!("Loading notes for notebook '{}'", notebook_name);
+            self.load_notes_for_notebook(&notebook_id);
+        } else {
+            log::warn!("Could not find notebook containing note '{}'. Available notebooks:", note_id);
+            for (index, notebook) in self.notebooks.iter().enumerate() {
+                log::warn!("  - Notebook '{}' (index: {}) has {} notes", notebook.name, index, notebook.note_ids.len());
+            }
+        }
+    }
+
+    /// Import a document as a new note
+    pub fn import_document_as_note(&mut self, file_path: &str, notebook_id: &str) -> Result<String, String> {
+        log::info!("Importing document '{}' to notebook '{}'", file_path, notebook_id);
+
+        // Convert document to markdown
+        let markdown_content = self.document_converter
+            .convert_to_markdown(file_path)
+            .map_err(|e| format!("文档转换失败: {}", e))?;
+
+        // Extract title from file name
+        let file_name = std::path::Path::new(file_path)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("导入的文档")
+            .to_string();
+
+        // Create new note
+        let note = Note::new(file_name, markdown_content);
+        let note_id = note.id.clone();
+
+        // Save note to storage
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(err) = storage.save_note(&note, notebook_id) {
+                log::error!("Failed to save imported note: {}", err);
+                return Err(format!("保存笔记失败: {}", err));
+            }
+        } else {
+            return Err("无法获取存储锁".to_string());
+        }
+
+        // Add note to the notebook
+        if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == notebook_id) {
+            notebook.add_note(note_id.clone());
+            log::info!("Added note '{}' to notebook '{}', total notes: {}", note_id, notebook.name, notebook.note_ids.len());
+
+            // Save updated notebook
+            if let Ok(storage) = self.storage.lock() {
+                if let Err(err) = storage.save_notebook(notebook) {
+                    log::error!("Failed to save updated notebook: {}", err);
+                } else {
+                    log::info!("Successfully saved updated notebook '{}'", notebook.name);
+                }
+            }
+        } else {
+            return Err("找不到指定的笔记本".to_string());
+        }
+
+        // Add note to notes map
+        self.notes.insert(note_id.clone(), note);
+        log::info!("Added note '{}' to memory, total notes in memory: {}", note_id, self.notes.len());
+
+        log::info!("Successfully imported document as note '{}'", note_id);
+        Ok(note_id)
+    }
+
+    /// Show document import dialog for a specific file
+    pub fn show_document_import_dialog(&mut self, file_path: String) {
+        let file_name = std::path::Path::new(&file_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("未知文件")
+            .to_string();
+
+        self.notebook_selector.show_for_file(file_path, file_name);
     }
 }
