@@ -71,6 +71,7 @@ members = [
     "crates/aiAssist",
     "crates/itools",
     "crates/iterminal",
+    "crates/zhushoude_duckdb",
 ]
 
 [profile.release]
