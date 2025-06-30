@@ -240,7 +240,7 @@ impl SeeUApp {
 
         // Initialize inote state and semantic search
         inote_state.initialize();
-        inote_state.initialize_database_async();
+        inote_state.initialize_storage_async("notes.db".to_string());
 
         let mut isearch_state = ISearchState::default();
         let mut ai_assist_state = aiAssist::initialize();
@@ -419,7 +419,7 @@ impl SeeUApp {
         });
 
         // 初始化语义搜索引擎（同步方式，标记为启用）
-        self.inote_state.initialize_semantic_search_sync();
+        // Semantic search has been removed
 
         // 启动进度更新定时器
         self.start_progress_timer();
@@ -1350,30 +1350,33 @@ impl SeeUApp {
         self.inote_state.search_notes();
 
         // Convert results to global search format
-        let search_results = self.inote_state.get_search_result_notes();
+        // Search results are now stored directly in search_results field
+        let search_results = &self.inote_state.search_results;
         self.global_search_results.inote_results = search_results.iter()
             .take(5) // Limit to 5 results for Home display
-            .map(|(note, _search_type)| {
-                // Find notebook name
-                let notebook_name = self.inote_state.notebooks.iter()
-                    .find(|nb| nb.note_ids.contains(&note.id))
-                    .map(|nb| nb.name.clone())
-                    .unwrap_or_else(|| "未知笔记本".to_string());
+            .filter_map(|note_id| {
+                self.inote_state.notes.get(note_id).map(|note| {
+                    // Find notebook name
+                    let notebook_name = self.inote_state.notebooks.iter()
+                        .find(|nb| nb.note_ids.contains(&note.id))
+                        .map(|nb| nb.name.clone())
+                        .unwrap_or_else(|| "未知笔记本".to_string());
 
-                // Create content preview (first 100 characters, safe for UTF-8)
-                let content_preview = if note.content.chars().count() > 100 {
-                    let truncated: String = note.content.chars().take(100).collect();
-                    format!("{}...", truncated)
-                } else {
-                    note.content.clone()
-                };
+                    // Create content preview (first 100 characters, safe for UTF-8)
+                    let content_preview = if note.content.chars().count() > 100 {
+                        let truncated: String = note.content.chars().take(100).collect();
+                        format!("{}...", truncated)
+                    } else {
+                        note.content.clone()
+                    };
 
-                INoteSearchResult {
-                    id: note.id.clone(),
-                    title: note.title.clone(),
-                    notebook_name,
-                    content_preview,
-                }
+                    INoteSearchResult {
+                        id: note.id.clone(),
+                        title: note.title.clone(),
+                        notebook_name,
+                        content_preview,
+                    }
+                })
             })
             .collect();
     }

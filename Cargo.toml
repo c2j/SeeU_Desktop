@@ -64,7 +64,7 @@ isearch = { path = "crates/isearch" }
 aiAssist = { path = "crates/aiAssist" }
 itools = { path = "crates/itools" }
 iterminal = { path = "crates/iterminal" }
-zhushoude_duckdb = { path = "crates/zhushoude_duckdb" }
+
 
 
 
@@ -77,7 +77,7 @@ members = [
     "crates/aiAssist",
     "crates/itools",
     "crates/iterminal",
-    "crates/zhushoude_duckdb",
+
 ]
 
 [profile.release]

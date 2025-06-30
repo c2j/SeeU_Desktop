@@ -457,6 +457,23 @@ impl ClipboardManager {
             false
         }
     }
+
+    /// Paste rich text content as markdown
+    pub fn paste_as_markdown(&mut self) -> Result<String, Box<dyn std::error::Error>> {
+        // Try to get HTML content first
+        if let Ok(text) = self.get_text() {
+            if text.trim().is_empty() {
+                return Err("No content in clipboard".into());
+            }
+
+            // For now, just return the plain text
+            // In a full implementation, you would check for HTML content
+            // and convert it to markdown using html2md
+            Ok(text)
+        } else {
+            Err("Failed to get clipboard content".into())
+        }
+    }
 }
 
 impl Default for ClipboardManager {

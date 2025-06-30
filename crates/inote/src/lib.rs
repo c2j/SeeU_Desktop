@@ -11,8 +11,7 @@ pub mod db_ui_import;
 pub mod tree_ui;
 pub mod markdown;
 pub mod mermaid;
-pub mod knowledge_graph_integration;
-pub mod knowledge_graph_ui;
+
 
 #[cfg(test)]
 mod tests {
@@ -628,29 +627,7 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                 }
             });
 
-            // 搜索模式选择
-            ui.horizontal(|ui| {
-                ui.label("搜索模式:");
 
-                // 语义搜索选项
-                let semantic_selected = state.search_mode == crate::db_state::SearchMode::Semantic;
-                if ui.radio(semantic_selected, "🧠 语义搜索").clicked() {
-                    state.search_mode = crate::db_state::SearchMode::Semantic;
-                }
-
-                // 数据库搜索选项
-                let database_selected = state.search_mode == crate::db_state::SearchMode::Database;
-                if ui.radio(database_selected, "🗄️ 数据库搜索").clicked() {
-                    state.search_mode = crate::db_state::SearchMode::Database;
-                }
-
-                // 显示当前模式的说明
-                let mode_description = match state.search_mode {
-                    crate::db_state::SearchMode::Semantic => "基于语义理解的智能搜索",
-                    crate::db_state::SearchMode::Database => "基于关键词匹配的传统搜索",
-                };
-                ui.label(format!("({})", mode_description));
-            });
 
             ui.separator();
 
@@ -968,13 +945,13 @@ fn process_dialogs(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
             let message = match confirmation.confirmation_type {
                 crate::db_state::DeleteConfirmationType::Notebook => {
-                    format!("您确定要删除笔记本 \"{}\" 吗？\n\n⚠️ 警告：这将同时删除笔记本中的所有笔记！\n此操作无法撤销。", confirmation.target_name)
+                    format!("您确定要删除笔记本 \"{}\" 吗？\n\n⚠️ 警告：这将同时删除笔记本中的所有笔记！\n此操作无法撤销。", confirmation.item_name)
                 },
                 crate::db_state::DeleteConfirmationType::Note => {
-                    format!("您确定要删除笔记 \"{}\" 吗？\n\n此操作无法撤销。", confirmation.target_name)
+                    format!("您确定要删除笔记 \"{}\" 吗？\n\n此操作无法撤销。", confirmation.item_name)
                 },
                 crate::db_state::DeleteConfirmationType::Tag => {
-                    format!("您确定要删除标签 \"{}\" 吗？\n\n此操作将从所有笔记中移除该标签。", confirmation.target_name)
+                    format!("您确定要删除标签 \"{}\" 吗？\n\n此操作将从所有笔记中移除该标签。", confirmation.item_name)
                 },
             };
 

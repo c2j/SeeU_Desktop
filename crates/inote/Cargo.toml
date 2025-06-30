@@ -49,7 +49,6 @@ quick-xml = "0.31.0"
 rfd = "0.14.1"
 
 # Local crates
-zhushoude_duckdb = { path = "../zhushoude_duckdb" }
 
 [dev-dependencies]
 tempfile = "3.8.1"

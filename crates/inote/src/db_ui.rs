@@ -250,9 +250,7 @@ pub fn render_note_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
             let current_note = state.current_note.clone();
 
             // Create a list of note IDs and titles for rendering
-            let note_data: Vec<(String, String)> = notes.iter()
-                .map(|note| (note.id.clone(), note.title.clone()))
-                .collect();
+            let note_data: Vec<(String, String)> = notes;
 
             let has_notes = !note_data.is_empty();
 
@@ -301,17 +299,7 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
         let result_count = state.search_results.len();
         ui.label(format!("(找到 {} 条结果)", result_count));
 
-        // 如果语义搜索可用，显示切换按钮和选项
-        if state.semantic_search_enabled {
-            ui.separator();
 
-            // 默认使用语义搜索的复选框
-            ui.checkbox(&mut state.use_semantic_search_by_default, "默认语义搜索");
-
-            if state.use_semantic_search_by_default {
-                ui.label("💡 启用后，搜索将自动使用语义理解，结果会显示🧠图标");
-            }
-        }
     });
 
     // 添加一个明显的返回按钮
@@ -324,50 +312,36 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
     ui.separator();
 
     // Search results list
-    let search_results = state.get_search_result_notes();
     let current_note = state.current_note.clone();
 
-    // Create a list of note IDs, titles, notebook names, and search types for rendering
-    let result_data: Vec<(String, String, String, crate::db_state::SearchResultType)> = search_results.iter()
-        .map(|(note, search_type)| {
-            // Find which notebook this note belongs to
-            let notebook_name = state.notebooks.iter()
-                .find(|nb| nb.note_ids.contains(&note.id))
-                .map(|nb| nb.name.clone())
-                .unwrap_or_else(|| "未知笔记本".to_string());
+    // Create a list of note IDs, titles, and notebook names for rendering
+    let result_data: Vec<(String, String, String)> = state.search_results.iter()
+        .filter_map(|note_id| {
+            state.notes.get(note_id).map(|note| {
+                // Find which notebook this note belongs to
+                let notebook_name = state.notebooks.iter()
+                    .find(|nb| nb.note_ids.contains(&note.id))
+                    .map(|nb| nb.name.clone())
+                    .unwrap_or_else(|| "未知笔记本".to_string());
 
-            (note.id.clone(), note.title.clone(), notebook_name, search_type.clone())
+                (note.id.clone(), note.title.clone(), notebook_name)
+            })
         })
         .collect();
 
     let has_results = !result_data.is_empty();
 
     egui::ScrollArea::vertical().id_source("db_search_results_scroll").show(ui, |ui| {
-        for (note_id, title, notebook_name, search_type) in result_data {
+        for (note_id, title, notebook_name) in result_data {
             let is_selected = current_note.as_ref().map_or(false, |id| id == &note_id);
 
             ui.horizontal(|ui| {
-                // Add search type icon
-                let search_icon = match search_type {
-                    crate::db_state::SearchResultType::Semantic => "🧠",
-                    crate::db_state::SearchResultType::Database => "🗄️",
-                    crate::db_state::SearchResultType::Hybrid => "🔄",
-                };
-
                 let truncated_title = crate::truncate_note_title(&title);
-                if ui.selectable_label(is_selected, format!("{} 📝 {}", search_icon, truncated_title)).clicked() {
+                if ui.selectable_label(is_selected, format!("📝 {}", truncated_title)).clicked() {
                     state.select_note(&note_id);
                 }
 
                 ui.label(format!("({})", notebook_name));
-
-                // Add tooltip to explain the search type
-                let tooltip_text = match search_type {
-                    crate::db_state::SearchResultType::Semantic => "语义搜索结果",
-                    crate::db_state::SearchResultType::Database => "数据库搜索结果",
-                    crate::db_state::SearchResultType::Hybrid => "混合搜索结果",
-                };
-                ui.label(search_icon).on_hover_text(tooltip_text);
             });
         }
 
@@ -482,11 +456,9 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
 
                     if paste_button.clicked() {
                         match state.paste_rich_text() {
-                            Ok(true) => {
+                            Ok(markdown_text) => {
+                                state.append_to_note_content(&markdown_text);
                                 log::info!("Rich text pasted successfully");
-                            }
-                            Ok(false) => {
-                                log::debug!("No content to paste");
                             }
                             Err(e) => {
                                 log::error!("Failed to paste rich text: {}", e);
@@ -646,11 +618,9 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             if i.modifiers.command && i.key_pressed(egui::Key::V) {
                                 // Prevent default paste behavior and handle rich text paste
                                 match state.paste_rich_text() {
-                                    Ok(true) => {
+                                    Ok(markdown_text) => {
+                                        state.append_to_note_content(&markdown_text);
                                         log::info!("Rich text pasted via keyboard shortcut");
-                                    }
-                                    Ok(false) => {
-                                        log::debug!("No rich content to paste via keyboard shortcut");
                                     }
                                     Err(e) => {
                                         log::error!("Failed to paste rich text via keyboard shortcut: {}", e);

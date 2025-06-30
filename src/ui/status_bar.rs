@@ -68,6 +68,9 @@ pub fn render_status_bar(
                         },
                         SaveStatus::Modified => {
                             ui.label(egui::RichText::new("✎ 未保存").color(egui::Color32::from_rgb(255, 180, 0)));
+                        },
+                        SaveStatus::Error(err) => {
+                            ui.label(egui::RichText::new(format!("❌ 保存失败: {}", err)).color(egui::Color32::from_rgb(255, 0, 0)));
                         }
                     }
                 },

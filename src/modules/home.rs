@@ -229,27 +229,25 @@ fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
             }
 
             // 最近打开的笔记（TOP5）
-            let recent_notes: Vec<_> = app.inote_state.get_recent_notes(5)
-                .into_iter()
-                .map(|note| (note.note_id.clone(), note.note_title.clone(), note.notebook_name.clone()))
-                .collect();
+            let recent_notes = app.inote_state.get_recent_notes(5);
 
             if !recent_notes.is_empty() {
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("最近笔记").size(12.0).weak());
                 ui.add_space(4.0);
 
-                for (note_id, note_title, notebook_name) in recent_notes {
+                for note in recent_notes {
                     ui.horizontal(|ui| {
                         // 笔记标题按钮
-                        if ui.small_button(&note_title).clicked() {
+                        if ui.small_button(&note.note_title).clicked() {
                             app.active_module = Module::Note;
                             // 直接选择并编辑笔记
-                            app.inote_state.select_note(&note_id);
+                            app.inote_state.select_note(&note.note_id);
                         }
 
-                        // 显示笔记本名称
-                        ui.label(egui::RichText::new(format!("({})", notebook_name)).size(10.0).weak());
+                        // 显示访问时间
+                        let time_str = note.accessed_at.format("%m-%d %H:%M").to_string();
+                        ui.label(egui::RichText::new(format!("({})", time_str)).size(10.0).weak());
                     });
                 }
             }
