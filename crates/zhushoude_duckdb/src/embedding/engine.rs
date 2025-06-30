@@ -1,11 +1,13 @@
 //! 语义嵌入引擎
 
-use crate::{Result, EmbeddingConfig, BgeSmallZhModel, EmbeddingCache, ChineseTextProcessor};
+use crate::{Result, EmbeddingConfig, EmbeddingCache, ChineseTextProcessor};
+use crate::embedding::provider::{EmbeddingProvider, BGEConfig};
+use crate::embedding::bge::BGEEmbeddingProvider;
 use std::sync::Arc;
 
 /// 语义嵌入引擎
 pub struct EmbeddingEngine {
-    model: BgeSmallZhModel,
+    provider: Arc<dyn EmbeddingProvider + Send + Sync>,
     cache: EmbeddingCache,
     processor: ChineseTextProcessor,
     config: EmbeddingConfig,
@@ -15,15 +17,41 @@ impl EmbeddingEngine {
     /// 创建新的嵌入引擎
     pub async fn new(config: EmbeddingConfig) -> Result<Self> {
         println!("🔧 初始化语义嵌入引擎...");
+        println!("🔧 初始化BGE中文语义模型...");
 
-        let model = BgeSmallZhModel::new(config.clone()).await?;
+        // 创建BGE配置
+        let bge_config = BGEConfig {
+            model_variant: crate::embedding::provider::BGEVariant::Small, // 使用小模型
+            device: crate::embedding::provider::Device::CPU,
+            batch_size: config.batch_size,
+            max_length: 512,
+            normalize_embeddings: config.normalize_vectors,
+            cache_size: config.max_cache_size,
+            enable_quantization: false, // 暂时禁用量化
+            cache_dir: std::path::PathBuf::from("./models/bge"),
+        };
+
+        // 初始化BGE提供者
+        let provider = match BGEEmbeddingProvider::new(bge_config).await {
+            Ok(provider) => {
+                println!("✅ BGE模型初始化成功");
+                Arc::new(provider) as Arc<dyn EmbeddingProvider + Send + Sync>
+            }
+            Err(e) => {
+                println!("⚠️ BGE模型初始化失败，回退到轻量级模型: {}", e);
+                // 如果BGE初始化失败，回退到轻量级模型
+                let fallback_model = crate::embedding::model::BgeSmallZhModel::new(config.clone()).await?;
+                Arc::new(fallback_model) as Arc<dyn EmbeddingProvider + Send + Sync>
+            }
+        };
+
         let cache = EmbeddingCache::new(config.max_cache_size);
         let processor = ChineseTextProcessor::new();
 
         println!("✅ 语义嵌入引擎初始化完成");
 
         Ok(Self {
-            model,
+            provider,
             cache,
             processor,
             config,
@@ -45,8 +73,8 @@ impl EmbeddingEngine {
             text.to_string()
         };
 
-        // 使用模型进行编码
-        let embedding = self.model.encode_single(&processed_text).await?;
+        // 使用提供者进行编码
+        let embedding = self.provider.encode_single(&processed_text).await?;
 
         // 缓存结果
         self.cache.insert(cache_key, embedding.clone()).await;
@@ -82,7 +110,9 @@ impl EmbeddingEngine {
                 uncached_texts
             };
 
-            let embeddings = self.model.encode_batch(&processed_texts).await?;
+            // 转换为&str引用
+            let text_refs: Vec<&str> = processed_texts.iter().map(|s| s.as_str()).collect();
+            let embeddings = self.provider.encode_batch(&text_refs).await?;
 
             // 更新结果和缓存
             for (i, embedding) in embeddings.into_iter().enumerate() {
@@ -125,8 +155,8 @@ impl EmbeddingEngine {
     }
 
     /// 检查模型是否已加载
-    pub fn is_model_loaded(&self) -> bool {
-        self.model.is_loaded()
+    pub async fn is_model_loaded(&self) -> bool {
+        self.provider.health_check().await.is_ok()
     }
 }
 

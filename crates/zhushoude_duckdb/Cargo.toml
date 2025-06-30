@@ -11,12 +11,28 @@ repository = "https://github.com/c2j/SeeU_Desktop"
 # DuckDB核心
 duckdb = { version = "1.3", features = ["bundled"] }
 
-# 中文语义模型
+# 中文语义模型 - BGE实现
+jieba-rs = "0.7"
+
+# BGE模型推理引擎
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
-tokenizers = "0.21"
-hf-hub = "0.4"
+
+# 分词器
+tokenizers = "0.15"
+
+# 网络和异步
+reqwest = { version = "0.11", features = ["json", "stream"] }
+futures-util = "0.3"
+
+# 缓存
+moka = { version = "0.12", features = ["future"] }
+
+# 文件处理
+flate2 = "1.0"
+tar = "0.4"
+sha2 = "0.10"
 
 # 异步运行时
 tokio = { version = "1.0", features = ["full"] }
@@ -46,11 +62,17 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 regex = "1.10"
+dirs = "5.0"
+rand = "0.8"
+
+[features]
+default = ["model-download"]
+model-download = []
 
 [build-dependencies]
-# 模型下载 (暂时注释掉)
-# hf-hub = "0.4"
-# tokio = { version = "1.0", features = ["rt"] }
+# 模型下载
+hf-hub = { version = "0.4", optional = true }
+tokio = { version = "1.0", features = ["rt"], optional = true }
 
 [dev-dependencies]
 # 测试依赖
@@ -60,4 +82,8 @@ criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 [[bench]]
 name = "search_benchmark"
+harness = false
+
+[[bench]]
+name = "nlp_benchmark"
 harness = false

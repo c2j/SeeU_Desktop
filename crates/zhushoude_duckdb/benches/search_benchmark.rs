@@ -2,6 +2,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use zhushoude_duckdb::*;
+use zhushoude_duckdb::types::SearchWeights;
 use tokio::runtime::Runtime;
 
 fn create_test_documents(count: usize) -> Vec<Document> {

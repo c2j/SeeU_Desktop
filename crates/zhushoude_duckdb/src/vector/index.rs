@@ -101,18 +101,33 @@ impl VectorIndexManager {
                 _ => IndexType::Linear, // 默认
             };
 
+            // 安全处理时间戳字段
+            let created_at = match row.get::<_, String>(5) {
+                Ok(time_str) => {
+                    chrono::DateTime::parse_from_rfc3339(&time_str)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|_| chrono::Utc::now())
+                }
+                Err(_) => chrono::Utc::now(),
+            };
+
+            let last_updated = match row.get::<_, String>(6) {
+                Ok(time_str) => {
+                    chrono::DateTime::parse_from_rfc3339(&time_str)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|_| chrono::Utc::now())
+                }
+                Err(_) => chrono::Utc::now(),
+            };
+
             Ok(IndexMetadata {
                 name: row.get(0)?,
                 table_name: row.get(1)?,
                 column_name: row.get(2)?,
                 index_type,
                 dimension: row.get::<_, i32>(4)? as usize,
-                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
-                    .unwrap_or_else(|_| chrono::Utc::now().into())
-                    .with_timezone(&chrono::Utc),
-                last_updated: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
-                    .unwrap_or_else(|_| chrono::Utc::now().into())
-                    .with_timezone(&chrono::Utc),
+                created_at,
+                last_updated,
                 num_vectors: row.get::<_, i32>(7)? as usize,
             })
         }).map_err(|e| crate::Error::DatabaseError(format!("查询索引失败: {}", e)))?;
@@ -576,6 +591,11 @@ impl VectorIndexManager {
     /// 获取所有索引的详细信息
     pub fn get_all_indexes(&self) -> Vec<&IndexMetadata> {
         self.indexes.values().collect()
+    }
+
+    /// 检查索引是否存在
+    pub fn index_exists(&self, index_name: &str) -> bool {
+        self.indexes.contains_key(index_name)
     }
 
     /// 获取索引统计信息

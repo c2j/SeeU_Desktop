@@ -268,7 +268,7 @@ impl MetricsSnapshot {
     /// 导出为JSON格式
     pub fn to_json(&self) -> crate::Result<String> {
         serde_json::to_string_pretty(self)
-            .map_err(|e| crate::Error::SerializationError(e))
+            .map_err(|e| crate::Error::SerializationError(e.to_string()))
     }
 }
 

@@ -4,6 +4,11 @@ version = "0.2.627"
 edition = "2021"
 authors = ["SeeU Team C&L"]
 description = "A modern desktop application built with Rust, egui and eframe"
+default-run = "seeu_desktop"
+
+[[bin]]
+name = "seeu_desktop"
+path = "src/main.rs"
 
 [dependencies]
 # GUI Framework - egui的版本请不要动，0.28.1版本才有IME支持，之后的版本有冲突
@@ -59,6 +64,7 @@ isearch = { path = "crates/isearch" }
 aiAssist = { path = "crates/aiAssist" }
 itools = { path = "crates/itools" }
 iterminal = { path = "crates/iterminal" }
+zhushoude_duckdb = { path = "crates/zhushoude_duckdb" }
 
 
 
@@ -80,3 +86,5 @@ debug = false
 strip = true
 lto = true
 codegen-units = 1
+
+

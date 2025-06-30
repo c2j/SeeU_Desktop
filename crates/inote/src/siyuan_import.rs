@@ -1030,27 +1030,68 @@ impl SiyuanImporter {
     fn save_to_database(&self) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("开始保存导入数据到数据库...");
 
-        // 保存笔记本
+        // 保存笔记本 (必须先保存，因为笔记有外键约束)
         log::info!("保存 {} 个笔记本", self.notebooks.len());
         for notebook in &self.notebooks {
             log::debug!("保存笔记本: {} (包含 {} 个笔记)", notebook.name, notebook.note_ids.len());
-            self.storage.save_notebook(notebook)?;
+            match self.storage.save_notebook(notebook) {
+                Ok(_) => {
+                    log::debug!("✅ 笔记本 '{}' 保存成功", notebook.name);
+                }
+                Err(e) => {
+                    log::error!("❌ 笔记本 '{}' 保存失败: {}", notebook.name, e);
+                    return Err(format!("保存笔记本失败: {}", e).into());
+                }
+            }
         }
 
         // 保存标签
         log::info!("保存 {} 个标签", self.tags.len());
         for tag in &self.tags {
-            self.storage.save_tag(tag)?;
+            match self.storage.save_tag(tag) {
+                Ok(_) => {
+                    log::debug!("✅ 标签 '{}' 保存成功", tag.name);
+                }
+                Err(e) => {
+                    log::warn!("⚠️ 标签 '{}' 保存失败: {}", tag.name, e);
+                    // 标签保存失败不是致命错误，继续处理
+                }
+            }
         }
 
-        // 保存笔记
+        // 保存笔记 (在笔记本保存成功后)
         log::info!("保存 {} 个笔记", self.notes.len());
+        let mut successful_notes = 0;
+        let mut failed_notes = 0;
+        let mut failed_note_ids = Vec::new();
+
         for (note, notebook_id) in &self.notes {
             log::debug!("保存笔记: {} 到笔记本: {}", note.title, notebook_id);
-            self.storage.save_note(note, notebook_id)?;
+            match self.storage.save_note(note, notebook_id) {
+                Ok(_) => {
+                    log::debug!("✅ 笔记 '{}' 保存成功", note.title);
+                    successful_notes += 1;
+                }
+                Err(e) => {
+                    log::error!("❌ 笔记 '{}' 保存失败: {}", note.title, e);
+                    failed_notes += 1;
+                    failed_note_ids.push(note.id.clone());
+
+                    // 对于个别笔记保存失败，记录错误但继续处理其他笔记
+                    if failed_notes > self.notes.len() / 2 {
+                        // 如果超过一半的笔记保存失败，则认为是系统性问题
+                        return Err(format!("笔记保存失败率过高，已失败 {} 个笔记", failed_notes).into());
+                    }
+                }
+            }
         }
 
-        log::info!("所有导入数据已成功保存到数据库");
+        log::info!("导入数据保存完成: {} 个笔记成功, {} 个笔记失败", successful_notes, failed_notes);
+
+        if failed_notes > 0 {
+            log::warn!("部分笔记保存失败，但导入过程继续完成");
+        }
+
         Ok(())
     }
 }

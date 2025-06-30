@@ -11,6 +11,8 @@ pub mod db_ui_import;
 pub mod tree_ui;
 pub mod markdown;
 pub mod mermaid;
+pub mod knowledge_graph_integration;
+pub mod knowledge_graph_ui;
 
 #[cfg(test)]
 mod tests {
@@ -594,7 +596,7 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                 ui.separator();
 
                 ui.label("🔍");
-                let search_width = ui.available_width() - 50.0;
+                let search_width = ui.available_width() - 120.0; // 为搜索模式选择留出更多空间
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut state.search_query)
                         .hint_text("搜索笔记... (支持 label:标签名)")
@@ -626,6 +628,30 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                 }
             });
 
+            // 搜索模式选择
+            ui.horizontal(|ui| {
+                ui.label("搜索模式:");
+
+                // 语义搜索选项
+                let semantic_selected = state.search_mode == crate::db_state::SearchMode::Semantic;
+                if ui.radio(semantic_selected, "🧠 语义搜索").clicked() {
+                    state.search_mode = crate::db_state::SearchMode::Semantic;
+                }
+
+                // 数据库搜索选项
+                let database_selected = state.search_mode == crate::db_state::SearchMode::Database;
+                if ui.radio(database_selected, "🗄️ 数据库搜索").clicked() {
+                    state.search_mode = crate::db_state::SearchMode::Database;
+                }
+
+                // 显示当前模式的说明
+                let mode_description = match state.search_mode {
+                    crate::db_state::SearchMode::Semantic => "基于语义理解的智能搜索",
+                    crate::db_state::SearchMode::Database => "基于关键词匹配的传统搜索",
+                };
+                ui.label(format!("({})", mode_description));
+            });
+
             ui.separator();
 
             // Main content layout - conditionally show tree view
@@ -649,8 +675,6 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                         // 检查是否正在搜索
                         if state.is_searching {
                             // 在侧边栏显示搜索结果
-                            log::info!("Sidebar: Showing search results. Query: '{}', Results: {}",
-                                state.search_query, state.search_results.len());
                             crate::db_ui::render_search_results(ui, state);
                         } else {
                             // 树状视图，整合笔记本和笔记

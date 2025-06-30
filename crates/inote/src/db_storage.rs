@@ -120,17 +120,38 @@ impl DbStorageManager {
     pub fn save_notebook(&self, notebook: &Notebook) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.get_connection()?;
 
-        conn.execute(
-            "INSERT OR REPLACE INTO notebooks (id, name, description, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?)",
+        // 使用更安全的INSERT方式，避免"Execute returned results"错误
+        let update_result = conn.execute(
+            "UPDATE notebooks SET name = ?, description = ?, updated_at = ? WHERE id = ?",
             params![
-                notebook.id,
                 notebook.name,
                 notebook.description,
-                notebook.created_at.to_rfc3339(),
-                notebook.updated_at.to_rfc3339()
+                notebook.updated_at.to_rfc3339(),
+                notebook.id
             ],
-        )?;
+        );
+
+        match update_result {
+            Ok(0) => {
+                // 没有更新任何行，说明笔记本不存在，需要插入
+                conn.execute(
+                    "INSERT INTO notebooks (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    params![
+                        notebook.id,
+                        notebook.name,
+                        notebook.description,
+                        notebook.created_at.to_rfc3339(),
+                        notebook.updated_at.to_rfc3339()
+                    ],
+                )?;
+            }
+            Ok(_) => {
+                // 更新成功
+            }
+            Err(e) => {
+                return Err(Box::new(e));
+            }
+        }
 
         Ok(())
     }
@@ -258,6 +279,20 @@ impl DbStorageManager {
         let mut conn = self.get_connection()?;
         log::debug!("获取数据库连接成功");
 
+        // 验证笔记本是否存在于数据库中
+        log::debug!("验证笔记本是否存在于数据库中...");
+        let notebook_exists = conn.query_row(
+            "SELECT COUNT(*) FROM notebooks WHERE id = ?",
+            params![notebook_id],
+            |row| row.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+
+        if !notebook_exists {
+            log::error!("笔记本 '{}' 不存在于数据库中，无法保存笔记", notebook_id);
+            return Err(format!("笔记本 '{}' 不存在于数据库中", notebook_id).into());
+        }
+        log::debug!("笔记本 '{}' 存在于数据库中，继续保存笔记", notebook_id);
+
         // Begin transaction
         let tx = conn.transaction()?;
         log::debug!("开始数据库事务");
@@ -267,24 +302,68 @@ impl DbStorageManager {
         log::debug!("笔记内容长度: {} 字符", note.content.len());
         log::debug!("笔记标题: '{}'", note.title);
 
-        let rows_affected = tx.execute(
-            "INSERT OR REPLACE INTO notes (id, notebook_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        // 使用更安全的INSERT方式，避免"Execute returned results"错误
+        log::debug!("尝试插入或更新笔记...");
+
+        // 首先尝试更新现有笔记
+        let update_result = tx.execute(
+            "UPDATE notes SET notebook_id = ?, title = ?, content = ?, updated_at = ? WHERE id = ?",
             params![
-                note.id,
                 notebook_id,
                 note.title,
                 note.content,
-                note.created_at.to_rfc3339(),
-                note.updated_at.to_rfc3339()
+                note.updated_at.to_rfc3339(),
+                note.id
             ],
-        ).map_err(|e| {
-            log::error!("执行INSERT笔记语句失败: {}", e);
-            log::error!("笔记ID: {}", note.id);
-            log::error!("笔记本ID: {}", notebook_id);
-            log::error!("笔记标题: '{}'", note.title);
-            log::error!("笔记内容前100字符: '{}'", &note.content.chars().take(100).collect::<String>());
-            e
-        })?;
+        );
+
+        let rows_affected = match update_result {
+            Ok(0) => {
+                // 没有更新任何行，说明笔记不存在，需要插入
+                log::debug!("笔记不存在，执行插入操作...");
+                tx.execute(
+                    "INSERT INTO notes (id, notebook_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    params![
+                        note.id,
+                        notebook_id,
+                        note.title,
+                        note.content,
+                        note.created_at.to_rfc3339(),
+                        note.updated_at.to_rfc3339()
+                    ],
+                ).map_err(|e| {
+                    let error_msg = e.to_string();
+                    log::error!("执行INSERT笔记语句失败: {}", error_msg);
+                    log::error!("笔记ID: {}", note.id);
+                    log::error!("笔记本ID: {}", notebook_id);
+                    log::error!("笔记标题: '{}'", note.title);
+                    log::error!("笔记内容前100字符: '{}'", &note.content.chars().take(100).collect::<String>());
+
+                    if error_msg.contains("FOREIGN KEY constraint failed") {
+                        log::error!("外键约束失败 - 笔记本ID '{}' 可能不存在于数据库中", notebook_id);
+                    }
+
+                    e
+                })?
+            }
+            Ok(rows) => {
+                // 更新成功
+                log::debug!("笔记更新成功，影响行数: {}", rows);
+                rows
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                log::error!("执行UPDATE笔记语句失败: {}", error_msg);
+                log::error!("笔记ID: {}", note.id);
+                log::error!("笔记本ID: {}", notebook_id);
+
+                if error_msg.contains("FOREIGN KEY constraint failed") {
+                    log::error!("外键约束失败 - 笔记本ID '{}' 可能不存在于数据库中", notebook_id);
+                }
+
+                return Err(Box::new(e));
+            }
+        };
         log::debug!("笔记主体数据保存完成，影响行数: {}", rows_affected);
 
         // Delete existing tag associations
@@ -350,7 +429,16 @@ impl DbStorageManager {
 
         // 强制同步到磁盘，确保数据真正写入
         log::debug!("强制同步数据到磁盘...");
-        conn.execute("PRAGMA wal_checkpoint(FULL)", [])?;
+        // PRAGMA 语句可能返回结果，使用 query 而不是 execute
+        let _checkpoint_result = conn.query_row("PRAGMA wal_checkpoint(FULL)", [], |row| {
+            let busy: i32 = row.get(0).unwrap_or(0);
+            let log_pages: i32 = row.get(1).unwrap_or(0);
+            let checkpointed: i32 = row.get(2).unwrap_or(0);
+            log::debug!("WAL checkpoint结果: busy={}, log_pages={}, checkpointed={}", busy, log_pages, checkpointed);
+            Ok(())
+        }).unwrap_or_else(|e| {
+            log::warn!("WAL checkpoint失败，但不影响数据保存: {}", e);
+        });
 
         log::info!("✅ 笔记 '{}' 成功保存到数据库并同步到磁盘", note.id);
 
@@ -595,6 +683,45 @@ impl DbStorageManager {
         tx.commit()?;
 
         Ok(())
+    }
+
+    /// Get all notes
+    pub fn get_all_notes(&self) -> Result<Vec<Note>, Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+        let mut notes = Vec::new();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, title, content, created_at, updated_at FROM notes ORDER BY updated_at DESC"
+        )?;
+
+        let note_iter = stmt.query_map([], |row| {
+            let created_at_str: String = row.get(3)?;
+            let updated_at_str: String = row.get(4)?;
+
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| rusqlite::Error::InvalidColumnType(3, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&Utc);
+
+            let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
+                .map_err(|e| rusqlite::Error::InvalidColumnType(4, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&Utc);
+
+            Ok(Note {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                content: row.get(2)?,
+                created_at,
+                updated_at,
+                tag_ids: Vec::new(), // Will be loaded separately if needed
+                attachments: Vec::new(), // Will be loaded separately if needed
+            })
+        })?;
+
+        for note in note_iter {
+            notes.push(note?);
+        }
+
+        Ok(notes)
     }
 
     /// Search notes

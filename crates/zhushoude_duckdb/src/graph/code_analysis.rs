@@ -142,41 +142,41 @@ mod tests {
     
     #[tokio::test]
     async fn test_code_graph_analyzer() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        // 使用内存数据库避免文件系统问题
         let config = ZhushoudeConfig {
-            database_path: temp_file.path().to_str().unwrap().to_string(),
+            database_path: ":memory:".to_string(),
             ..Default::default()
         };
-        
+
         let db_manager = Arc::new(DatabaseManager::new(config).await.unwrap());
         let analyzer = CodeGraphAnalyzer::new(db_manager);
-        
+
         let java_code = "public class Test { public void method() {} }";
         let result = analyzer.analyze_code(java_code, &CodeLanguage::Java).await;
         assert!(result.is_ok());
-        
+
         let dependencies = analyzer.find_dependencies("Test").await;
         assert!(dependencies.is_ok());
     }
     
     #[tokio::test]
     async fn test_code_search() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        // 使用内存数据库避免文件系统问题
         let config = ZhushoudeConfig {
-            database_path: temp_file.path().to_str().unwrap().to_string(),
+            database_path: ":memory:".to_string(),
             ..Default::default()
         };
-        
+
         let db_manager = Arc::new(DatabaseManager::new(config).await.unwrap());
         let analyzer = CodeGraphAnalyzer::new(db_manager);
-        
+
         let query = CodeQuery {
             text: "test method".to_string(),
             language: Some(CodeLanguage::Java),
             node_types: vec!["method".to_string()],
             limit: 10,
         };
-        
+
         let result = analyzer.search_code(&query).await;
         assert!(result.is_ok());
     }

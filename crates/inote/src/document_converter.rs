@@ -139,18 +139,64 @@ impl DocumentConverter {
     fn convert_pdf_to_markdown(&self, path: &Path) -> Result<String, ConversionError> {
         use pdf_extract::*;
 
+        // 设置日志级别，减少字体相关的警告输出
+        let original_log_level = log::max_level();
+
         match extract_text(path) {
             Ok(text) => {
                 let mut markdown = String::new();
-                markdown.push_str("# PDF 文档\n\n");
+
+                // Extract title from file name
+                if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    markdown.push_str(&format!("# {}\n\n", file_stem));
+                } else {
+                    markdown.push_str("# PDF 文档\n\n");
+                }
 
                 // Clean up the extracted text and convert to markdown
                 let cleaned_text = self.clean_pdf_text(&text);
-                markdown.push_str(&cleaned_text);
 
+                if cleaned_text.trim().is_empty() {
+                    markdown.push_str("⚠️ PDF文档转换完成，但未能提取到文本内容。\n\n");
+                    markdown.push_str("这可能是由于以下原因：\n");
+                    markdown.push_str("- PDF包含扫描图像而非文本\n");
+                    markdown.push_str("- PDF使用了特殊的字体编码\n");
+                    markdown.push_str("- PDF文档已加密或受保护\n\n");
+                    markdown.push_str(&format!("原始文件路径: {}", path.display()));
+                } else {
+                    markdown.push_str(&cleaned_text);
+                }
+
+                log::info!("PDF文档转换完成: {} -> {} 字符", path.display(), markdown.len());
                 Ok(markdown)
             },
-            Err(e) => Err(ConversionError::ConversionFailed(format!("PDF解析失败: {}", e))),
+            Err(e) => {
+                let error_msg = e.to_string();
+
+                // 对于字体相关的错误，提供更友好的处理
+                if error_msg.contains("unknown glyph") || error_msg.contains(".notdef") || error_msg.contains("font") {
+                    log::warn!("PDF转换遇到字体问题，但尝试继续: {}", error_msg);
+
+                    // 返回一个基本的文档结构，而不是完全失败
+                    let mut markdown = String::new();
+                    if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        markdown.push_str(&format!("# {}\n\n", file_stem));
+                    } else {
+                        markdown.push_str("# PDF 文档\n\n");
+                    }
+
+                    markdown.push_str("⚠️ PDF文档转换时遇到字体问题，无法完全提取文本内容。\n\n");
+                    markdown.push_str("错误详情：\n");
+                    markdown.push_str(&format!("```\n{}\n```\n\n", error_msg));
+                    markdown.push_str(&format!("原始文件路径: {}", path.display()));
+
+                    log::info!("PDF字体问题已处理，返回基本文档结构");
+                    Ok(markdown)
+                } else {
+                    log::error!("PDF解析失败: {}", error_msg);
+                    Err(ConversionError::ConversionFailed(format!("PDF解析失败: {}", e)))
+                }
+            },
         }
     }
 

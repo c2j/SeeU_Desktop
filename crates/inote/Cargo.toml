@@ -20,6 +20,7 @@ walkdir = "2.4.0"
 rand = "0.8.5"
 regex = "1.10.2"
 once_cell = "1.19.0"
+tokio = { version = "1.32.0", features = ["full"] }
 
 # For clipboard support
 arboard = "3.2.1"
@@ -46,3 +47,9 @@ quick-xml = "0.31.0"
 
 # For file dialog
 rfd = "0.14.1"
+
+# Local crates
+zhushoude_duckdb = { path = "../zhushoude_duckdb" }
+
+[dev-dependencies]
+tempfile = "3.8.1"

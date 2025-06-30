@@ -237,6 +237,11 @@ impl SeeUApp {
 
         // Create states
         let mut inote_state = DbINoteState::default();
+
+        // Initialize inote state and semantic search
+        inote_state.initialize();
+        inote_state.initialize_database_async();
+
         let mut isearch_state = ISearchState::default();
         let mut ai_assist_state = aiAssist::initialize();
         let mut itools_state = itools::initialize();
@@ -412,6 +417,9 @@ impl SeeUApp {
 
             log::info!("Background initialization completed");
         });
+
+        // 初始化语义搜索引擎（同步方式，标记为启用）
+        self.inote_state.initialize_semantic_search_sync();
 
         // 启动进度更新定时器
         self.start_progress_timer();
@@ -1345,7 +1353,7 @@ impl SeeUApp {
         let search_results = self.inote_state.get_search_result_notes();
         self.global_search_results.inote_results = search_results.iter()
             .take(5) // Limit to 5 results for Home display
-            .map(|note| {
+            .map(|(note, _search_type)| {
                 // Find notebook name
                 let notebook_name = self.inote_state.notebooks.iter()
                     .find(|nb| nb.note_ids.contains(&note.id))

@@ -175,7 +175,7 @@ fn test_node_type_display() {
     assert_eq!(NodeType::Variable.to_string(), "variable");
     assert_eq!(NodeType::Package.to_string(), "package");
     assert_eq!(NodeType::Interface.to_string(), "interface");
-    assert_eq!(NodeType::Other("enum".to_string()).to_string(), "enum");
+    assert_eq!(NodeType::Other.to_string(), "other");
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn test_edge_type_display() {
     assert_eq!(EdgeType::Implements.to_string(), "implements");
     assert_eq!(EdgeType::Calls.to_string(), "calls");
     assert_eq!(EdgeType::Contains.to_string(), "contains");
-    assert_eq!(EdgeType::Other("uses".to_string()).to_string(), "uses");
+    assert_eq!(EdgeType::Other.to_string(), "other");
 }
 
 #[test]

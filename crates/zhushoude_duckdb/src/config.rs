@@ -116,7 +116,7 @@ impl Default for EmbeddingConfig {
             max_cache_size: 5000,
             vector_dimension: 512,
             enable_chinese_optimization: true,
-            normalize_vectors: true,
+            normalize_vectors: false, // 关闭归一化以保持向量的原始区分度
         }
     }
 }

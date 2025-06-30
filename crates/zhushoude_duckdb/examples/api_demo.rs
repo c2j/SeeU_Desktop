@@ -43,10 +43,10 @@ async fn main() -> Result<()> {
     println!("  - 内存限制: {}MB", config.performance.memory_limit_mb);
     println!();
     
-    // 2. 初始化引擎和API客户端
+    // 2. 初始化数据库和API客户端
     println!("🔧 初始化系统...");
-    let engine = Arc::new(ZhushoudeEngine::new(config).await?);
-    let client = ZhushoudeClient::new(engine);
+    let db = Arc::new(ZhushoudeDB::new(config).await?);
+    let client = ZhushoudeClient::new();
     println!("✅ 系统初始化完成");
     println!();
     

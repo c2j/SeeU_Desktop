@@ -215,8 +215,14 @@ pub enum NodeType {
     Package,
     /// 接口
     Interface,
+    /// 实体（人名、地名、机构等）
+    Entity,
+    /// 概念（技术术语、抽象概念等）
+    Concept,
+    /// 属性（时间、数值等）
+    Attribute,
     /// 其他
-    Other(String),
+    Other,
 }
 
 /// 边类型
@@ -232,8 +238,26 @@ pub enum EdgeType {
     Calls,
     /// 包含关系
     Contains,
+    /// 属于关系
+    BelongsTo,
+    /// 相关关系
+    RelatedTo,
+    /// 位于关系
+    LocatedIn,
+    /// 工作于关系
+    WorksAt,
+    /// 创建关系
+    Creates,
+    /// 使用关系
+    Uses,
+    /// 学习关系
+    Studies,
+    /// 研究关系
+    Researches,
+    /// 时间关系
+    OccursAt,
     /// 其他关系
-    Other(String),
+    Other,
 }
 
 /// 性能统计
@@ -325,7 +349,10 @@ impl std::fmt::Display for NodeType {
             NodeType::Variable => write!(f, "variable"),
             NodeType::Package => write!(f, "package"),
             NodeType::Interface => write!(f, "interface"),
-            NodeType::Other(name) => write!(f, "{}", name),
+            NodeType::Entity => write!(f, "entity"),
+            NodeType::Concept => write!(f, "concept"),
+            NodeType::Attribute => write!(f, "attribute"),
+            NodeType::Other => write!(f, "other"),
         }
     }
 }
@@ -338,7 +365,16 @@ impl std::fmt::Display for EdgeType {
             EdgeType::Implements => write!(f, "implements"),
             EdgeType::Calls => write!(f, "calls"),
             EdgeType::Contains => write!(f, "contains"),
-            EdgeType::Other(name) => write!(f, "{}", name),
+            EdgeType::BelongsTo => write!(f, "belongs_to"),
+            EdgeType::RelatedTo => write!(f, "related_to"),
+            EdgeType::LocatedIn => write!(f, "located_in"),
+            EdgeType::WorksAt => write!(f, "works_at"),
+            EdgeType::Creates => write!(f, "creates"),
+            EdgeType::Uses => write!(f, "uses"),
+            EdgeType::Studies => write!(f, "studies"),
+            EdgeType::Researches => write!(f, "researches"),
+            EdgeType::OccursAt => write!(f, "occurs_at"),
+            EdgeType::Other => write!(f, "other"),
         }
     }
 }

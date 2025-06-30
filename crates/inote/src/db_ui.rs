@@ -220,8 +220,6 @@ pub fn render_tag_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
 pub fn render_note_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
     // If we're searching, show search results instead of notebook notes
     if state.is_searching {
-        log::info!("Rendering search results. Query: '{}', Results: {}",
-            state.search_query, state.search_results.len());
         render_search_results(ui, state);
         return;
     }
@@ -302,6 +300,18 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
         // 显示结果数量
         let result_count = state.search_results.len();
         ui.label(format!("(找到 {} 条结果)", result_count));
+
+        // 如果语义搜索可用，显示切换按钮和选项
+        if state.semantic_search_enabled {
+            ui.separator();
+
+            // 默认使用语义搜索的复选框
+            ui.checkbox(&mut state.use_semantic_search_by_default, "默认语义搜索");
+
+            if state.use_semantic_search_by_default {
+                ui.label("💡 启用后，搜索将自动使用语义理解，结果会显示🧠图标");
+            }
+        }
     });
 
     // 添加一个明显的返回按钮
@@ -317,32 +327,47 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
     let search_results = state.get_search_result_notes();
     let current_note = state.current_note.clone();
 
-    // Create a list of note IDs, titles, and notebook names for rendering
-    let result_data: Vec<(String, String, String)> = search_results.iter()
-        .map(|note| {
+    // Create a list of note IDs, titles, notebook names, and search types for rendering
+    let result_data: Vec<(String, String, String, crate::db_state::SearchResultType)> = search_results.iter()
+        .map(|(note, search_type)| {
             // Find which notebook this note belongs to
             let notebook_name = state.notebooks.iter()
                 .find(|nb| nb.note_ids.contains(&note.id))
                 .map(|nb| nb.name.clone())
                 .unwrap_or_else(|| "未知笔记本".to_string());
 
-            (note.id.clone(), note.title.clone(), notebook_name)
+            (note.id.clone(), note.title.clone(), notebook_name, search_type.clone())
         })
         .collect();
 
     let has_results = !result_data.is_empty();
 
     egui::ScrollArea::vertical().id_source("db_search_results_scroll").show(ui, |ui| {
-        for (note_id, title, notebook_name) in result_data {
+        for (note_id, title, notebook_name, search_type) in result_data {
             let is_selected = current_note.as_ref().map_or(false, |id| id == &note_id);
 
             ui.horizontal(|ui| {
+                // Add search type icon
+                let search_icon = match search_type {
+                    crate::db_state::SearchResultType::Semantic => "🧠",
+                    crate::db_state::SearchResultType::Database => "🗄️",
+                    crate::db_state::SearchResultType::Hybrid => "🔄",
+                };
+
                 let truncated_title = crate::truncate_note_title(&title);
-                if ui.selectable_label(is_selected, format!("📝 {}", truncated_title)).clicked() {
+                if ui.selectable_label(is_selected, format!("{} 📝 {}", search_icon, truncated_title)).clicked() {
                     state.select_note(&note_id);
                 }
 
                 ui.label(format!("({})", notebook_name));
+
+                // Add tooltip to explain the search type
+                let tooltip_text = match search_type {
+                    crate::db_state::SearchResultType::Semantic => "语义搜索结果",
+                    crate::db_state::SearchResultType::Database => "数据库搜索结果",
+                    crate::db_state::SearchResultType::Hybrid => "混合搜索结果",
+                };
+                ui.label(search_icon).on_hover_text(tooltip_text);
             });
         }
 
@@ -1099,3 +1124,4 @@ fn is_cjk_char(c: char) -> bool {
     (c >= '\u{3200}' && c <= '\u{32FF}') ||  // 带圈 CJK 字母和月份
     (c >= '\u{FE10}' && c <= '\u{FE1F}')     // 竖排形式
 }
+

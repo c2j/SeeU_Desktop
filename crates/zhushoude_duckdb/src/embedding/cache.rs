@@ -1,43 +1,106 @@
 //! 缓存管理模块
 
 use crate::types::CacheStats;
-use lru::LruCache;
-use std::num::NonZeroUsize;
-use std::sync::{atomic::{AtomicU64, Ordering}, RwLock};
+use dashmap::DashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 向量缓存
+/// 缓存项
+#[derive(Clone)]
+struct CacheItem {
+    vector: Vec<f32>,
+    timestamp: u64,
+    access_count: u64,
+}
+
+/// 高性能向量缓存
 pub struct EmbeddingCache {
-    cache: RwLock<LruCache<String, Vec<f32>>>,
+    cache: DashMap<String, CacheItem>,
     hit_count: AtomicU64,
     miss_count: AtomicU64,
+    max_size: usize,
 }
 
 impl EmbeddingCache {
     /// 创建新的缓存
     pub fn new(capacity: usize) -> Self {
         Self {
-            cache: RwLock::new(LruCache::new(NonZeroUsize::new(capacity).unwrap())),
+            cache: DashMap::new(),
             hit_count: AtomicU64::new(0),
             miss_count: AtomicU64::new(0),
+            max_size: capacity,
         }
     }
-    
+
     /// 获取缓存值
     pub async fn get(&self, key: &str) -> Option<Vec<f32>> {
-        let mut cache = self.cache.write().unwrap();
-        if let Some(value) = cache.get(key) {
+        if let Some(mut item) = self.cache.get_mut(key) {
+            // 更新访问统计
+            item.access_count += 1;
+            item.timestamp = Self::current_timestamp();
+
             self.hit_count.fetch_add(1, Ordering::Relaxed);
-            Some(value.clone())
+            Some(item.vector.clone())
         } else {
             self.miss_count.fetch_add(1, Ordering::Relaxed);
             None
         }
     }
-    
+
     /// 插入缓存值
     pub async fn insert(&self, key: String, value: Vec<f32>) {
-        let mut cache = self.cache.write().unwrap();
-        cache.put(key, value);
+        // 检查是否需要清理缓存
+        if self.cache.len() >= self.max_size {
+            self.evict_old_entries().await;
+        }
+
+        let item = CacheItem {
+            vector: value,
+            timestamp: Self::current_timestamp(),
+            access_count: 1,
+        };
+
+        self.cache.insert(key, item);
+    }
+
+    /// 清理旧的缓存项
+    async fn evict_old_entries(&self) {
+        let target_size = self.max_size * 3 / 4; // 清理到75%容量
+
+        if self.cache.len() <= target_size {
+            return;
+        }
+
+        // 收集所有项目的键和时间戳
+        let mut items: Vec<(String, u64, u64)> = self.cache
+            .iter()
+            .map(|entry| {
+                let key = entry.key().clone();
+                let item = entry.value();
+                (key, item.timestamp, item.access_count)
+            })
+            .collect();
+
+        // 按访问频率和时间排序（LFU + LRU）
+        items.sort_by(|a, b| {
+            let score_a = a.2 as f64 / (Self::current_timestamp() - a.1 + 1) as f64;
+            let score_b = b.2 as f64 / (Self::current_timestamp() - b.1 + 1) as f64;
+            score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // 删除评分最低的项目
+        let to_remove = self.cache.len() - target_size;
+        for (key, _, _) in items.iter().take(to_remove) {
+            self.cache.remove(key);
+        }
+    }
+
+    /// 获取当前时间戳
+    fn current_timestamp() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
     
     /// 获取缓存统计
@@ -45,22 +108,32 @@ impl EmbeddingCache {
         let hits = self.hit_count.load(Ordering::Relaxed);
         let misses = self.miss_count.load(Ordering::Relaxed);
         let total = hits + misses;
-        let cache = self.cache.read().unwrap();
-        
+
         CacheStats {
             hits,
             misses,
             hit_rate: if total > 0 { hits as f64 / total as f64 } else { 0.0 },
-            size: cache.len(),
+            size: self.cache.len(),
         }
     }
-    
+
     /// 清空缓存
     pub fn clear(&self) {
-        let mut cache = self.cache.write().unwrap();
-        cache.clear();
+        self.cache.clear();
         self.hit_count.store(0, Ordering::Relaxed);
         self.miss_count.store(0, Ordering::Relaxed);
+    }
+
+    /// 获取缓存使用的内存大小（估算）
+    pub fn memory_usage_bytes(&self) -> usize {
+        let item_count = self.cache.len();
+        let avg_vector_size = 512; // BGE模型的向量维度
+        let vector_memory = item_count * avg_vector_size * std::mem::size_of::<f32>();
+        let metadata_memory = item_count * (
+            std::mem::size_of::<String>() +
+            std::mem::size_of::<CacheItem>()
+        );
+        vector_memory + metadata_memory
     }
 }
 

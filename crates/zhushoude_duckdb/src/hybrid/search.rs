@@ -247,12 +247,12 @@ mod tests {
     
     #[tokio::test]
     async fn test_hybrid_search_engine() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        // 使用内存数据库避免文件系统问题
         let config = ZhushoudeConfig {
-            database_path: temp_file.path().to_str().unwrap().to_string(),
+            database_path: ":memory:".to_string(),
             ..Default::default()
         };
-        
+
         let db_manager = Arc::new(crate::DatabaseManager::new(config).await.unwrap());
         let embedding_engine = Arc::new(crate::EmbeddingEngine::new(EmbeddingConfig::default()).await.unwrap());
         let semantic_engine = Arc::new(SemanticSearchEngine::new(db_manager.clone(), embedding_engine));
@@ -282,12 +282,12 @@ mod tests {
     
     #[test]
     fn test_rrf_calculation() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        // 使用内存数据库避免文件系统问题
         let config = ZhushoudeConfig {
-            database_path: temp_file.path().to_str().unwrap().to_string(),
+            database_path: ":memory:".to_string(),
             ..Default::default()
         };
-        
+
         // 这里需要异步运行时来创建依赖项
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
