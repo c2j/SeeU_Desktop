@@ -110,3 +110,14 @@ $RECYCLE.BIN/
 .parcel-cache/
 .eslintcache
 .stylelintcache
+
+/models/
+crates/zhushoude_duckdb/models
+/semantic_search.db
+/semantic_search.db.wal
+/zhushoude.db
+/zhushoude.db.wal
+/crates/zhushoude_duckdb/semantic_search.db
+/crates/zhushoude_duckdb/semantic_search.db.wal
+/crates/zhushoude_duckdb/zhushoude.db
+/crates/zhushoude_duckdb/zhushoude.db.wal
