@@ -1,4 +1,6 @@
-use iterminal::initialize;
+use iterminal::{initialize, ITerminalState, TerminalConfig, TerminalSession, OutputLine, LineType};
+use uuid::Uuid;
+use chrono::Utc;
 
 #[test]
 fn test_terminal_initialization() {
@@ -199,4 +201,200 @@ fn test_help_command() {
         assert!(output_text.contains("系统信息"));
         assert!(output_text.contains("安全说明"));
     }
+}
+
+#[test]
+fn test_terminal_config_creation() {
+    let config = TerminalConfig::default();
+
+    assert_eq!(config.font_family, "Source Code Pro");
+    assert_eq!(config.font_size, 14.0);
+    assert_eq!(config.scrollback_lines, 10000);
+    assert!(!config.enable_bell);
+    assert_eq!(config.cursor_blink_rate, 500);
+    assert_eq!(config.tab_width, 4);
+    assert!(config.auto_scroll);
+    assert!(config.show_line_numbers);
+}
+
+#[test]
+fn test_terminal_config_modification() {
+    let mut config = TerminalConfig::default();
+
+    // 修改配置
+    config.font_family = "Monaco".to_string();
+    config.font_size = 16.0;
+    config.scrollback_lines = 5000;
+    config.enable_bell = true;
+    config.cursor_blink_rate = 1000;
+    config.tab_width = 8;
+    config.auto_scroll = false;
+    config.show_line_numbers = false;
+
+    // 验证修改
+    assert_eq!(config.font_family, "Monaco");
+    assert_eq!(config.font_size, 16.0);
+    assert_eq!(config.scrollback_lines, 5000);
+    assert!(config.enable_bell);
+    assert_eq!(config.cursor_blink_rate, 1000);
+    assert_eq!(config.tab_width, 8);
+    assert!(!config.auto_scroll);
+    assert!(!config.show_line_numbers);
+}
+
+#[test]
+fn test_terminal_session_creation() {
+    let session = TerminalSession::new(Some("Test Session".to_string()));
+
+    assert!(!session.id.to_string().is_empty());
+    assert_eq!(session.name, "Test Session");
+    assert!(session.output_buffer.is_empty());
+    assert!(session.command_history.is_empty());
+    assert_eq!(session.current_directory, std::env::current_dir().unwrap());
+    assert!(session.created_at <= Utc::now());
+    assert!(session.is_active);
+}
+
+#[test]
+fn test_terminal_session_default_name() {
+    let session = TerminalSession::new(None);
+
+    assert!(session.name.starts_with("会话"));
+    assert!(session.is_active);
+}
+
+#[test]
+fn test_output_line_creation() {
+    let line = OutputLine {
+        content: "Hello, Terminal!".to_string(),
+        line_type: LineType::Output,
+        timestamp: Utc::now(),
+    };
+
+    assert_eq!(line.content, "Hello, Terminal!");
+    assert_eq!(line.line_type, LineType::Output);
+    assert!(line.timestamp <= Utc::now());
+}
+
+#[test]
+fn test_line_type_variants() {
+    // 测试所有行类型变体
+    assert_eq!(LineType::Input, LineType::Input);
+    assert_eq!(LineType::Output, LineType::Output);
+    assert_eq!(LineType::Error, LineType::Error);
+    assert_eq!(LineType::System, LineType::System);
+
+    // 测试不同类型不相等
+    assert_ne!(LineType::Input, LineType::Output);
+    assert_ne!(LineType::Error, LineType::System);
+}
+
+#[test]
+fn test_session_command_history() {
+    let mut session = TerminalSession::new(Some("History Test".to_string()));
+
+    // 添加命令到历史
+    session.add_to_history("ls -la".to_string());
+    session.add_to_history("pwd".to_string());
+    session.add_to_history("echo hello".to_string());
+
+    assert_eq!(session.command_history.len(), 3);
+    assert_eq!(session.command_history[0], "ls -la");
+    assert_eq!(session.command_history[1], "pwd");
+    assert_eq!(session.command_history[2], "echo hello");
+}
+
+#[test]
+fn test_session_output_buffer() {
+    let mut session = TerminalSession::new(Some("Output Test".to_string()));
+
+    // 添加输出行
+    session.add_output_line("Command executed".to_string(), LineType::Output);
+    session.add_output_line("Error occurred".to_string(), LineType::Error);
+    session.add_output_line("System message".to_string(), LineType::System);
+
+    assert_eq!(session.output_buffer.len(), 3);
+    assert_eq!(session.output_buffer[0].content, "Command executed");
+    assert_eq!(session.output_buffer[0].line_type, LineType::Output);
+    assert_eq!(session.output_buffer[1].content, "Error occurred");
+    assert_eq!(session.output_buffer[1].line_type, LineType::Error);
+    assert_eq!(session.output_buffer[2].content, "System message");
+    assert_eq!(session.output_buffer[2].line_type, LineType::System);
+}
+
+#[test]
+fn test_session_directory_management() {
+    let mut session = TerminalSession::new(Some("Directory Test".to_string()));
+    let original_dir = session.current_directory.clone();
+
+    // 测试目录设置
+    let new_dir = std::path::PathBuf::from("/tmp");
+    session.set_current_directory(new_dir.clone());
+    assert_eq!(session.current_directory, new_dir);
+
+    // 恢复原始目录
+    session.set_current_directory(original_dir.clone());
+    assert_eq!(session.current_directory, original_dir);
+}
+
+#[test]
+fn test_session_active_state() {
+    let mut session = TerminalSession::new(Some("Active Test".to_string()));
+
+    assert!(session.is_active);
+
+    session.set_active(false);
+    assert!(!session.is_active);
+
+    session.set_active(true);
+    assert!(session.is_active);
+}
+
+#[test]
+fn test_multiple_sessions_management() {
+    let mut state = initialize();
+
+    // 创建多个会话
+    let session1_id = state.create_session(Some("Session 1".to_string()));
+    let session2_id = state.create_session(Some("Session 2".to_string()));
+    let session3_id = state.create_session(Some("Session 3".to_string()));
+
+    assert_eq!(state.session_count(), 4); // 默认 + 3个新会话
+
+    // 测试会话切换
+    assert!(state.set_active_session(session1_id));
+    assert!(state.set_active_session(session2_id));
+    assert!(state.set_active_session(session3_id));
+
+    // 测试获取会话信息
+    if let Some(session) = state.get_session(session1_id) {
+        assert_eq!(session.name, "Session 1");
+    } else {
+        panic!("Session 1 should exist");
+    }
+
+    // 测试关闭会话
+    assert!(state.close_session(session2_id));
+    assert_eq!(state.session_count(), 3);
+
+    // 确认会话已被删除
+    assert!(state.get_session(session2_id).is_none());
+}
+
+#[test]
+fn test_command_validation() {
+    let mut state = initialize();
+
+    // 测试有效命令
+    assert!(state.is_command_safe("ls"));
+    assert!(state.is_command_safe("pwd"));
+    assert!(state.is_command_safe("echo hello"));
+    assert!(state.is_command_safe("date"));
+    assert!(state.is_command_safe("whoami"));
+
+    // 测试可能不安全的命令（根据实现可能会被阻止）
+    // 注意：这些测试取决于具体的安全策略实现
+    assert!(!state.is_command_safe("rm -rf /"));
+    assert!(!state.is_command_safe("sudo rm"));
+    assert!(!state.is_command_safe("chmod 777"));
 }

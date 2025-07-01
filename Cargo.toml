@@ -58,6 +58,10 @@ notify = "6.1.1"
 # For file indexing
 tantivy = "0.19.0"
 
+# For regex and file walking (used in examples)
+regex = "1.10.0"
+walkdir = "2.4.0"
+
 # Local crates
 inote = { path = "crates/inote" }
 isearch = { path = "crates/isearch" }
