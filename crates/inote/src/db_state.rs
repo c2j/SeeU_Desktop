@@ -384,7 +384,18 @@ impl DbINoteState {
                     match storage.save_note(&note, &notebook_id) {
                         Ok(_) => {
                             let note_id = note.id.clone();
+
+                            // 更新内存中的笔记
                             self.notes.insert(note_id.clone(), note);
+
+                            // 更新笔记本的note_ids
+                            self.notebooks[notebook_idx].add_note(note_id.clone());
+
+                            // 保存更新后的笔记本到数据库
+                            if let Err(e) = storage.save_notebook(&self.notebooks[notebook_idx]) {
+                                log::warn!("保存更新后的笔记本失败: {}", e);
+                            }
+
                             log::info!("Created new note: {}", title);
                             return Some(note_id);
                         }
@@ -472,13 +483,23 @@ impl DbINoteState {
     }
 
     /// Load notes for notebook
-    pub fn load_notes_for_notebook(&mut self, notebook_id: &str) {
+    pub fn load_notes_for_notebook(&mut self, notebook_id: &str) -> Result<(), String> {
         if let Ok(storage) = self.storage.lock() {
-            if let Ok(notes) = storage.get_notes_for_notebook(notebook_id) {
-                for note in notes {
-                    self.notes.insert(note.id.clone(), note);
+            match storage.get_notes_for_notebook(notebook_id) {
+                Ok(notes) => {
+                    log::debug!("重新加载笔记本 {} 的 {} 个笔记", notebook_id, notes.len());
+                    for note in notes {
+                        self.notes.insert(note.id.clone(), note);
+                    }
+                    Ok(())
+                },
+                Err(e) => {
+                    log::error!("从数据库加载笔记本笔记失败: {}", e);
+                    Err(format!("从数据库加载笔记本笔记失败: {}", e))
                 }
             }
+        } else {
+            Err("无法获取数据库连接".to_string())
         }
     }
 
@@ -510,9 +531,38 @@ impl DbINoteState {
 
     /// Delete note
     pub fn delete_note(&mut self, note_id: &str) {
+        // 从所有笔记本中移除该笔记
+        for notebook in &mut self.notebooks {
+            if notebook.note_ids.contains(&note_id.to_string()) {
+                notebook.remove_note(note_id);
+
+                // 保存更新后的笔记本到数据库
+                if let Ok(storage) = self.storage.lock() {
+                    if let Err(e) = storage.save_notebook(notebook) {
+                        log::warn!("保存更新后的笔记本失败: {}", e);
+                    }
+                }
+            }
+        }
+
+        // 从内存中移除笔记
         self.notes.remove(note_id);
+
+        // 从数据库中删除笔记
         if let Ok(storage) = self.storage.lock() {
-            let _ = storage.delete_note(note_id);
+            if let Err(e) = storage.delete_note(note_id) {
+                log::error!("从数据库删除笔记失败: {}", e);
+            }
+        }
+
+        // 如果当前选中的是被删除的笔记，清除选择
+        if self.current_note.as_ref().map_or(false, |id| id == note_id) {
+            self.current_note = None;
+            self.note_title.clear();
+            self.note_content.clear();
+            self.last_saved_title.clear();
+            self.last_saved_content.clear();
+            self.save_status = SaveStatus::Saved;
         }
     }
 
@@ -726,21 +776,110 @@ impl DbINoteState {
 
     /// Import document as note
     pub fn import_document_as_note(&mut self, file_path: &str, selected_notebook_id: &str) -> Result<String, String> {
-        // Implementation for importing document as note
-        // For now, create a simple note
-        let title = std::path::Path::new(file_path)
+        log::info!("开始导入文档: {}", file_path);
+
+        // 检查文件是否存在
+        let path = std::path::Path::new(file_path);
+        if !path.exists() {
+            return Err(format!("文件不存在: {}", file_path));
+        }
+
+        // 检查文件格式是否支持
+        if !DocumentConverter::is_supported_format(file_path) {
+            return Err(format!("不支持的文件格式: {}", file_path));
+        }
+
+        // 提取文件名作为标题
+        let title = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Imported Document")
             .to_string();
 
-        let content = format!("Imported from: {}", file_path);
+        // 使用文档转换器转换文档内容
+        let content = match self.document_converter.convert_to_markdown(file_path) {
+            Ok(markdown_content) => {
+                log::info!("成功转换文档为Markdown格式: {}", file_path);
+                markdown_content
+            },
+            Err(e) => {
+                log::error!("文档转换失败: {}", e);
+                // 如果转换失败，创建一个包含错误信息的内容
+                format!("# {}\n\n⚠️ 文档导入失败\n\n**原始文件路径**: {}\n\n**错误信息**: {}\n\n---\n\n*请检查文件格式是否正确，或尝试重新导入。*",
+                    title, file_path, e)
+            }
+        };
 
-        if let Some(note_id) = self.create_note(title, content) {
-            Ok(note_id)
+        // 创建笔记
+        let note = Note {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: title.clone(),
+            content: content.clone(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            tag_ids: Vec::new(),
+            attachments: Vec::new(),
+        };
+
+        // 保存到数据库
+        let result = if let Ok(storage) = self.storage.lock() {
+            match storage.save_note(&note, selected_notebook_id) {
+                Ok(_) => {
+                    let note_id = note.id.clone();
+
+                    // 验证保存是否成功
+                    match storage.load_note(&note_id) {
+                        Ok(saved_note) => {
+                            log::info!("文档导入成功，笔记ID: {}", note_id);
+
+                            // 更新内存状态
+                            self.notes.insert(note_id.clone(), saved_note);
+
+                            Ok(note_id)
+                        },
+                        Err(e) => {
+                            log::error!("验证保存的笔记失败: {}", e);
+                            Err(format!("保存验证失败: {}", e))
+                        }
+                    }
+                },
+                Err(e) => {
+                    log::error!("保存笔记到数据库失败: {}", e);
+                    Err(format!("保存失败: {}", e))
+                }
+            }
         } else {
-            Err("Failed to create note".to_string())
+            Err("无法获取数据库连接".to_string())
+        };
+
+        // 在释放锁之后更新笔记本的note_ids并重新加载笔记列表以确保一致性
+        if let Ok(note_id) = &result {
+            // 找到对应的笔记本并更新其note_ids
+            if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == selected_notebook_id) {
+                if !notebook.note_ids.contains(note_id) {
+                    notebook.add_note(note_id.clone());
+                    log::debug!("已将笔记 {} 添加到笔记本 {} 的note_ids中", note_id, selected_notebook_id);
+
+                    // 保存更新后的笔记本到数据库
+                    if let Ok(storage) = self.storage.lock() {
+                        if let Err(e) = storage.save_notebook(notebook) {
+                            log::warn!("保存更新后的笔记本失败: {}", e);
+                        } else {
+                            log::debug!("成功保存更新后的笔记本到数据库");
+                        }
+                    }
+                }
+            } else {
+                log::warn!("未找到ID为 {} 的笔记本", selected_notebook_id);
+            }
+
+            // 重新加载笔记本的笔记列表以确保一致性
+            if let Err(e) = self.load_notes_for_notebook(selected_notebook_id) {
+                log::warn!("重新加载笔记本笔记列表失败: {}", e);
+            }
         }
+
+        result
     }
 
     /// Get recent notes
