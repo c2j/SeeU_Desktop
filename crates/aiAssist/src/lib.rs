@@ -4,6 +4,7 @@ pub mod models;
 pub mod api;
 pub mod mcp_tools;
 pub mod mcp_integration;
+pub mod settings_ui;
 
 
 
@@ -28,6 +29,11 @@ pub fn initialize() -> AIAssistState {
     }
 
     state
+}
+
+/// Create a settings module for AI assistant
+pub fn create_settings_module(state: &mut AIAssistState) -> settings_ui::AIAssistSettingsModule {
+    settings_ui::AIAssistSettingsModule::new(state)
 }
 
 /// Set the slash command callback

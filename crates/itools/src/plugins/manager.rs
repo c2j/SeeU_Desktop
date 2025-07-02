@@ -559,6 +559,18 @@ impl PluginManager {
     pub fn get_marketplace_mut(&mut self) -> &mut PluginMarketplace {
         &mut self.marketplace
     }
+
+    /// Get count of installed plugins
+    pub fn get_installed_count(&self) -> usize {
+        self.plugins.len()
+    }
+
+    /// Get count of active plugins
+    pub fn get_active_count(&self) -> usize {
+        self.plugins.values()
+            .filter(|plugin| matches!(plugin.status, PluginStatus::Enabled))
+            .count()
+    }
 }
 
 impl Default for PluginManager {

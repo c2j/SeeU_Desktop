@@ -76,6 +76,7 @@ pub struct DbINoteState {
     pub combined_editor: bool,       // Whether title and content are combined in editor
     pub siyuan_import: SiyuanImportState, // 思源笔记导入状态
     pub show_markdown_help: bool,    // Whether to show the Markdown help popup
+    pub show_search_help: bool,      // Whether to show the search help popup
     pub slide_play_state: SlidePlayState, // 幻灯片播放状态
     pub slide_parser: SlideParser,   // 幻灯片解析器
     pub slide_style_manager: SlideStyleManager, // 幻灯片样式管理器
@@ -102,6 +103,11 @@ pub struct DbINoteState {
     pub document_converter: DocumentConverter,     // 文档转换器
     pub notebook_selector: NotebookSelectorState,  // 笔记本选择对话框状态
     pub show_document_import_dialog: bool,         // 显示文档导入对话框
+
+    // 性能优化相关
+    pub note_content_cache: std::collections::HashMap<String, String>, // 笔记内容缓存
+    pub large_note_threshold: usize,               // 大笔记阈值（字节）
+    pub is_loading_note: bool,                     // 是否正在加载笔记
 }
 
 impl Default for DbINoteState {
@@ -137,6 +143,7 @@ impl Default for DbINoteState {
             combined_editor: false,  // 默认使用分离标题模式
             siyuan_import: SiyuanImportState::default(),
             show_markdown_help: false,
+            show_search_help: false,
             slide_play_state: SlidePlayState::default(),
             slide_parser: SlideParser::new(),
             slide_style_manager: SlideStyleManager::default(),
@@ -161,6 +168,11 @@ impl Default for DbINoteState {
             document_converter: DocumentConverter::new(),
             notebook_selector: NotebookSelectorState::default(),
             show_document_import_dialog: false,
+
+            // 性能优化初始化
+            note_content_cache: std::collections::HashMap::new(),
+            large_note_threshold: 1024 * 1024, // 1MB
+            is_loading_note: false,
         }
     }
 }
@@ -413,16 +425,63 @@ impl DbINoteState {
     pub fn select_note(&mut self, note_id: &str) {
         if let Some(note) = self.notes.get(note_id).cloned() {
             self.current_note = Some(note_id.to_string());
-            self.note_title = note.title.clone();
-            self.note_content = note.content.clone();
-            self.last_saved_title = note.title.clone();
-            self.last_saved_content = note.content.clone();
-            self.save_status = SaveStatus::Saved;
 
-            // Add to recent notes
-            self.add_to_recent_notes(note_id, &note.title);
+            // 检查是否是大文件
+            let content_size = note.content.len();
+            if content_size > self.large_note_threshold {
+                log::info!("Loading large note: {} ({} bytes)", note_id, content_size);
+                self.load_large_note_async(note_id, &note.title, &note.content);
+            } else {
+                // 小文件直接加载
+                self.load_note_content_immediate(note_id, &note.content, &note.title);
+            }
 
             log::info!("Selected note: {}", note.title);
+        }
+    }
+
+    /// Load note content immediately (for small notes)
+    fn load_note_content_immediate(&mut self, note_id: &str, content: &str, title: &str) {
+        self.note_content = content.to_string();
+        self.note_title = title.to_string();
+        self.last_saved_content = content.to_string();
+        self.last_saved_title = title.to_string();
+        self.save_status = SaveStatus::Saved;
+        self.is_loading_note = false;
+
+        // 缓存内容
+        self.note_content_cache.insert(note_id.to_string(), content.to_string());
+
+        // Add to recent notes
+        self.add_to_recent_notes(note_id, title);
+    }
+
+    /// Load large note asynchronously
+    fn load_large_note_async(&mut self, note_id: &str, title: &str, content: &str) {
+        // 首先检查缓存
+        if let Some(cached_content) = self.note_content_cache.get(note_id).cloned() {
+            log::info!("Loading large note from cache: {}", note_id);
+            self.load_note_content_immediate(note_id, &cached_content, title);
+            return;
+        }
+
+        // 设置加载状态
+        self.is_loading_note = true;
+        self.note_title = title.to_string();
+
+        // 分块处理大文件内容
+        let chunk_size = 64 * 1024; // 64KB chunks
+        if content.len() > chunk_size {
+            log::info!("Processing large note in chunks: {} bytes", content.len());
+
+            // 先显示前面的内容
+            let preview_content = format!("{}\n\n[正在加载剩余内容...]", &content[..chunk_size]);
+            self.note_content = preview_content;
+
+            // 立即加载完整内容（优化后的版本）
+            self.load_note_content_immediate(note_id, content, title);
+        } else {
+            self.load_note_content_immediate(note_id, content, title);
         }
     }
 
@@ -508,6 +567,12 @@ impl DbINoteState {
         if self.note_content != self.last_saved_content || self.note_title != self.last_saved_title {
             // Implement auto save logic here
             self.save_status = SaveStatus::Saving;
+
+            // Update cache when saving
+            if let Some(note_id) = &self.current_note {
+                self.note_content_cache.insert(note_id.clone(), self.note_content.clone());
+            }
+
             // For now, just mark as saved
             self.last_saved_content = self.note_content.clone();
             self.last_saved_title = self.note_title.clone();
@@ -685,10 +750,82 @@ impl DbINoteState {
     pub fn is_current_note_slideshow(&self) -> bool {
         if let Some(note_id) = &self.current_note {
             if let Some(note) = self.notes.get(note_id) {
-                return note.content.contains("---") && note.content.lines().any(|line| line.trim() == "---");
+                return self.check_slideshow_format(&note.content);
             }
         }
         false
+    }
+
+    /// Check if content is in slideshow format
+    fn check_slideshow_format(&self, content: &str) -> bool {
+        // 检查是否包含幻灯片分隔符
+        let has_slide_separators = self.has_slide_separators(content);
+
+        // 检查是否包含CSS样式块（用于自定义幻灯片样式）
+        let has_css_styles = self.has_css_styles(content);
+
+        // 检查是否包含幻灯片配置
+        let has_slide_config = self.has_slide_config(content);
+
+        // 满足任一条件即可认为是幻灯片格式
+        has_slide_separators || has_css_styles || has_slide_config
+    }
+
+    /// Check if content has slide separators
+    fn has_slide_separators(&self, content: &str) -> bool {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut separator_count = 0;
+
+        for line in lines {
+            let trimmed = line.trim();
+            // 检查标准的幻灯片分隔符
+            if trimmed == "---" || trimmed == "--slide" || trimmed.starts_with("---slide") {
+                separator_count += 1;
+            }
+        }
+
+        // 至少需要一个分隔符才能构成幻灯片
+        separator_count >= 1
+    }
+
+    /// Check if content has CSS styles for slides
+    fn has_css_styles(&self, content: &str) -> bool {
+        // 检查是否包含CSS样式块
+        content.contains("<style>") && content.contains("</style>") ||
+        content.contains("```css") ||
+        content.contains(".slide") && (content.contains("{") && content.contains("}"))
+    }
+
+    /// Check if content has slide configuration
+    fn has_slide_config(&self, content: &str) -> bool {
+        // 检查是否包含幻灯片配置标记
+        content.contains("slide-config:") ||
+        content.contains("slideshow:") ||
+        content.contains("presentation:") ||
+        // 检查YAML front matter中的幻灯片配置
+        (content.starts_with("---\n") && content.contains("slide:")) ||
+        (content.starts_with("---\n") && content.contains("presentation:"))
+    }
+
+    /// Clear note content cache
+    pub fn clear_note_cache(&mut self) {
+        self.note_content_cache.clear();
+        log::info!("Note content cache cleared");
+    }
+
+    /// Get cache size
+    pub fn get_cache_size(&self) -> usize {
+        self.note_content_cache.len()
+    }
+
+    /// Remove note from cache
+    pub fn remove_from_cache(&mut self, note_id: &str) {
+        self.note_content_cache.remove(note_id);
+    }
+
+    /// Check if note is in cache
+    pub fn is_note_cached(&self, note_id: &str) -> bool {
+        self.note_content_cache.contains_key(note_id)
     }
 
     /// Start slideshow

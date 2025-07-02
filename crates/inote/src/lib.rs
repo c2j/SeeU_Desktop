@@ -22,6 +22,7 @@ pub mod slide;
 pub mod siyuan_import;
 pub mod mcp_server;
 pub mod mcp_sync;
+pub mod settings_ui;
 
 use eframe::egui;
 use notebook::Notebook;
@@ -557,7 +558,7 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                     "搜索语法帮助:\n\n普通搜索: 直接输入关键词\n标签搜索: label:标签名"
                 );
                 if help_button.clicked() {
-                    // 可以在这里添加更详细的帮助对话框
+                    state.show_search_help = true;
                 }
 
                 // 如果正在搜索，显示返回按钮
@@ -952,6 +953,52 @@ fn process_dialogs(ui: &mut egui::Ui, state: &mut DbINoteState) {
         }
     }
 
+    // 显示搜索帮助对话框
+    if state.show_search_help {
+        let mut show_window = state.show_search_help;
+        egui::Window::new("搜索语法帮助")
+            .collapsible(false)
+            .resizable(true)
+            .default_size([450.0, 350.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut show_window)
+            .show(ui.ctx(), |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.heading("搜索语法帮助");
+                    ui.separator();
+
+                    ui.add_space(10.0);
+                    ui.strong("基础搜索");
+                    ui.label("• 直接输入关键词进行全文搜索");
+                    ui.label("• 支持中文、英文、数字等内容搜索");
+                    ui.label("示例：人工智能、AI、技术");
+
+                    ui.add_space(10.0);
+                    ui.strong("标签搜索");
+                    ui.label("• 使用 label:标签名 搜索特定标签的笔记");
+                    ui.label("• 标签名支持中文和英文");
+                    ui.label("示例：label:工作、label:学习、label:项目");
+
+                    ui.add_space(10.0);
+                    ui.strong("组合搜索");
+                    ui.label("• 可以同时使用关键词和标签搜索");
+                    ui.label("• 多个条件之间用空格分隔");
+                    ui.label("示例：人工智能 label:技术");
+
+                    ui.add_space(10.0);
+                    ui.strong("搜索技巧");
+                    ui.label("• 搜索结果会高亮显示匹配的关键词");
+                    ui.label("• 点击搜索结果可以直接打开对应笔记");
+                    ui.label("• 使用「◀ 返回」按钮可以退出搜索模式");
+                    ui.label("• 支持实时搜索，输入即可看到结果");
+                });
+            });
+
+        if !show_window {
+            state.show_search_help = false;
+        }
+    }
+
     // 显示文档导入对话框
     if state.show_document_import_dialog {
         render_document_import_dialog(ui, state);
@@ -1120,6 +1167,11 @@ pub fn save_settings(state: &DbINoteState) -> Result<(), Box<dyn std::error::Err
 
     log::info!("Note settings saved successfully");
     Ok(())
+}
+
+/// Create a settings module for inote
+pub fn create_settings_module(state: &mut DbINoteState) -> settings_ui::INoteSettingsModule {
+    settings_ui::INoteSettingsModule::new(state)
 }
 
 /// Load note module settings

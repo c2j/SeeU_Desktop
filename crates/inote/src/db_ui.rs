@@ -354,6 +354,14 @@ pub fn render_search_results(ui: &mut egui::Ui, state: &mut DbINoteState) {
 /// Render the note editor
 pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_family: Option<&str>) {
     if let Some(note_id) = state.current_note.clone() {
+        // 显示加载状态
+        if state.is_loading_note {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("正在加载大文件，请稍候...");
+            });
+            ui.separator();
+        }
         // 使用垂直布局，让内容区域自动填充剩余空间
         ui.vertical(|ui| {
             // 顶部工具栏 - 固定高度
@@ -407,9 +415,9 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                 ui.horizontal(|ui| {
                     let slide_button = ui.add_enabled(is_slideshow, egui::Button::new("🎬 播放幻灯片"))
                         .on_hover_text(if is_slideshow {
-                            "以幻灯片模式播放当前笔记\n支持 --slide 分隔符和CSS样式"
+                            "以幻灯片模式播放当前笔记\n\n支持的幻灯片格式：\n• 使用 --- 或 --slide 分隔幻灯片\n• 包含 <style> CSS样式块\n• 包含幻灯片配置标记"
                         } else {
-                            "当前笔记不支持幻灯片模式\n请添加 --slide 分隔符或CSS样式块"
+                            "当前笔记不支持幻灯片模式\n\n要启用幻灯片功能，请添加：\n• 幻灯片分隔符：--- 或 --slide\n• CSS样式块：<style>...</style>\n• 配置标记：slide-config: 或 slideshow:"
                         });
 
                     if slide_button.clicked() && is_slideshow {

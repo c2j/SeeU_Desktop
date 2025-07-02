@@ -4,6 +4,7 @@ pub mod ui;
 pub mod watcher;
 pub mod file_types;
 pub mod utils;
+pub mod settings_ui;
 
 
 
@@ -1334,3 +1335,8 @@ impl ISearchState {
 
 // Re-export UI functions for backward compatibility
 pub use ui::{render_isearch, render_isearch_with_sidebar_info};
+
+/// Create a settings module for isearch
+pub fn create_settings_module(state: &mut ISearchState) -> settings_ui::ISearchSettingsModule {
+    settings_ui::ISearchSettingsModule::new(state)
+}

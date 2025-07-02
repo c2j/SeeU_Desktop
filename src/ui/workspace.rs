@@ -67,7 +67,7 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                             itools::render_itools(ui, &mut app.itools_state);
                         },
                         Module::Settings => {
-                            crate::ui::settings::render_settings(ui, app);
+                            crate::ui::modular_settings::render_modular_settings(ui, app);
 
                             // 在设置页面也需要渲染思源笔记导入对话框
                             inote::db_ui_import::render_siyuan_import_dialog(ui, &mut app.inote_state);

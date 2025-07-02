@@ -43,7 +43,7 @@ pub struct SeeUApp {
     pub ai_assist_state: AIAssistState,
     pub itools_state: IToolsState,
     pub iterminal_state: ITerminalState,
-    pub settings_state: crate::ui::settings::SettingsState,
+    pub modular_settings_state: crate::ui::settings_trait::ModularSettingsState,
 
     // Services
     pub system_service: SystemService,
@@ -274,7 +274,7 @@ impl SeeUApp {
             ai_assist_state,
             itools_state,
             iterminal_state,
-            settings_state: crate::ui::settings::SettingsState::default(),
+            modular_settings_state: crate::ui::settings_trait::ModularSettingsState::default(),
             system_service: SystemService::new(),
             mcp_integration: McpIntegrationManager::new(),
             mcp_sync_service,
@@ -1862,7 +1862,7 @@ impl eframe::App for SeeUApp {
             self.active_module = Module::Settings;
             self.isearch_state.navigate_to_settings = false;
             // Set settings to search category
-            self.settings_state.current_category = crate::ui::settings::SettingsCategory::Search;
+            self.modular_settings_state.selected_category = "search".to_string();
         }
 
         // Top panel - search bar

@@ -4,8 +4,14 @@ pub mod command;
 pub mod history;
 pub mod config;
 pub mod session;
+pub mod settings_ui;
 
 pub use state::ITerminalState;
+
+/// Create a settings module for iterminal
+pub fn create_settings_module(state: &mut ITerminalState) -> settings_ui::ITerminalSettingsModule {
+    settings_ui::ITerminalSettingsModule::new(state)
+}
 
 /// Initialize the iTerminal module
 pub fn initialize() -> ITerminalState {

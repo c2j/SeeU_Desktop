@@ -6,8 +6,14 @@ pub mod mcp;
 pub mod plugins;
 pub mod security;
 pub mod roles;
+pub mod settings_ui;
 
 pub use state::IToolsState;
+
+/// Create a settings module for itools
+pub fn create_settings_module(state: &mut IToolsState) -> settings_ui::IToolsSettingsModule {
+    settings_ui::IToolsSettingsModule::new(state)
+}
 
 /// Initialize the iTools module
 pub fn initialize() -> IToolsState {
