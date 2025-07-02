@@ -510,6 +510,15 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                     state.markdown_preview = !state.markdown_preview;
                 }
 
+                // Markdown 帮助按钮
+                ui.add_space(10.0);
+                let help_button = ui.button("❓")
+                    .on_hover_text("显示 Markdown 格式指引");
+
+                if help_button.clicked() {
+                    state.show_markdown_help = true;
+                }
+
                 // 显示当前笔记标题
                 if let Some(note_id) = &state.current_note {
                     if let Some(note) = state.notes.get(note_id) {

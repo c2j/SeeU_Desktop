@@ -423,6 +423,12 @@ impl DbINoteState {
 
     /// Select a note
     pub fn select_note(&mut self, note_id: &str) {
+        // 在切换笔记前，先保存当前笔记的修改
+        if self.current_note.is_some() && self.save_status == SaveStatus::Modified {
+            log::info!("Saving current note before switching to new note");
+            self.auto_save_if_modified();
+        }
+
         if let Some(note) = self.notes.get(note_id).cloned() {
             self.current_note = Some(note_id.to_string());
 
@@ -565,19 +571,76 @@ impl DbINoteState {
     /// Auto save if modified
     pub fn auto_save_if_modified(&mut self) {
         if self.note_content != self.last_saved_content || self.note_title != self.last_saved_title {
-            // Implement auto save logic here
-            self.save_status = SaveStatus::Saving;
+            if let Some(note_id) = self.current_note.clone() {
+                log::info!("Auto-saving note: {} (title: '{}', content length: {})",
+                          note_id, self.note_title, self.note_content.len());
 
-            // Update cache when saving
-            if let Some(note_id) = &self.current_note {
+                self.save_status = SaveStatus::Saving;
+
+                // 实际保存到数据库
+                let title = self.note_title.clone();
+                let content = self.note_content.clone();
+                self.update_note(&note_id, title, content);
+
+                // Update cache when saving
                 self.note_content_cache.insert(note_id.clone(), self.note_content.clone());
+
+                // 更新保存状态
+                self.last_saved_content = self.note_content.clone();
+                self.last_saved_title = self.note_title.clone();
+                self.save_status = SaveStatus::Saved;
+
+                log::info!("Auto-save completed for note: {}", note_id);
+            } else {
+                log::warn!("Auto-save triggered but no current note selected");
+            }
+        }
+    }
+
+    /// Update a note
+    pub fn update_note(&mut self, note_id: &str, title: String, content: String) {
+        // 先获取笔记本ID，避免借用冲突
+        let notebook_id = self.get_notebook_id_for_note(note_id);
+
+        if let Some(note) = self.notes.get_mut(note_id) {
+            note.title = title;
+            note.content = content;
+            note.updated_at = chrono::Utc::now();
+
+            // 保存到数据库
+            if let Ok(storage) = self.storage.lock() {
+                if let Some(nb_id) = notebook_id {
+                    if let Err(err) = storage.save_note(note, &nb_id) {
+                        log::error!("Failed to save note to database: {}", err);
+                        self.save_status = SaveStatus::Error(err.to_string());
+                        return;
+                    }
+                } else {
+                    log::error!("Cannot find notebook for note: {}", note_id);
+                    self.save_status = SaveStatus::Error("Cannot find notebook for note".to_string());
+                    return;
+                }
+            } else {
+                log::error!("Cannot get database connection");
+                self.save_status = SaveStatus::Error("Cannot get database connection".to_string());
+                return;
             }
 
-            // For now, just mark as saved
-            self.last_saved_content = self.note_content.clone();
-            self.last_saved_title = self.note_title.clone();
-            self.save_status = SaveStatus::Saved;
+            log::debug!("Successfully updated note: {} in database", note_id);
+        } else {
+            log::error!("Note not found in memory: {}", note_id);
+            self.save_status = SaveStatus::Error("Note not found in memory".to_string());
         }
+    }
+
+    /// Get notebook ID for a note
+    fn get_notebook_id_for_note(&self, note_id: &str) -> Option<String> {
+        for notebook in &self.notebooks {
+            if notebook.note_ids.contains(&note_id.to_string()) {
+                return Some(notebook.id.clone());
+            }
+        }
+        None
     }
 
     /// Check if note is modified
@@ -748,16 +811,15 @@ impl DbINoteState {
 
     /// Is current note slideshow
     pub fn is_current_note_slideshow(&self) -> bool {
-        if let Some(note_id) = &self.current_note {
-            if let Some(note) = self.notes.get(note_id) {
-                return self.check_slideshow_format(&note.content);
-            }
+        // 检查当前正在编辑的内容，而不是保存的内容
+        if self.current_note.is_some() {
+            return self.check_slideshow_format(&self.note_content);
         }
         false
     }
 
     /// Check if content is in slideshow format
-    fn check_slideshow_format(&self, content: &str) -> bool {
+    pub fn check_slideshow_format(&self, content: &str) -> bool {
         // 检查是否包含幻灯片分隔符
         let has_slide_separators = self.has_slide_separators(content);
 
@@ -830,14 +892,12 @@ impl DbINoteState {
 
     /// Start slideshow
     pub fn start_slideshow(&mut self) -> Result<(), String> {
-        if let Some(note_id) = &self.current_note {
-            if let Some(note) = self.notes.get(note_id) {
-                // Parse the note content into a slideshow
-                let slideshow = self.slide_parser.parse(&note.content)
-                    .map_err(|e| format!("Failed to parse slideshow: {}", e))?;
-                self.slide_play_state.start_slideshow(slideshow);
-                return Ok(());
-            }
+        if self.current_note.is_some() {
+            // Parse the current editing content into a slideshow
+            let slideshow = self.slide_parser.parse(&self.note_content)
+                .map_err(|e| format!("Failed to parse slideshow: {}", e))?;
+            self.slide_play_state.start_slideshow(slideshow);
+            return Ok(());
         }
         Err("No note selected".to_string())
     }

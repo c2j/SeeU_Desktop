@@ -361,22 +361,53 @@ impl SlideParser {
 
     /// 检测markdown内容是否包含幻灯片标记
     pub fn is_slideshow(&self, content: &str) -> bool {
-        // 检查是否包含 --slide 标记
-        if content.contains("--slide") {
-            return true;
+        // 检查是否包含幻灯片分隔符
+        let has_slide_separators = self.has_slide_separators(content);
+
+        // 检查是否包含CSS样式块（用于自定义幻灯片样式）
+        let has_css_styles = self.has_css_styles(content);
+
+        // 检查是否包含幻灯片配置
+        let has_slide_config = self.has_slide_config(content);
+
+        // 满足任一条件即可认为是幻灯片格式
+        has_slide_separators || has_css_styles || has_slide_config
+    }
+
+    /// Check if content has slide separators
+    fn has_slide_separators(&self, content: &str) -> bool {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut separator_count = 0;
+
+        for line in lines {
+            let trimmed = line.trim();
+            // 检查标准的幻灯片分隔符
+            if trimmed == "---" || trimmed == "--slide" || trimmed.starts_with("---slide") {
+                separator_count += 1;
+            }
         }
-        
-        // 检查是否包含CSS定义（可能是幻灯片样式）
-        if self.css_block.is_match(content) {
-            return true;
-        }
-        
-        // 检查是否包含多个 --- 分隔符（可能是幻灯片分隔）
-        let separator_count = content.lines()
-            .filter(|line| line.trim() == "---")
-            .count();
-        
-        separator_count >= 2
+
+        // 至少需要一个分隔符才能构成幻灯片
+        separator_count >= 1
+    }
+
+    /// Check if content has CSS styles for slides
+    fn has_css_styles(&self, content: &str) -> bool {
+        // 检查是否包含CSS样式块
+        content.contains("<style>") && content.contains("</style>") ||
+        content.contains("```css") ||
+        content.contains(".slide") && (content.contains("{") && content.contains("}"))
+    }
+
+    /// Check if content has slide configuration
+    fn has_slide_config(&self, content: &str) -> bool {
+        // 检查是否包含幻灯片配置标记
+        content.contains("slide-config:") ||
+        content.contains("slideshow:") ||
+        content.contains("presentation:") ||
+        // 检查YAML front matter中的幻灯片配置
+        (content.starts_with("---\n") && content.contains("slide:")) ||
+        (content.starts_with("---\n") && content.contains("presentation:"))
     }
 
     /// 解析markdown内容为幻灯片演示文稿

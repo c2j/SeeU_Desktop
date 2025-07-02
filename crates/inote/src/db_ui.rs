@@ -479,6 +479,15 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                         ui.label("💡 检测到富文本内容");
                     }
                 }
+
+                // Markdown 帮助按钮
+                ui.separator();
+                let help_button = ui.button("❓")
+                    .on_hover_text("显示 Markdown 格式指引");
+
+                if help_button.clicked() {
+                    state.show_markdown_help = true;
+                }
             });
 
             ui.separator();
@@ -746,9 +755,6 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
             // 创建一个标志，用于在窗口关闭时设置状态
             let mut show_window = state.show_markdown_help;
 
-            // 创建一个标志，用于在点击"复制"按钮时记录要复制的内容
-            let mut copy_content = None;
-
             egui::Window::new("Markdown 格式指引")
                 .collapsible(false)
                 .resizable(true)
@@ -790,25 +796,31 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             let heading1_code = "# 一级标题";
                             columns[0].label(heading1_code);
                             columns[1].heading("一级标题");
-                            if columns[2].button("复制").clicked() {
-                                // 记录要复制的内容
-                                copy_content = Some(heading1_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                // 直接插入内容到笔记
+                                state.append_to_note_content(heading1_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", heading1_code);
                             }
 
                             // 示例2
                             let heading2_code = "## 二级标题";
                             columns[0].label(heading2_code);
                             columns[1].heading("二级标题");
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(heading2_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(heading2_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", heading2_code);
                             }
 
                             // 示例3
                             let heading3_code = "### 三级标题";
                             columns[0].label(heading3_code);
                             columns[1].strong("三级标题");
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(heading3_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(heading3_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", heading3_code);
                             }
                         });
 
@@ -820,32 +832,40 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             let bold_code = "**粗体文本**";
                             columns[0].label(bold_code);
                             columns[1].strong("粗体文本");
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(bold_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(bold_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", bold_code);
                             }
 
                             // 斜体
                             let italic_code = "*斜体文本*";
                             columns[0].label(italic_code);
                             columns[1].label(egui::RichText::new("斜体文本").italics());
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(italic_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(italic_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", italic_code);
                             }
 
                             // 代码
                             let code_code = "`代码`";
                             columns[0].label(code_code);
                             columns[1].monospace("代码");
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(code_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(code_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", code_code);
                             }
 
                             // 删除线
                             let strike_code = "~~删除线~~";
                             columns[0].label(strike_code);
                             columns[1].label(egui::RichText::new("删除线").strikethrough());
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(strike_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(strike_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", strike_code);
                             }
                         });
 
@@ -870,8 +890,10 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             });
 
                             // 复制按钮
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(list_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(list_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", list_code);
                             }
 
                             // 有序列表示例
@@ -888,8 +910,10 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             });
 
                             // 复制按钮
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(ordered_list_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(ordered_list_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", ordered_list_code);
                             }
                         });
 
@@ -901,16 +925,20 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             let link_code = "[链接文本](https://example.com)";
                             columns[0].label(link_code);
                             columns[1].hyperlink_to("链接文本", "https://example.com");
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(link_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(link_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", link_code);
                             }
 
                             // 图片示例
                             let image_code = "![图片描述](图片URL)";
                             columns[0].label(image_code);
                             columns[1].label("图片将在此显示");
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(image_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(image_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", image_code);
                             }
                         });
 
@@ -932,8 +960,10 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             });
 
                             // 复制按钮
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(quote_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(quote_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", quote_code);
                             }
                         });
 
@@ -957,8 +987,10 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             columns[1].code("function example() {\n  return 'Hello, world!';\n}");
 
                             // 复制按钮
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(code_block.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(code_block);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", code_block);
                             }
                         });
 
@@ -989,8 +1021,10 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             });
 
                             // 复制按钮
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(table_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(table_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", table_code);
                             }
                         });
 
@@ -1014,8 +1048,10 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             });
 
                             // 复制按钮
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(task_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(task_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", task_code);
                             }
                         });
 
@@ -1033,21 +1069,302 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             columns[1].separator();
 
                             // 复制按钮
-                            if columns[2].button("复制").clicked() {
-                                copy_content = Some(hr_code.to_string());
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(hr_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", hr_code);
                             }
                         });
+
+                        // Mermaid 图形
+                        ui.add_space(10.0);
+                        ui.strong("Mermaid 图形");
+                        ui.label("支持多种图形类型，使用 ```mermaid 代码块包围：");
+
+                        // 流程图
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 流程图").strong());
+                        ui.columns(3, |columns| {
+                            let flowchart_code = "```mermaid\ngraph TD\n    A[开始] --> B{判断}\n    B -->|是| C[执行]\n    B -->|否| D[结束]\n```";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("```mermaid");
+                                ui.label("graph TD");
+                                ui.label("    A[开始] --> B{判断}");
+                                ui.label("    B -->|是| C[执行]");
+                                ui.label("    B -->|否| D[结束]");
+                                ui.label("```");
+                            });
+
+                            columns[1].label("🔄 流程图预览");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(flowchart_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", flowchart_code);
+                            }
+                        });
+
+                        // 时序图
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 时序图").strong());
+                        ui.columns(3, |columns| {
+                            let sequence_code = "```mermaid\nsequenceDiagram\n    participant A as 用户\n    participant B as 系统\n    A->>B: 请求\n    B-->>A: 响应\n```";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("```mermaid");
+                                ui.label("sequenceDiagram");
+                                ui.label("    participant A as 用户");
+                                ui.label("    participant B as 系统");
+                                ui.label("    A->>B: 请求");
+                                ui.label("    B-->>A: 响应");
+                                ui.label("```");
+                            });
+
+                            columns[1].label("📋 时序图预览");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(sequence_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", sequence_code);
+                            }
+                        });
+
+                        // 类图
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 类图").strong());
+                        ui.columns(3, |columns| {
+                            let class_code = "```mermaid\nclassDiagram\n    class User {\n        +String name\n        +login()\n    }\n    User --> Role\n```";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("```mermaid");
+                                ui.label("classDiagram");
+                                ui.label("    class User {");
+                                ui.label("        +String name");
+                                ui.label("        +login()");
+                                ui.label("    }");
+                                ui.label("    User --> Role");
+                                ui.label("```");
+                            });
+
+                            columns[1].label("🏗️ 类图预览");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(class_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", class_code);
+                            }
+                        });
+
+                        // 状态图
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 状态图").strong());
+                        ui.columns(3, |columns| {
+                            let state_code = "```mermaid\nstateDiagram-v2\n    [*] --> 待处理\n    待处理 --> 处理中\n    处理中 --> 完成\n    完成 --> [*]\n```";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("```mermaid");
+                                ui.label("stateDiagram-v2");
+                                ui.label("    [*] --> 待处理");
+                                ui.label("    待处理 --> 处理中");
+                                ui.label("    处理中 --> 完成");
+                                ui.label("    完成 --> [*]");
+                                ui.label("```");
+                            });
+
+                            columns[1].label("🔄 状态图预览");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(state_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", state_code);
+                            }
+                        });
+
+                        // 甘特图
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 甘特图").strong());
+                        ui.columns(3, |columns| {
+                            let gantt_code = "```mermaid\ngantt\n    title 项目计划\n    section 开发\n    任务1 :2024-01-01, 3d\n    任务2 :2024-01-04, 2d\n```";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("```mermaid");
+                                ui.label("gantt");
+                                ui.label("    title 项目计划");
+                                ui.label("    section 开发");
+                                ui.label("    任务1 :2024-01-01, 3d");
+                                ui.label("    任务2 :2024-01-04, 2d");
+                                ui.label("```");
+                            });
+
+                            columns[1].label("📅 甘特图预览");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(gantt_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", gantt_code);
+                            }
+                        });
+
+                        // 饼图
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 饼图").strong());
+                        ui.columns(3, |columns| {
+                            let pie_code = "```mermaid\npie title 数据分布\n    \"类型A\" : 45\n    \"类型B\" : 30\n    \"类型C\" : 25\n```";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("```mermaid");
+                                ui.label("pie title 数据分布");
+                                ui.label("    \"类型A\" : 45");
+                                ui.label("    \"类型B\" : 30");
+                                ui.label("    \"类型C\" : 25");
+                                ui.label("```");
+                            });
+
+                            columns[1].label("🥧 饼图预览");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(pie_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", pie_code);
+                            }
+                        });
+
+                        // 幻灯片格式扩展
+                        ui.add_space(10.0);
+                        ui.strong("幻灯片格式扩展");
+                        ui.label("将笔记转换为幻灯片演示，支持多种分隔符和样式配置：");
+
+                        // 基本幻灯片分隔
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 幻灯片分隔符").strong());
+                        ui.columns(3, |columns| {
+                            let slide_separator_code = "# 第一张幻灯片\n内容...\n\n---\n\n# 第二张幻灯片\n内容...\n\n--slide\n\n# 第三张幻灯片\n内容...";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("# 第一张幻灯片");
+                                ui.label("内容...");
+                                ui.label("");
+                                ui.label("---");
+                                ui.label("");
+                                ui.label("# 第二张幻灯片");
+                                ui.label("内容...");
+                                ui.label("");
+                                ui.label("--slide");
+                                ui.label("");
+                                ui.label("# 第三张幻灯片");
+                                ui.label("内容...");
+                            });
+
+                            columns[1].label("🎬 幻灯片分隔");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(slide_separator_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", slide_separator_code);
+                            }
+                        });
+
+                        // 幻灯片样式配置
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 样式配置").strong());
+                        ui.columns(3, |columns| {
+                            let slide_config_code = "<!-- config: background=#1a1a1a text=#ffffff -->\n\n# 深色主题幻灯片\n\n这是一个使用深色背景的幻灯片";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("<!-- config: background=#1a1a1a");
+                                ui.label("     text=#ffffff -->");
+                                ui.label("");
+                                ui.label("# 深色主题幻灯片");
+                                ui.label("");
+                                ui.label("这是一个使用深色背景的幻灯片");
+                            });
+
+                            columns[1].label("🎨 样式配置");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(slide_config_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", slide_config_code);
+                            }
+                        });
+
+                        // CSS 样式块
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• CSS 样式块").strong());
+                        ui.columns(3, |columns| {
+                            let slide_css_code = "```css\n.slide {\n    background: linear-gradient(45deg, #667eea, #764ba2);\n    color: white;\n    font-size: 18px;\n}\n```\n\n# 渐变背景幻灯片\n\n使用自定义CSS样式";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("```css");
+                                ui.label(".slide {");
+                                ui.label("    background: linear-gradient(");
+                                ui.label("        45deg, #667eea, #764ba2);");
+                                ui.label("    color: white;");
+                                ui.label("    font-size: 18px;");
+                                ui.label("}");
+                                ui.label("```");
+                                ui.label("");
+                                ui.label("# 渐变背景幻灯片");
+                                ui.label("使用自定义CSS样式");
+                            });
+
+                            columns[1].label("🎨 CSS样式");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(slide_css_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", slide_css_code);
+                            }
+                        });
+
+                        // 完整幻灯片示例
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("• 完整示例").strong());
+                        ui.columns(3, |columns| {
+                            let complete_slide_code = "```css\n.slide {\n    background: #f8f9fa;\n    padding: 40px;\n}\n```\n\n# 演示标题\n\n欢迎来到我的演示\n\n---\n\n<!-- config: background=#2c3e50 text=#ecf0f1 -->\n\n# 深色主题页面\n\n- 要点一\n- 要点二\n- 要点三\n\n--slide\n\n# 总结\n\n谢谢观看！";
+
+                            columns[0].vertical(|ui| {
+                                ui.label("```css");
+                                ui.label(".slide { background: #f8f9fa; }");
+                                ui.label("```");
+                                ui.label("");
+                                ui.label("# 演示标题");
+                                ui.label("欢迎来到我的演示");
+                                ui.label("");
+                                ui.label("---");
+                                ui.label("");
+                                ui.label("<!-- config: background=#2c3e50");
+                                ui.label("     text=#ecf0f1 -->");
+                                ui.label("# 深色主题页面");
+                                ui.label("- 要点一");
+                                ui.label("...");
+                            });
+
+                            columns[1].label("🎬 完整演示");
+
+                            if columns[2].button("插入").clicked() {
+                                state.append_to_note_content(complete_slide_code);
+                                state.show_markdown_help = false;
+                                log::info!("已插入内容到笔记: {}", complete_slide_code);
+                            }
+                        });
+
+                        // 幻灯片功能说明
+                        ui.add_space(10.0);
+                        ui.label(egui::RichText::new("幻灯片功能特性：").strong());
+                        ui.label("• 支持 --- 和 --slide 两种分隔符");
+                        ui.label("• 内置多种样式模板（默认、深色、蓝色等）");
+                        ui.label("• 支持自定义CSS样式");
+                        ui.label("• 支持配置注释设置背景色、文字色等");
+                        ui.label("• 全屏播放模式和窗口播放模式");
+                        ui.label("• 键盘导航（方向键、空格键、ESC键）");
+                        ui.label("• 自动检测幻灯片格式并显示播放按钮");
                     });
                 });
 
             // 处理窗口关闭
             if !show_window {
-                state.show_markdown_help = false;
-            }
-
-            // 处理复制内容
-            if let Some(content) = copy_content {
-                state.append_to_note_content(&content);
                 state.show_markdown_help = false;
             }
         }
