@@ -15,6 +15,14 @@ pub fn create_settings_module(state: &mut IToolsState) -> settings_ui::IToolsSet
     settings_ui::IToolsSettingsModule::new(state)
 }
 
+/// Save itools settings
+pub fn save_settings(state: &IToolsState) -> Result<(), Box<dyn std::error::Error>> {
+    // For now, iTools doesn't have persistent settings to save
+    // This can be expanded when actual settings are implemented
+    log::info!("iTools settings saved successfully");
+    Ok(())
+}
+
 /// Initialize the iTools module
 pub fn initialize() -> IToolsState {
     log::info!("Initializing iTools module");

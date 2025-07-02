@@ -1,9 +1,24 @@
 use eframe::egui;
 use crate::app::SeeUApp;
-use super::settings_trait::{SettingsRegistry, ModularSettingsState};
+use super::settings_trait::{SettingsRegistry, SettingsCategory, SettingsModule};
 use super::settings_base::{AppSettingsModule, AppearanceSettingsModule, AdvancedSettingsModule};
 
-/// Create settings registry with all modules
+/// Get all available settings categories
+pub fn get_all_settings_categories() -> Vec<SettingsCategory> {
+    vec![
+        SettingsCategory::new("app", "应用设置", "🔧", "应用程序的基本设置，包括启动、数据管理等"),
+        SettingsCategory::new("appearance", "外观设置", "🎨", "主题、字体、界面缩放等设置"),
+        SettingsCategory::new("advanced", "高级设置", "⚙️", "性能、调试、开发者选项等高级设置"),
+        SettingsCategory::new("notes", "笔记设置", "📝", "笔记编辑、显示、导入导出等相关设置"),
+        SettingsCategory::new("ai_assistant", "AI助手设置", "🤖", "AI模型配置、API设置、对话管理等"),
+        SettingsCategory::new("search", "搜索设置", "🔍", "文件索引、搜索选项、目录管理等设置"),
+        SettingsCategory::new("terminal", "终端设置", "💻", "终端外观、行为、颜色等配置"),
+        SettingsCategory::new("tools", "工具设置", "🔧", "开发工具、实用程序、快捷操作等设置"),
+    ]
+}
+
+/// Create settings registry with base modules only
+/// Crate-specific settings are handled directly in render_modular_settings
 pub fn create_settings_registry(_app: &mut SeeUApp) -> SettingsRegistry {
     let mut registry = SettingsRegistry::new();
 
@@ -11,16 +26,6 @@ pub fn create_settings_registry(_app: &mut SeeUApp) -> SettingsRegistry {
     registry.register_module(Box::new(AppSettingsModule::new()));
     registry.register_module(Box::new(AppearanceSettingsModule::new()));
     registry.register_module(Box::new(AdvancedSettingsModule::new()));
-
-    // TODO: Register crate-specific modules
-    // Note: These need lifetime management and proper trait implementation
-    // For now, we'll use the base modules until we resolve the lifetime issues
-
-    // registry.register_module(Box::new(inote::create_settings_module(&mut app.inote_state)));
-    // registry.register_module(Box::new(aiAssist::create_settings_module(&mut app.ai_assist_state)));
-    // registry.register_module(Box::new(isearch::create_settings_module(&mut app.isearch_state)));
-    // registry.register_module(Box::new(iterminal::create_settings_module(&mut app.iterminal_state)));
-    // registry.register_module(Box::new(itools::create_settings_module(&mut app.itools_state)));
 
     registry
 }
@@ -47,28 +52,23 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
             ui.separator();
             ui.add_space(5.0);
 
-            if let Some(registry) = &app.modular_settings_state.settings_registry {
-                let categories = registry.get_categories();
-                
-                for category in categories {
-                    let is_selected = app.modular_settings_state.selected_category == category.id;
-                    
-                    let response = ui.selectable_label(
-                        is_selected,
-                        format!("{} {}", category.icon, category.display_name)
-                    );
-                    
-                    if response.clicked() {
-                        app.modular_settings_state.selected_category = category.id.clone();
-                        if let Some(registry) = &mut app.modular_settings_state.settings_registry {
-                            registry.set_current_category(category.id);
-                        }
-                    }
-                    
-                    // Show help text on hover
-                    if !category.description.is_empty() {
-                        response.on_hover_text(&category.description);
-                    }
+            let all_categories = get_all_settings_categories();
+
+            for category in all_categories {
+                let is_selected = app.modular_settings_state.selected_category == category.id;
+
+                let response = ui.selectable_label(
+                    is_selected,
+                    format!("{} {}", category.icon, category.display_name)
+                );
+
+                if response.clicked() {
+                    app.modular_settings_state.selected_category = category.id.clone();
+                }
+
+                // Show help text on hover
+                if !category.description.is_empty() {
+                    response.on_hover_text(&category.description);
                 }
             }
         });
@@ -81,8 +81,38 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
             // Render current category settings
             let mut settings_changed = false;
-            if let Some(registry) = &mut app.modular_settings_state.settings_registry {
-                settings_changed = registry.render_current_settings(ui);
+
+            match app.modular_settings_state.selected_category.as_str() {
+                "app" | "appearance" | "advanced" => {
+                    // Use registry for base modules
+                    if let Some(registry) = &mut app.modular_settings_state.settings_registry {
+                        registry.set_current_category(app.modular_settings_state.selected_category.clone());
+                        settings_changed = registry.render_current_settings(ui);
+                    }
+                }
+                "notes" => {
+                    // Render iNote settings directly
+                    settings_changed = render_inote_settings(ui, &mut app.inote_state);
+                }
+                "ai_assistant" => {
+                    // Render AI Assistant settings directly
+                    settings_changed = render_ai_assistant_settings(ui, &mut app.ai_assist_state);
+                }
+                "search" => {
+                    // Render iSearch settings directly
+                    settings_changed = render_isearch_settings(ui, &mut app.isearch_state);
+                }
+                "terminal" => {
+                    // Render iTerminal settings directly
+                    settings_changed = render_iterminal_settings(ui, &mut app.iterminal_state);
+                }
+                "tools" => {
+                    // Render iTools settings directly
+                    settings_changed = render_itools_settings(ui, &mut app.itools_state);
+                }
+                _ => {
+                    ui.label("未知的设置类别");
+                }
             }
 
             // Update state if settings changed
@@ -98,20 +128,65 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 // Save button
                 let save_enabled = app.modular_settings_state.has_unsaved_changes;
                 if ui.add_enabled(save_enabled, egui::Button::new("💾 保存设置")).clicked() {
+                    let mut save_success = true;
+                    let mut error_count = 0;
+
+                    // Save base module settings
                     if let Some(registry) = &app.modular_settings_state.settings_registry {
-                        match registry.save_all_settings() {
-                            Ok(()) => {
-                                app.modular_settings_state.has_unsaved_changes = false;
-                                app.modular_settings_state.last_save_status = "保存成功".to_string();
-                                log::info!("All settings saved successfully");
-                            }
-                            Err(errors) => {
-                                app.modular_settings_state.last_save_status = format!("保存失败: {} 个错误", errors.len());
-                                for error in errors {
-                                    log::error!("Settings save error: {}", error);
-                                }
+                        if let Err(errors) = registry.save_all_settings() {
+                            save_success = false;
+                            error_count += errors.len();
+                            for error in errors {
+                                log::error!("Base settings save error: {}", error);
                             }
                         }
+                    }
+
+                    // Save crate-specific settings
+                    if let Err(err) = inote::save_settings(&app.inote_state) {
+                        save_success = false;
+                        error_count += 1;
+                        log::error!("iNote settings save error: {}", err);
+                    }
+
+                    if let Err(err) = aiAssist::save_settings(&app.ai_assist_state) {
+                        save_success = false;
+                        error_count += 1;
+                        log::error!("AI Assistant settings save error: {}", err);
+                    }
+
+                    if let Err(err) = isearch::save_settings(&app.isearch_state) {
+                        save_success = false;
+                        error_count += 1;
+                        log::error!("iSearch settings save error: {}", err);
+                    }
+
+                    if let Err(err) = app.iterminal_state.save_config() {
+                        save_success = false;
+                        error_count += 1;
+                        log::error!("iTerminal settings save error: {}", err);
+                    }
+
+                    if let Err(err) = itools::save_settings(&app.itools_state) {
+                        save_success = false;
+                        error_count += 1;
+                        log::error!("iTools settings save error: {}", err);
+                    }
+
+                    // Save application-level settings
+                    if let Err(err) = app.save_app_settings() {
+                        save_success = false;
+                        error_count += 1;
+                        log::error!("App settings save error: {}", err);
+                    }
+
+                    // Update status
+                    if save_success {
+                        app.modular_settings_state.has_unsaved_changes = false;
+                        app.modular_settings_state.last_save_status = "保存成功".to_string();
+                        log::info!("All settings saved successfully");
+                    } else {
+                        app.modular_settings_state.last_save_status = format!("保存失败: {} 个错误", error_count);
                     }
                 }
 
@@ -198,4 +273,39 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 });
             });
     }
+}
+
+/// Render iNote settings
+fn render_inote_settings(ui: &mut egui::Ui, state: &mut inote::db_state::DbINoteState) -> bool {
+    use inote::settings_ui::SettingsModule;
+    let mut module = inote::create_settings_module(state);
+    module.render_settings(ui)
+}
+
+/// Render AI Assistant settings
+fn render_ai_assistant_settings(ui: &mut egui::Ui, state: &mut aiAssist::state::AIAssistState) -> bool {
+    use aiAssist::settings_ui::SettingsModule;
+    let mut module = aiAssist::create_settings_module(state);
+    module.render_settings(ui)
+}
+
+/// Render iSearch settings
+fn render_isearch_settings(ui: &mut egui::Ui, state: &mut isearch::ISearchState) -> bool {
+    use isearch::settings_ui::SettingsModule;
+    let mut module = isearch::create_settings_module(state);
+    module.render_settings(ui)
+}
+
+/// Render iTerminal settings
+fn render_iterminal_settings(ui: &mut egui::Ui, state: &mut iterminal::ITerminalState) -> bool {
+    use iterminal::settings_ui::SettingsModule;
+    let mut module = iterminal::create_settings_module(state);
+    module.render_settings(ui)
+}
+
+/// Render iTools settings
+fn render_itools_settings(ui: &mut egui::Ui, state: &mut itools::IToolsState) -> bool {
+    use itools::settings_ui::SettingsModule;
+    let mut module = itools::create_settings_module(state);
+    module.render_settings(ui)
 }

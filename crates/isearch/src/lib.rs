@@ -1340,3 +1340,11 @@ pub use ui::{render_isearch, render_isearch_with_sidebar_info};
 pub fn create_settings_module(state: &mut ISearchState) -> settings_ui::ISearchSettingsModule {
     settings_ui::ISearchSettingsModule::new(state)
 }
+
+/// Save isearch settings
+pub fn save_settings(state: &ISearchState) -> Result<(), Box<dyn std::error::Error>> {
+    state.save_search_options();
+    state.save_indexed_directories();
+    log::info!("iSearch settings saved successfully");
+    Ok(())
+}

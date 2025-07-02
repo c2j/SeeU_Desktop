@@ -33,12 +33,22 @@ impl SettingsModule for AppSettingsModule {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("基本设置").strong());
                 ui.add_space(5.0);
-                ui.label("应用程序级别的设置将在这里显示");
-                ui.label("这些设置需要通过应用程序状态来管理");
+                ui.label("应用程序级别的设置");
+                ui.add_space(5.0);
+
+                ui.label("• 自动启动");
+                ui.label("• 会话恢复");
+                ui.label("• 自动保存");
+                ui.label("• 定期备份");
+
+                ui.add_space(5.0);
+                ui.label(egui::RichText::new("注意：").color(egui::Color32::YELLOW));
+                ui.label("这些设置通过主应用程序管理，");
+                ui.label("在保存时会自动应用。");
             });
         });
 
-        false // No changes made in this basic implementation
+        false // Settings are managed by the main app
     }
 
     fn save_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -92,12 +102,22 @@ impl SettingsModule for AppearanceSettingsModule {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("外观设置").strong());
                 ui.add_space(5.0);
-                ui.label("主题、字体、界面缩放等设置将在这里显示");
-                ui.label("这些设置需要通过应用程序状态来管理");
+                ui.label("主题和界面设置");
+                ui.add_space(5.0);
+
+                ui.label("• 主题选择 (明亮/暗黑)");
+                ui.label("• 字体大小和字体族");
+                ui.label("• 界面缩放比例");
+                ui.label("• 颜色主题");
+
+                ui.add_space(5.0);
+                ui.label(egui::RichText::new("注意：").color(egui::Color32::YELLOW));
+                ui.label("外观设置通过主应用程序管理，");
+                ui.label("更改会立即生效。");
             });
         });
 
-        false // No changes made in this basic implementation
+        false // Settings are managed by the main app
     }
 
     fn save_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
