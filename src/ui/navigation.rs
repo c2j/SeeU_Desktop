@@ -36,6 +36,16 @@ pub fn render_navigation(ui: &mut egui::Ui, active_module: &mut Module) {
 
         // ui.add_space(4.0);
 
+        // File Editor button
+        if ui.add(egui::Button::new("📄")
+            .selected(*active_module == Module::FileEditor))
+            .on_hover_text("文件编辑器")
+            .clicked() {
+            *active_module = Module::FileEditor;
+        }
+
+        ui.add_space(4.0);
+
         // Data Analysis button
         // TODO 后续再实现，暂时封禁
         // if ui.add(egui::Button::new("📊")

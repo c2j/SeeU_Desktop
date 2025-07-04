@@ -24,6 +24,7 @@ pub fn render_status_bar(
     show_right_sidebar: &mut bool,
     active_module: Module,
     save_status: SaveStatus,
+    ifile_status: Option<ifile_editor::FileStatusInfo>,
 ) {
     ui.horizontal(|ui| {
         // Left side - system resource monitoring
@@ -82,6 +83,54 @@ pub fn render_status_bar(
                 },
                 Module::Files => {
                     ui.label("文件管理模式");
+                },
+                Module::FileEditor => {
+                    if let Some(file_status) = &ifile_status {
+                        // 显示文件名
+                        if let Some(file_name) = file_status.file_path.file_name() {
+                            ui.label(format!("📄 {}", file_name.to_string_lossy()));
+                        } else {
+                            ui.label("📄 未知文件");
+                        }
+
+                        ui.separator();
+
+                        // 显示光标位置
+                        ui.label(format!("行: {} 列: {}", file_status.cursor_line, file_status.cursor_column));
+
+                        ui.separator();
+
+                        // 显示编码
+                        ui.label(&file_status.encoding);
+
+                        ui.separator();
+
+                        // 显示语言
+                        if let Some(lang) = &file_status.language {
+                            ui.label(lang);
+                            ui.separator();
+                        }
+
+                        // 显示修改状态
+                        if file_status.modified {
+                            ui.label(egui::RichText::new("● 已修改").color(egui::Color32::from_rgb(255, 180, 0)));
+                        } else {
+                            ui.label(egui::RichText::new("○ 已保存").color(egui::Color32::from_rgb(0, 180, 0)));
+                        }
+
+                        ui.separator();
+
+                        // 显示只读状态
+                        if file_status.read_only {
+                            ui.label(egui::RichText::new("🔒 只读").color(egui::Color32::from_rgb(255, 100, 100)));
+                            ui.separator();
+                        }
+
+                        // 显示文件统计
+                        ui.label(format!("行: {} 字符: {}", file_status.line_count, file_status.char_count));
+                    } else {
+                        ui.label("文件编辑器模式");
+                    }
                 },
                 Module::DataAnalysis => {
                     ui.label("数据分析模式");

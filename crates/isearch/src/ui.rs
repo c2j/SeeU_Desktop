@@ -9,13 +9,44 @@ fn is_supported_document_format(file_type: &str) -> bool {
     supported
 }
 
+/// Check if a file type is editable in the text editor
+fn is_editable_file_type(file_type: &str) -> bool {
+    matches!(file_type.to_lowercase().as_str(),
+        "txt" | "md" | "rs" | "py" | "js" | "ts" | "json" | "toml" | "yaml" | "yml" |
+        "html" | "css" | "xml" | "c" | "cpp" | "h" | "hpp" | "java" | "go" | "php" |
+        "rb" | "sh" | "bash" | "sql" | "csv" | "log" | "cfg" | "conf" | "ini"
+    )
+}
+
 /// Render the iSearch module
 pub fn render_isearch(ui: &mut egui::Ui, state: &mut ISearchState) {
     render_isearch_with_sidebar_info(ui, state, false, None);
 }
 
+/// Render the iSearch module with right sidebar awareness and file editor callback
+pub fn render_isearch_with_sidebar_info_and_editor<F>(
+    ui: &mut egui::Ui,
+    state: &mut ISearchState,
+    right_sidebar_open: bool,
+    right_sidebar_width: Option<f32>,
+    open_in_editor_callback: Option<F>
+) where F: Fn(String) {
+    render_isearch_with_sidebar_info_internal(ui, state, right_sidebar_open, right_sidebar_width, open_in_editor_callback);
+}
+
 /// Render the iSearch module with right sidebar awareness
 pub fn render_isearch_with_sidebar_info(ui: &mut egui::Ui, state: &mut ISearchState, right_sidebar_open: bool, right_sidebar_width: Option<f32>) {
+    render_isearch_with_sidebar_info_internal(ui, state, right_sidebar_open, right_sidebar_width, None::<fn(String)>);
+}
+
+/// Internal render function with optional editor callback
+fn render_isearch_with_sidebar_info_internal<F>(
+    ui: &mut egui::Ui,
+    state: &mut ISearchState,
+    right_sidebar_open: bool,
+    right_sidebar_width: Option<f32>,
+    open_in_editor_callback: Option<F>
+) where F: Fn(String) {
     // Process directory dialog
     state.process_directory_dialog();
 
@@ -248,15 +279,33 @@ pub fn render_isearch_with_sidebar_info(ui: &mut egui::Ui, state: &mut ISearchSt
         
         // 正常情况下使用完整的中央面板
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            render_search_results_content(ui, state);
+            render_search_results_content_with_callback(ui, state, &open_in_editor_callback);
         });
        
         }
     );
 }
 
+/// Render the search results content area with editor callback
+fn render_search_results_content_with_callback<F>(
+    ui: &mut egui::Ui,
+    state: &mut ISearchState,
+    open_in_editor_callback: &Option<F>
+) where F: Fn(String) {
+    render_search_results_content_internal(ui, state, open_in_editor_callback);
+}
+
 /// Render the search results content area
 fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
+    render_search_results_content_internal(ui, state, &None::<fn(String)>);
+}
+
+/// Internal search results content rendering
+fn render_search_results_content_internal<F>(
+    ui: &mut egui::Ui,
+    state: &mut ISearchState,
+    open_in_editor_callback: &Option<F>
+) where F: Fn(String) {
     // Add a scroll area for the entire central panel content to prevent overflow
     let central_height = ui.available_height();
     egui::ScrollArea::vertical()
@@ -473,8 +522,8 @@ fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
 
                         // Render results based on view mode
                         match state.view_mode {
-                            ViewMode::Detailed => render_detailed_view(ui, state),
-                            ViewMode::List => render_list_view(ui, state, table_width),
+                            ViewMode::Detailed => render_detailed_view_with_callback(ui, state, open_in_editor_callback),
+                            ViewMode::List => render_list_view_with_callback(ui, state, table_width, open_in_editor_callback),
                         }
                     });
                         // Results will be rendered by the appropriate view function
@@ -676,8 +725,26 @@ fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
     }
 }
 
+/// Render search results in detailed view (card-style) with editor callback
+fn render_detailed_view_with_callback<F>(
+    ui: &mut egui::Ui,
+    state: &mut ISearchState,
+    open_in_editor_callback: &Option<F>
+) where F: Fn(String) {
+    render_detailed_view_internal(ui, state, open_in_editor_callback);
+}
+
 /// Render search results in detailed view (card-style)
 fn render_detailed_view(ui: &mut egui::Ui, state: &mut ISearchState) {
+    render_detailed_view_internal(ui, state, &None::<fn(String)>);
+}
+
+/// Internal detailed view rendering
+fn render_detailed_view_internal<F>(
+    ui: &mut egui::Ui,
+    state: &mut ISearchState,
+    open_in_editor_callback: &Option<F>
+) where F: Fn(String) {
     // Clone the results to avoid borrowing issues
     let results = state.search_results.clone();
     for result in &results {
@@ -818,6 +885,16 @@ fn render_detailed_view(ui: &mut egui::Ui, state: &mut ISearchState) {
                             }
                         }
 
+                        // Edit button (for text files)
+                        if is_editable_file_type(&result.file_type) {
+                            if ui.button("📝 编辑").clicked() {
+                                if let Some(callback) = open_in_editor_callback {
+                                    log::info!("Edit button clicked for file: {} (type: {})", result.filename, result.file_type);
+                                    callback(result.path.clone());
+                                }
+                            }
+                        }
+
                         // Add space to push the menu button to the right
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             // Context menu button - use a more reliable approach
@@ -879,8 +956,28 @@ fn render_detailed_view(ui: &mut egui::Ui, state: &mut ISearchState) {
     render_search_statistics(ui, state);
 }
 
+/// Render search results in list view (table-style) with editor callback
+fn render_list_view_with_callback<F>(
+    ui: &mut egui::Ui,
+    state: &mut ISearchState,
+    available_width: f32,
+    open_in_editor_callback: &Option<F>
+) where F: Fn(String) {
+    render_list_view_internal(ui, state, available_width, open_in_editor_callback);
+}
+
 /// Render search results in list view (table-style) using egui_extras::TableBuilder
 fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState, available_width: f32) {
+    render_list_view_internal(ui, state, available_width, &None::<fn(String)>);
+}
+
+/// Internal list view rendering
+fn render_list_view_internal<F>(
+    ui: &mut egui::Ui,
+    state: &mut ISearchState,
+    available_width: f32,
+    open_in_editor_callback: &Option<F>
+) where F: Fn(String) {
     // Clone the results to avoid borrowing issues
     let results = state.search_results.clone();
 
@@ -1113,6 +1210,16 @@ fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState, available_width
                                 if ui.small_button("📥").on_hover_text("导入到笔记").clicked() {
                                     log::info!("Import button clicked for file: {} (type: {})", result.filename, result.file_type);
                                     state.show_document_import_dialog(result.path.clone(), result.filename.clone());
+                                }
+                            }
+
+                            // Edit button (for text files)
+                            if is_editable_file_type(&result.file_type) {
+                                if ui.small_button("📝").on_hover_text("编辑").clicked() {
+                                    if let Some(callback) = open_in_editor_callback {
+                                        log::info!("Edit button clicked for file: {} (type: {})", result.filename, result.file_type);
+                                        callback(result.path.clone());
+                                    }
                                 }
                             }
 

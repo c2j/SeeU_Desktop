@@ -1,0 +1,51 @@
+[package]
+name = "ifile_editor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# UI 框架
+egui = { version = "0.28.1", default-features = false, features = ["default_fonts"] }
+egui_ltreeview = { path = "../egui_ltreeview" }
+
+# 文本编辑核心
+crop = "0.4.2"
+egui_code_editor = { path = "../egui_code_editor" }
+
+# 文件操作
+walkdir = "2.4"
+notify = "6.1"
+encoding_rs = "0.8"
+
+# 异步和序列化
+tokio = { version = "1.32", features = ["fs", "io-util"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 工具库
+anyhow = "1.0"
+log = "0.4"
+uuid = { version = "1.4", features = ["v4"] }
+dirs = "5.0"
+
+# 错误处理
+thiserror = "1.0"
+
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+
+# 路径处理
+pathdiff = "0.2"
+
+# 文件对话框
+rfd = "0.14"
+
+# 剪贴板
+arboard = "3.3"
+
+[dev-dependencies]
+tempfile = "3.8"
+mockall = "0.12"
+eframe = "0.28.1"
+env_logger = "0.11"
+rfd = "0.14"

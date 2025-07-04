@@ -10,6 +10,7 @@ pub fn get_all_settings_categories() -> Vec<SettingsCategory> {
         SettingsCategory::new("appearance", "外观设置", "🎨", "主题、字体、界面缩放等设置"),
         SettingsCategory::new("advanced", "高级设置", "⚙️", "性能、调试、开发者选项等高级设置"),
         SettingsCategory::new("notes", "笔记设置", "📝", "笔记编辑、显示、导入导出等相关设置"),
+        SettingsCategory::new("file_editor", "文件编辑器", "📄", "文件编辑器外观、行为、语法高亮等设置"),
         SettingsCategory::new("ai_assistant", "AI助手设置", "🤖", "AI模型配置、API设置、对话管理等"),
         SettingsCategory::new("search", "搜索设置", "🔍", "文件索引、搜索选项、目录管理等设置"),
         SettingsCategory::new("terminal", "终端设置", "💻", "终端外观、行为、颜色等配置"),
@@ -26,6 +27,9 @@ pub fn create_settings_registry(_app: &mut SeeUApp) -> SettingsRegistry {
     registry.register_module(Box::new(AppSettingsModule::new()));
     registry.register_module(Box::new(AppearanceSettingsModule::new()));
     registry.register_module(Box::new(AdvancedSettingsModule::new()));
+
+    // Register file editor settings module
+    registry.register_module(Box::new(FileEditorSettingsAdapter::new()));
 
     registry
 }
@@ -94,6 +98,10 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                     // Render iNote settings directly
                     settings_changed = render_inote_settings(ui, &mut app.inote_state);
                 }
+                "file_editor" => {
+                    // Render file editor settings directly
+                    settings_changed = render_file_editor_settings(ui, &mut app.ifile_editor_state);
+                }
                 "ai_assistant" => {
                     // Render AI Assistant settings directly
                     settings_changed = render_ai_assistant_settings(ui, &mut app.ai_assist_state);
@@ -148,6 +156,9 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                         error_count += 1;
                         log::error!("iNote settings save error: {}", err);
                     }
+
+                    // Save file editor settings
+                    app.ifile_editor_state.settings_manager.save_settings();
 
                     if let Err(err) = aiAssist::save_settings(&app.ai_assist_state) {
                         save_success = false;
@@ -282,6 +293,11 @@ fn render_inote_settings(ui: &mut egui::Ui, state: &mut inote::db_state::DbINote
     module.render_settings(ui)
 }
 
+/// Render file editor settings
+fn render_file_editor_settings(ui: &mut egui::Ui, state: &mut ifile_editor::IFileEditorState) -> bool {
+    state.settings_manager.render_settings(ui)
+}
+
 /// Render AI Assistant settings
 fn render_ai_assistant_settings(ui: &mut egui::Ui, state: &mut aiAssist::state::AIAssistState) -> bool {
     use aiAssist::settings_ui::SettingsModule;
@@ -308,4 +324,56 @@ fn render_itools_settings(ui: &mut egui::Ui, state: &mut itools::IToolsState) ->
     use itools::settings_ui::SettingsModule;
     let mut module = itools::create_settings_module(state);
     module.render_settings(ui)
+}
+
+/// 文件编辑器设置适配器
+pub struct FileEditorSettingsAdapter {
+    module: ifile_editor::FileEditorSettingsModule,
+}
+
+impl FileEditorSettingsAdapter {
+    pub fn new() -> Self {
+        Self {
+            module: ifile_editor::FileEditorSettingsModule::new(),
+        }
+    }
+}
+
+impl SettingsModule for FileEditorSettingsAdapter {
+    fn get_category(&self) -> SettingsCategory {
+        SettingsCategory {
+            id: "file_editor".to_string(),
+            display_name: "文件编辑器".to_string(),
+            icon: "📄".to_string(),
+            description: "文件编辑器相关设置".to_string(),
+        }
+    }
+
+    fn render_settings(&mut self, ui: &mut egui::Ui) -> bool {
+        self.module.render_settings(ui)
+    }
+
+    fn save_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // TODO: 实现设置保存
+        Ok(())
+    }
+
+    fn load_settings(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // TODO: 实现设置加载
+        Ok(())
+    }
+
+    fn reset_to_default(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.module = ifile_editor::FileEditorSettingsModule::new();
+        Ok(())
+    }
+
+    fn get_settings_summary(&self) -> String {
+        let settings = self.module.get_settings();
+        format!("字体: {} {}px, 主题: {}",
+            settings.font_family,
+            settings.font_size,
+            settings.theme
+        )
+    }
 }

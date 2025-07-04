@@ -68,6 +68,7 @@ isearch = { path = "crates/isearch" }
 aiAssist = { path = "crates/aiAssist" }
 itools = { path = "crates/itools" }
 iterminal = { path = "crates/iterminal" }
+ifile_editor = { path = "crates/ifile_editor" }
 
 
 
@@ -81,7 +82,8 @@ members = [
     "crates/aiAssist",
     "crates/itools",
     "crates/iterminal",
-
+    "crates/ifile_editor",
+    "crates/egui_ltreeview",
 ]
 
 [profile.release]

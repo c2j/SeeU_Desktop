@@ -43,6 +43,7 @@ pub struct SeeUApp {
     pub ai_assist_state: AIAssistState,
     pub itools_state: IToolsState,
     pub iterminal_state: ITerminalState,
+    pub ifile_editor_state: ifile_editor::IFileEditorState,
     pub modular_settings_state: crate::ui::settings_trait::ModularSettingsState,
 
     // Services
@@ -136,6 +137,7 @@ pub enum Module {
     Home,
     Terminal,
     Files,
+    FileEditor,      // 新增：文件编辑器
     DataAnalysis,
     Note,
     Search,
@@ -246,6 +248,7 @@ impl SeeUApp {
         let mut ai_assist_state = aiAssist::initialize();
         let mut itools_state = itools::initialize();
         let iterminal_state = iterminal::initialize();
+        let ifile_editor_state = ifile_editor::initialize();
 
         // Load AI assistant chat sessions
         if let Err(err) = aiAssist::load_chat_sessions(&mut ai_assist_state) {
@@ -274,6 +277,7 @@ impl SeeUApp {
             ai_assist_state,
             itools_state,
             iterminal_state,
+            ifile_editor_state,
             modular_settings_state: crate::ui::settings_trait::ModularSettingsState::default(),
             system_service: SystemService::new(),
             mcp_integration: McpIntegrationManager::new(),
@@ -1875,12 +1879,20 @@ impl eframe::App for SeeUApp {
         let system_service = &self.system_service;
 
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            // 获取iFile编辑器状态信息
+            let ifile_status = if self.active_module == Module::FileEditor {
+                self.ifile_editor_state.get_current_file_status()
+            } else {
+                None
+            };
+
             render_status_bar(
                 ui,
                 system_service,
                 &mut self.show_right_sidebar,
                 self.active_module,
-                save_status
+                save_status,
+                ifile_status
             );
         });
 
@@ -2341,6 +2353,22 @@ impl SeeUApp {
                 log::error!("❌ 保存MCP服务器记录失败: {}", e);
                 Err(format!("保存MCP服务器记录失败: {}", e).into())
             }
+        }
+    }
+
+    /// 从搜索结果打开文件到编辑器
+    pub fn open_file_in_editor(&mut self, file_path: String) {
+        use std::path::PathBuf;
+        let path = PathBuf::from(file_path);
+
+        log::info!("Opening file in editor: {:?}", path);
+
+        // 切换到文件编辑器模块
+        self.active_module = Module::FileEditor;
+
+        // 打开文件
+        if let Err(e) = self.ifile_editor_state.open_file_from_search(path) {
+            log::error!("Failed to open file in editor: {}", e);
         }
     }
 }

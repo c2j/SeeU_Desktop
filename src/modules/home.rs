@@ -119,6 +119,10 @@ fn render_dashboard_blocks(ui: &mut egui::Ui, app: &mut SeeUApp) {
             render_notes_block(ui, app);
             ui.add_space(12.0);
 
+            // 文件编辑器豆腐块
+            render_file_editor_block(ui, app);
+            ui.add_space(12.0);
+
             // MCP工具豆腐块
             render_mcp_tools_block(ui, app);
         });
@@ -443,6 +447,109 @@ fn render_feature_card(ui: &mut egui::Ui, icon: &str, title: &str, description: 
 }
 
 
+
+/// 渲染文件编辑器豆腐块
+fn render_file_editor_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
+    let block_frame = egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::same(12.0))
+        .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
+        .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
+
+    block_frame.show(ui, |ui| {
+        ui.vertical(|ui| {
+            // 标题栏
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("📝").size(18.0));
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("文件编辑器").size(16.0).strong());
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("打开").clicked() {
+                        app.active_module = Module::FileEditor;
+                    }
+                });
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // 显示当前状态
+            if let Some(file_status) = app.ifile_editor_state.get_current_file_status() {
+                // 有打开的文件
+                ui.horizontal(|ui| {
+                    ui.label("📄");
+                    ui.add_space(4.0);
+                    if let Some(file_name) = file_status.file_path.file_name() {
+                        ui.label(egui::RichText::new(file_name.to_string_lossy()).strong());
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // 显示文件路径（截断显示）
+                let path_str = file_status.file_path.to_string_lossy();
+                let display_path = if path_str.len() > 40 {
+                    format!("...{}", &path_str[path_str.len()-37..])
+                } else {
+                    path_str.to_string()
+                };
+                ui.small(display_path);
+
+                ui.add_space(4.0);
+
+                // 显示修改状态
+                if file_status.modified {
+                    ui.small(egui::RichText::new("● 未保存").color(egui::Color32::from_rgb(255, 180, 0)));
+                } else {
+                    ui.small(egui::RichText::new("○ 已保存").color(egui::Color32::from_rgb(0, 180, 0)));
+                }
+
+            } else if let Some(workspace) = &app.ifile_editor_state.workspace_root {
+                // 有工作区但没有打开文件
+                ui.horizontal(|ui| {
+                    ui.label("📂");
+                    ui.add_space(4.0);
+                    if let Some(dir_name) = workspace.file_name() {
+                        ui.label(egui::RichText::new(dir_name.to_string_lossy()).strong());
+                    }
+                });
+
+                ui.add_space(4.0);
+                ui.small("工作区已设置，可以开始编辑文件");
+
+            } else {
+                // 首次使用
+                ui.horizontal(|ui| {
+                    ui.label("🆕");
+                    ui.add_space(4.0);
+                    ui.label("尚未设置工作区");
+                });
+
+                ui.add_space(4.0);
+                ui.small("点击打开按钮开始使用文件编辑器");
+            }
+
+            ui.add_space(8.0);
+
+            // 快速操作
+            ui.horizontal(|ui| {
+                if ui.button("📁 打开文件").clicked() {
+                    app.active_module = Module::FileEditor;
+                    // 触发文件对话框
+                    app.ifile_editor_state.open_file_dialog();
+                }
+
+                ui.add_space(4.0);
+
+                if ui.button("📂 选择目录").clicked() {
+                    app.active_module = Module::FileEditor;
+                    // 如果是首次使用，会显示目录选择界面
+                }
+            });
+        });
+    });
+}
 
 /// 渲染MCP工具豆腐块
 fn render_mcp_tools_block(ui: &mut egui::Ui, app: &mut SeeUApp) {

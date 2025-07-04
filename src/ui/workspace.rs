@@ -23,6 +23,7 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                     Module::Home => "主页", // This won't be shown due to the if condition
                     Module::Terminal => "终端",
                     Module::Files => "文件管理",
+                    Module::FileEditor => "文件编辑器",
                     Module::DataAnalysis => "数据分析",
                     Module::Note => "笔记",
                     Module::Search => "搜索",
@@ -45,6 +46,9 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                             iterminal::render_iterminal(ui, &mut app.iterminal_state);
                         },
                         Module::Files => render_file_manager(ui),
+                        Module::FileEditor => {
+                            ifile_editor::render_file_editor(ui, &mut app.ifile_editor_state);
+                        },
                         Module::DataAnalysis => render_data_analysis(ui),
                         Module::Note => {
                             // 传递右侧边栏状态、宽度和字体设置给笔记模块
@@ -55,7 +59,23 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                             inote::db_ui_import::render_siyuan_import_dialog(ui, &mut app.inote_state);
                         },
                         Module::Search => {
-                            isearch::ui::render_isearch_with_sidebar_info(ui, &mut app.isearch_state, app.show_right_sidebar, right_sidebar_width);
+                            // 创建文件编辑器回调
+                            let open_in_editor_callback = {
+                                let app_ptr = app as *mut crate::app::SeeUApp;
+                                move |file_path: String| {
+                                    unsafe {
+                                        (*app_ptr).open_file_in_editor(file_path);
+                                    }
+                                }
+                            };
+
+                            isearch::ui::render_isearch_with_sidebar_info_and_editor(
+                                ui,
+                                &mut app.isearch_state,
+                                app.show_right_sidebar,
+                                right_sidebar_width,
+                                Some(open_in_editor_callback)
+                            );
 
                             // 渲染文档导入对话框
                             if app.isearch_state.show_document_import_dialog {
