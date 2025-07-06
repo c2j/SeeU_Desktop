@@ -3,10 +3,10 @@ use uuid::Uuid;
 use std::collections::HashMap;
 use serde_json::Value;
 
-use crate::api::{ToolCall, ChatResponse};
+use crate::api::ChatResponse;
 use crate::mcp_tools::{
-    McpToolConverter, McpToolCallInfo, McpToolCallResult, McpServerCapabilities,
-    McpToolExecutor, McpCallType
+    McpToolConverter, McpToolCallResult, McpServerCapabilities,
+    McpToolExecutor
 };
 use crate::state::{AIAssistState, PendingToolCall, ToolCallBatch};
 

@@ -147,7 +147,7 @@ fn render_marketplace_filters(ui: &mut egui::Ui, state: &mut IToolsState) {
 /// Render marketplace content area
 fn render_marketplace_content(ui: &mut egui::Ui, state: &mut IToolsState) {
     ui.vertical(|ui| {
-        // Header with sort options
+        // Header with sort options and local install button
         render_marketplace_header(ui, state);
 
         ui.separator();
@@ -162,7 +162,39 @@ fn render_marketplace_header(ui: &mut egui::Ui, state: &mut IToolsState) {
     ui.horizontal(|ui| {
         ui.heading("插件市场");
 
+        ui.add_space(20.0);
+
+        // Local install button
+        if ui.button("📁 从本地安装").clicked() {
+            // Open file dialog
+            if let Some(file_path) = rfd::FileDialog::new()
+                .add_filter("插件包", &["itpkg", "zip", "tar.gz"])
+                .set_title("选择插件包文件")
+                .pick_file()
+            {
+                log::info!("Selected plugin file: {:?}", file_path);
+
+                // Install plugin from file
+                match state.plugin_manager.install_plugin_from_file(file_path.clone()) {
+                    Ok(plugin_id) => {
+                        log::info!("Started installation of plugin {} from file: {:?}", plugin_id, file_path);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to start plugin installation from file: {}", e);
+                    }
+                }
+            }
+        }
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Refresh button
+            if ui.button("🔄 刷新市场").clicked() {
+                // Refresh marketplace
+                state.plugin_manager.get_marketplace_mut().refresh_marketplace();
+            }
+
+            ui.add_space(10.0);
+
             // Sort options
             ui.label("排序:");
             egui::ComboBox::from_id_source("sort_by")

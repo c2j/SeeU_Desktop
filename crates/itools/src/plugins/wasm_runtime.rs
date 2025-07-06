@@ -52,11 +52,14 @@ impl WasmPluginRuntime {
         
         // Extract metadata
         let metadata = PluginMetadata {
+            id: uuid::Uuid::new_v4(),
             name: manifest.get("name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
             display_name: manifest.get("display_name").and_then(|v| v.as_str()).unwrap_or("Unknown Plugin").to_string(),
             description: manifest.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             version: manifest.get("version").and_then(|v| v.as_str()).unwrap_or("0.1.0").to_string(),
             author: manifest.get("author").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
+            email: manifest.get("email").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            website: manifest.get("website").and_then(|v| v.as_str()).map(|s| s.to_string()),
             homepage: manifest.get("homepage").and_then(|v| v.as_str()).map(|s| s.to_string()),
             repository: manifest.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string()),
             license: manifest.get("license").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
@@ -81,6 +84,28 @@ impl WasmPluginRuntime {
                     }
                 }).collect())
                 .unwrap_or_default(),
+            min_itools_version: manifest.get("min_itools_version").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            supported_platforms: manifest.get("supported_platforms").and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+                .unwrap_or_else(|| vec!["windows".to_string(), "macos".to_string(), "linux".to_string()]),
+            supported_architectures: manifest.get("supported_architectures").and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+                .unwrap_or_else(|| vec!["x86_64".to_string(), "arm64".to_string()]),
+            created_at: manifest.get("created_at").and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc)),
+            updated_at: manifest.get("updated_at").and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc)),
+            plugin_type: manifest.get("plugin_type").and_then(|v| v.as_str()).unwrap_or("wasm").to_string(),
+            entry_point: manifest.get("entry_point").and_then(|v| v.as_str()).unwrap_or("main.wasm").to_string(),
+            runtime_requirements: manifest.get("runtime_requirements").map(|v| {
+                super::plugin::RuntimeRequirements {
+                    memory_mb: v.get("memory_mb").and_then(|v| v.as_u64()).unwrap_or(64),
+                    cpu_cores: v.get("cpu_cores").and_then(|v| v.as_u64()).unwrap_or(1) as u32,
+                    disk_mb: v.get("disk_mb").and_then(|v| v.as_u64()).unwrap_or(10),
+                }
+            }),
         };
         
         // Read WASM module
@@ -247,38 +272,59 @@ impl WasmPluginRuntime {
     
     /// Handle a plugin request
     pub fn handle_plugin_request(&mut self, plugin_id: &Uuid, request: &Value) -> Result<Value> {
-        let plugin = self.plugins.get_mut(plugin_id)
-            .ok_or_else(|| anyhow!("Plugin not found"))?;
-        
-        if let Some(func) = &plugin.handle_request_func {
-            // Convert request to JSON string and pass to plugin
-            let _request_json = serde_json::to_string(request)?;
+        // Convert request to JSON string first
+        let request_json = serde_json::to_string(request)?;
 
-            // In a real implementation, you'd write the JSON string to WASM memory
-            // and pass the pointer and length to the function
-            let mut results = vec![wasmtime::Val::I32(0)];
-            func.call(&mut plugin.store, &[wasmtime::Val::I32(0)], &mut results)?;
+        // Get plugin and handle the request
+        if let Some(plugin) = self.plugins.get_mut(plugin_id) {
+            if let Some(func) = plugin.handle_request_func.clone() {
+                // Allocate memory in WASM for the request
+                let (request_ptr, request_len) = WasmPluginRuntime::write_string_to_wasm_static(&request_json)?;
 
-            if let Some(wasmtime::Val::I32(ptr)) = results.get(0) {
-                if *ptr != 0 {
-                    // Read response JSON from WASM memory
-                    // This is simplified - returning a mock response
-                    Ok(serde_json::json!({
-                        "id": "1",
-                        "result": "Plugin response",
-                        "error": null
-                    }))
-                } else {
-                    Err(anyhow!("Plugin returned null response"))
-                }
-            } else {
-                Err(anyhow!("Invalid return value from plugin_handle_request"))
+                // Call the plugin function
+                let mut results = vec![wasmtime::Val::I32(0)];
+                func.call(&mut plugin.store, &[
+                    wasmtime::Val::I32(request_ptr),
+                    wasmtime::Val::I32(request_len)
+                ], &mut results)?;
+
+                // Get the result pointer from the return value
+                let result_ptr = match &results[0] {
+                    wasmtime::Val::I32(ptr) => *ptr,
+                    _ => return Err(anyhow!("Invalid return type from plugin")),
+                };
+
+                // Read the result from WASM memory
+                let result_json = WasmPluginRuntime::read_string_from_wasm_static(result_ptr)?;
+                let result: Value = serde_json::from_str(&result_json)?;
+
+                return Ok(result);
             }
-        } else {
-            Err(anyhow!("Plugin does not export plugin_handle_request function"))
         }
+
+        Err(anyhow!("Plugin does not support request handling"))
     }
-    
+
+    /// Write a string to WASM memory and return pointer and length (static version)
+    fn write_string_to_wasm_static(data: &str) -> Result<(i32, i32)> {
+        let bytes = data.as_bytes();
+        let len = bytes.len() as i32;
+
+        // For now, use a simple fixed offset approach
+        // In a real implementation, you'd call a WASM allocator function
+        let ptr = 1024; // Start at offset 1024 to avoid conflicts
+
+        // In a real implementation, you'd write to WASM memory here
+        Ok((ptr, len))
+    }
+
+    /// Read a string from WASM memory at the given pointer (static version)
+    fn read_string_from_wasm_static(_ptr: i32) -> Result<String> {
+        // This is a simplified implementation
+        // In a real implementation, you'd read from WASM memory
+        Ok(r#"{"status": "success", "result": "Plugin executed successfully"}"#.to_string())
+    }
+
     /// Cleanup and unload a plugin
     pub fn unload_plugin(&mut self, plugin_id: &Uuid) -> Result<()> {
         if let Some(mut plugin) = self.plugins.remove(plugin_id) {

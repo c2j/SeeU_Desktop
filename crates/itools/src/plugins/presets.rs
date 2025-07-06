@@ -14,33 +14,74 @@ use crate::state::PermissionLevel;
 pub struct PluginPresets;
 
 impl PluginPresets {
+    /// Helper function to create base metadata with common fields
+    fn create_base_metadata(
+        name: &str,
+        display_name: &str,
+        description: &str,
+        version: &str,
+        plugin_type: &str,
+        entry_point: &str,
+        keywords: Vec<String>,
+        categories: Vec<String>,
+        target_roles: Vec<UserRole>,
+        icon: Option<String>,
+    ) -> PluginMetadata {
+        PluginMetadata {
+            id: uuid::Uuid::new_v4(),
+            name: name.to_string(),
+            display_name: display_name.to_string(),
+            description: description.to_string(),
+            version: version.to_string(),
+            author: "SeeU Team".to_string(),
+            email: Some("team@seeu.app".to_string()),
+            website: Some("https://seeu.app".to_string()),
+            homepage: Some(format!("https://github.com/seeu/{}", name)),
+            repository: Some(format!("https://github.com/seeu/{}", name)),
+            license: "MIT".to_string(),
+            keywords,
+            categories,
+            target_roles,
+            icon,
+            screenshots: vec![],
+            min_itools_version: Some("0.1.0".to_string()),
+            supported_platforms: vec!["windows".to_string(), "macos".to_string(), "linux".to_string()],
+            supported_architectures: vec!["x86_64".to_string(), "arm64".to_string()],
+            created_at: Some(chrono::Utc::now()),
+            updated_at: Some(chrono::Utc::now()),
+            plugin_type: plugin_type.to_string(),
+            entry_point: entry_point.to_string(),
+            runtime_requirements: Some(super::plugin::RuntimeRequirements {
+                memory_mb: 64,
+                cpu_cores: 1,
+                disk_mb: 10,
+            }),
+        }
+    }
     /// Create Filesystem MCP Server plugin
     pub fn create_filesystem_plugin() -> MarketplacePlugin {
-        let metadata = PluginMetadata {
-            name: "filesystem-mcp".to_string(),
-            display_name: "文件系统 MCP 服务器".to_string(),
-            description: "提供受限访问桌面和下载目录的文件读写功能，支持安全的文件操作".to_string(),
-            version: "1.0.0".to_string(),
-            author: "SeeU Team".to_string(),
-            homepage: Some("https://github.com/seeu/filesystem-mcp".to_string()),
-            repository: Some("https://github.com/seeu/filesystem-mcp".to_string()),
-            license: "MIT".to_string(),
-            keywords: vec![
+        let metadata = Self::create_base_metadata(
+            "filesystem-mcp",
+            "文件系统 MCP 服务器",
+            "提供受限访问桌面和下载目录的文件读写功能，支持安全的文件操作",
+            "1.0.0",
+            "mcp_server",
+            "src/mcp_server.json",
+            vec![
                 "filesystem".to_string(),
                 "files".to_string(),
                 "mcp".to_string(),
                 "desktop".to_string(),
             ],
-            categories: vec!["file-system".to_string()],
-            target_roles: vec![
+            vec!["file-system".to_string()],
+            vec![
                 UserRole::BusinessUser,
                 UserRole::Developer,
                 UserRole::Operations,
                 UserRole::Administrator,
             ],
-            icon: Some("📁".to_string()),
-            screenshots: vec![],
-        };
+            Some("📁".to_string()),
+        );
 
         let manifest = PluginManifest {
             schema_version: "1.0".to_string(),
@@ -194,26 +235,23 @@ impl PluginPresets {
 
     /// Create Git Integration plugin
     pub fn create_git_plugin() -> MarketplacePlugin {
-        let metadata = PluginMetadata {
-            name: "git-integration".to_string(),
-            display_name: "Git 集成".to_string(),
-            description: "代码仓库管理、分支操作、提交历史可视化工具".to_string(),
-            version: "1.2.0".to_string(),
-            author: "SeeU Team".to_string(),
-            homepage: Some("https://github.com/seeu/git-integration".to_string()),
-            repository: Some("https://github.com/seeu/git-integration".to_string()),
-            license: "MIT".to_string(),
-            keywords: vec![
+        let metadata = Self::create_base_metadata(
+            "git-integration",
+            "Git 集成",
+            "代码仓库管理、分支操作、提交历史可视化工具",
+            "1.2.0",
+            "mcp_server",
+            "src/mcp_server.json",
+            vec![
                 "git".to_string(),
                 "version-control".to_string(),
                 "development".to_string(),
                 "repository".to_string(),
             ],
-            categories: vec!["development".to_string()],
-            target_roles: vec![UserRole::Developer, UserRole::Administrator],
-            icon: Some("🔀".to_string()),
-            screenshots: vec![],
-        };
+            vec!["development".to_string()],
+            vec![UserRole::Developer, UserRole::Administrator],
+            Some("🔀".to_string()),
+        );
 
         let manifest = PluginManifest {
             schema_version: "1.0".to_string(),
@@ -321,27 +359,24 @@ impl PluginPresets {
 
     /// Create BI Connector plugin
     pub fn create_bi_plugin() -> MarketplacePlugin {
-        let metadata = PluginMetadata {
-            name: "bi-connector".to_string(),
-            display_name: "BI 连接器".to_string(),
-            description: "连接 Tableau/Power BI，自动生成数据看板和可视化报表".to_string(),
-            version: "2.1.0".to_string(),
-            author: "SeeU Team".to_string(),
-            homepage: Some("https://github.com/seeu/bi-connector".to_string()),
-            repository: Some("https://github.com/seeu/bi-connector".to_string()),
-            license: "MIT".to_string(),
-            keywords: vec![
+        let metadata = Self::create_base_metadata(
+            "bi-connector",
+            "BI 连接器",
+            "连接 Tableau/Power BI，自动生成数据看板和可视化报表",
+            "2.1.0",
+            "mcp_server",
+            "src/mcp_server.json",
+            vec![
                 "bi".to_string(),
                 "tableau".to_string(),
                 "powerbi".to_string(),
                 "dashboard".to_string(),
                 "visualization".to_string(),
             ],
-            categories: vec!["data-analysis".to_string()],
-            target_roles: vec![UserRole::BusinessUser, UserRole::Administrator],
-            icon: Some("📊".to_string()),
-            screenshots: vec![],
-        };
+            vec!["data-analysis".to_string()],
+            vec![UserRole::BusinessUser, UserRole::Administrator],
+            Some("📊".to_string()),
+        );
 
         let manifest = PluginManifest {
             schema_version: "1.0".to_string(),
@@ -462,27 +497,24 @@ impl PluginPresets {
 
     /// Create System Monitor plugin
     pub fn create_system_monitor_plugin() -> MarketplacePlugin {
-        let metadata = PluginMetadata {
-            name: "system-monitor".to_string(),
-            display_name: "系统监控".to_string(),
-            description: "实时 CPU/内存监控、异常进程告警和系统性能分析".to_string(),
-            version: "1.5.2".to_string(),
-            author: "SeeU Team".to_string(),
-            homepage: Some("https://github.com/seeu/system-monitor".to_string()),
-            repository: Some("https://github.com/seeu/system-monitor".to_string()),
-            license: "MIT".to_string(),
-            keywords: vec![
+        let metadata = Self::create_base_metadata(
+            "system-monitor",
+            "系统监控",
+            "实时 CPU/内存监控、异常进程告警和系统性能分析",
+            "1.5.2",
+            "mcp_server",
+            "src/mcp_server.json",
+            vec![
                 "monitoring".to_string(),
                 "system".to_string(),
                 "performance".to_string(),
                 "cpu".to_string(),
                 "memory".to_string(),
             ],
-            categories: vec!["monitoring".to_string()],
-            target_roles: vec![UserRole::Operations, UserRole::Administrator],
-            icon: Some("📈".to_string()),
-            screenshots: vec![],
-        };
+            vec!["monitoring".to_string()],
+            vec![UserRole::Operations, UserRole::Administrator],
+            Some("📈".to_string()),
+        );
 
         let manifest = PluginManifest {
             schema_version: "1.0".to_string(),

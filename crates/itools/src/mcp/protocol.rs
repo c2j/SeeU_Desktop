@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
 
 /// MCP message types based on JSON-RPC 2.0
 #[derive(Debug, Clone, Serialize, Deserialize)]

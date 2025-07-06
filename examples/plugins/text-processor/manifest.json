@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0",
+  "mcp_version": "2024-11-05",
+  "capabilities": {
+    "provides_resources": true,
+    "provides_tools": true,
+    "provides_prompts": true,
+    "supports_sampling": false,
+    "supports_notifications": true,
+    "supports_progress": true
+  },
+  "permissions": [
+    {
+      "type": "file_system",
+      "paths": ["~/Documents", "~/Downloads"],
+      "operations": ["read", "write"]
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "python",
+      "version": ">=3.8",
+      "optional": false
+    },
+    {
+      "name": "nltk",
+      "version": ">=3.8",
+      "optional": true
+    }
+  ],
+  "resources": [
+    {
+      "uri": "file://templates/report.html",
+      "name": "Report Template",
+      "description": "HTML template for text analysis reports",
+      "mime_type": "text/html"
+    }
+  ],
+  "tools": [
+    {
+      "name": "analyze_text",
+      "description": "Analyze text for various metrics (word count, readability, etc.)",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Text content to analyze"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["word_count", "char_count", "readability", "sentiment", "keywords"]
+            },
+            "description": "Metrics to calculate",
+            "default": ["word_count", "char_count"]
+          }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "convert_format",
+      "description": "Convert text between different formats",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Text content to convert"
+          },
+          "from_format": {
+            "type": "string",
+            "enum": ["plain", "markdown", "html", "json"],
+            "description": "Source format"
+          },
+          "to_format": {
+            "type": "string",
+            "enum": ["plain", "markdown", "html", "json"],
+            "description": "Target format"
+          }
+        },
+        "required": ["text", "from_format", "to_format"]
+      }
+    },
+    {
+      "name": "extract_content",
+      "description": "Extract specific content from text (emails, URLs, phone numbers, etc.)",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Text content to extract from"
+          },
+          "content_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["emails", "urls", "phone_numbers", "dates", "numbers"]
+            },
+            "description": "Types of content to extract",
+            "default": ["emails", "urls"]
+          }
+        },
+        "required": ["text"]
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "name": "summarize_text",
+      "description": "Generate a summary of the provided text",
+      "arguments": [
+        {
+          "name": "text",
+          "description": "Text to summarize",
+          "required": true
+        },
+        {
+          "name": "max_length",
+          "description": "Maximum length of summary in words",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "configuration": {
+    "schema": "config/schema.json",
+    "default": "config/default.json"
+  }
+}

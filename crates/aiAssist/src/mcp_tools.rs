@@ -1,9 +1,8 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 use uuid::Uuid;
-use std::collections::HashMap;
 
-use crate::api::{Tool, FunctionDefinition, ToolCall, FunctionCall};
+use crate::api::{Tool, FunctionDefinition, ToolCall};
 
 /// MCP工具信息
 #[derive(Debug, Clone)]
@@ -31,7 +30,7 @@ pub struct McpPromptInfo {
 }
 
 /// MCP提示参数
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct McpPromptArgument {
     pub name: String,
     pub description: Option<String>,

@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "mcp_version": "2024-11-05",
+  "capabilities": {
+    "provides_resources": false,
+    "provides_tools": true,
+    "provides_prompts": false,
+    "supports_sampling": false,
+    "supports_notifications": false,
+    "supports_progress": false
+  },
+  "permissions": [
+    {
+      "type": "system",
+      "operations": ["compute"]
+    }
+  ],
+  "dependencies": [],
+  "resources": [],
+  "tools": [
+    {
+      "name": "calculate",
+      "description": "Perform basic mathematical calculations",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "Mathematical expression to evaluate (e.g., '2 + 3 * 4')"
+          }
+        },
+        "required": ["expression"]
+      }
+    },
+    {
+      "name": "convert_units",
+      "description": "Convert between different units",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "Value to convert"
+          },
+          "from_unit": {
+            "type": "string",
+            "description": "Source unit (e.g., 'km', 'miles', 'kg', 'lbs')"
+          },
+          "to_unit": {
+            "type": "string",
+            "description": "Target unit"
+          }
+        },
+        "required": ["value", "from_unit", "to_unit"]
+      }
+    }
+  ],
+  "prompts": [],
+  "configuration": {
+    "schema": "config/schema.json",
+    "default": "config/default.json"
+  }
+}

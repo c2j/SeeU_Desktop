@@ -169,9 +169,7 @@ pub fn load_settings(state: &mut AIAssistState) -> Result<(), Box<dyn std::error
 pub fn load_chat_sessions(state: &mut AIAssistState) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
     use serde_json;
-    use crate::state::{ChatSession, ChatMessage, MessageRole};
-    use chrono::{DateTime, Utc};
-    use uuid::Uuid;
+    use crate::state::ChatSession;
 
     let base_path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let data_dir = base_path.join("seeu_desktop").join("ai_assistant");

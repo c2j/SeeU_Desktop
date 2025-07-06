@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use super::plugin::{Plugin, PluginMetadata, PluginManifest, PluginCapabilities, PluginPermission, ResourceDefinition, ToolDefinition, PromptDefinition, PromptArgument, PermissionType};
 use crate::roles::UserRole;
@@ -309,10 +309,57 @@ impl PluginMarketplace {
     pub fn refresh_marketplace(&mut self) {
         log::info!("Refreshing marketplace data");
 
-        // TODO: Implement actual marketplace API calls
-        // For now, we'll use preset data
+        // Try to fetch from real marketplace API
+        if let Err(e) = self.fetch_marketplace_data() {
+            log::warn!("Failed to fetch marketplace data from API: {}, using preset data", e);
+        }
 
         self.last_refresh = Some(chrono::Utc::now());
+    }
+
+    /// Fetch marketplace data from API
+    fn fetch_marketplace_data(&mut self) -> Result<()> {
+        // Create HTTP client
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+
+        // Fetch plugins list
+        let plugins_url = format!("{}/api/plugins", self.marketplace_url);
+        match client.get(&plugins_url).send() {
+            Ok(response) => {
+                if response.status().is_success() {
+                    if let Ok(plugins_data) = response.json::<Vec<MarketplacePlugin>>() {
+                        log::info!("Fetched {} plugins from marketplace", plugins_data.len());
+
+                        // Update available plugins
+                        self.available_plugins.clear();
+                        for plugin in plugins_data {
+                            self.available_plugins.insert(plugin.plugin.id, plugin);
+                        }
+                    }
+                } else {
+                    log::warn!("Marketplace API returned status: {}", response.status());
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to connect to marketplace API: {}", e);
+                return Err(anyhow::anyhow!("Network error: {}", e));
+            }
+        }
+
+        // Fetch categories
+        let categories_url = format!("{}/api/categories", self.marketplace_url);
+        if let Ok(response) = client.get(&categories_url).send() {
+            if response.status().is_success() {
+                if let Ok(categories_data) = response.json::<Vec<PluginCategory>>() {
+                    log::info!("Fetched {} categories from marketplace", categories_data.len());
+                    self.categories = categories_data;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

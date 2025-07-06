@@ -1,0 +1,25 @@
+{
+  "max_text_length": 100000,
+  "default_metrics": ["word_count", "char_count", "readability"],
+  "enable_advanced_analysis": true,
+  "sentiment_analysis": {
+    "enabled": true,
+    "language": "en"
+  },
+  "keyword_extraction": {
+    "enabled": true,
+    "max_keywords": 10,
+    "min_word_length": 3
+  },
+  "format_conversion": {
+    "preserve_formatting": true,
+    "html_escape": true
+  },
+  "content_extraction": {
+    "case_sensitive": false,
+    "include_context": false
+  },
+  "output_format": "detailed",
+  "enable_caching": true,
+  "cache_duration_minutes": 30
+}

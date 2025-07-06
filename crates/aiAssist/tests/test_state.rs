@@ -112,11 +112,14 @@ fn test_message_role_variants() {
 #[test]
 fn test_ai_assist_state_default() {
     let state = AIAssistState::default();
-    
+
     // 测试默认状态
-    assert!(state.sessions.is_empty());
-    assert!(state.current_session_id.is_none());
+    assert_eq!(state.chat_sessions.len(), 1); // 默认创建一个会话
+    assert_eq!(state.active_session_idx, 0);
+    assert!(state.current_request_id.is_none());
     assert!(state.selected_mcp_server.is_none());
     assert!(state.mcp_server_capabilities.is_empty());
     assert!(state.server_names.is_empty());
+    assert!(!state.is_sending);
+    assert!(!state.show_ai_settings);
 }

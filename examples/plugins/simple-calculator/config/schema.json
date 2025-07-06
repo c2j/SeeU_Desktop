@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Simple Calculator Configuration",
+  "description": "Configuration schema for the Simple Calculator plugin",
+  "properties": {
+    "precision": {
+      "type": "integer",
+      "description": "Number of decimal places for calculation results",
+      "minimum": 0,
+      "maximum": 15,
+      "default": 6
+    },
+    "angle_unit": {
+      "type": "string",
+      "description": "Default angle unit for trigonometric functions",
+      "enum": ["degrees", "radians"],
+      "default": "degrees"
+    },
+    "enable_advanced_functions": {
+      "type": "boolean",
+      "description": "Enable advanced mathematical functions (sin, cos, log, etc.)",
+      "default": false
+    },
+    "max_expression_length": {
+      "type": "integer",
+      "description": "Maximum allowed length for mathematical expressions",
+      "minimum": 10,
+      "maximum": 1000,
+      "default": 100
+    },
+    "supported_units": {
+      "type": "object",
+      "description": "Configuration for supported unit types",
+      "properties": {
+        "length": {
+          "type": "array",
+          "description": "Supported length units",
+          "items": {
+            "type": "string"
+          },
+          "default": ["m", "km", "cm", "mm", "ft", "in", "mile", "yard"]
+        },
+        "weight": {
+          "type": "array",
+          "description": "Supported weight units",
+          "items": {
+            "type": "string"
+          },
+          "default": ["g", "kg", "lb", "oz", "ton"]
+        },
+        "temperature": {
+          "type": "array",
+          "description": "Supported temperature units",
+          "items": {
+            "type": "string"
+          },
+          "default": ["celsius", "fahrenheit", "kelvin"]
+        }
+      }
+    },
+    "output_format": {
+      "type": "string",
+      "description": "Default output format for results",
+      "enum": ["simple", "detailed", "formatted"],
+      "default": "formatted"
+    },
+    "enable_history": {
+      "type": "boolean",
+      "description": "Enable calculation history tracking",
+      "default": true
+    },
+    "max_history_entries": {
+      "type": "integer",
+      "description": "Maximum number of history entries to keep",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 100
+    }
+  },
+  "required": []
+}

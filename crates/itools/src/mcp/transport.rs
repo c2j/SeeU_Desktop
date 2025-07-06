@@ -1,6 +1,4 @@
 use anyhow::Result;
-use serde_json::Value;
-use std::process::{Command, Stdio};
 
 /// MCP transport layer for different communication methods
 #[derive(Debug)]

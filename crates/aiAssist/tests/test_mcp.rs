@@ -1,5 +1,5 @@
 use aiAssist::state::AIAssistState;
-use aiAssist::mcp_tools::{McpServerCapabilities, McpToolInfo, McpResourceInfo, McpPromptInfo};
+use aiAssist::mcp_tools::{McpServerCapabilities, McpToolInfo, McpResourceInfo, McpPromptInfo, McpPromptArgument};
 use aiAssist::mcp_integration::McpIntegrationManager;
 use uuid::Uuid;
 use serde_json::json;
@@ -129,12 +129,35 @@ fn test_mcp_prompt_info_structure() {
     let prompt_info = McpPromptInfo {
         name: "code_review".to_string(),
         description: Some("Review code for best practices".to_string()),
-        arguments: vec!["language".to_string(), "code".to_string()],
+        arguments: vec![
+            McpPromptArgument {
+                name: "language".to_string(),
+                description: Some("Programming language".to_string()),
+                required: true,
+            },
+            McpPromptArgument {
+                name: "code".to_string(),
+                description: Some("Code to review".to_string()),
+                required: true,
+            },
+        ],
     };
-    
+
     assert_eq!(prompt_info.name, "code_review");
     assert!(prompt_info.description.is_some());
     assert_eq!(prompt_info.arguments.len(), 2);
-    assert!(prompt_info.arguments.contains(&"language".to_string()));
-    assert!(prompt_info.arguments.contains(&"code".to_string()));
+
+    let language_arg = McpPromptArgument {
+        name: "language".to_string(),
+        description: Some("Programming language".to_string()),
+        required: true,
+    };
+    let code_arg = McpPromptArgument {
+        name: "code".to_string(),
+        description: Some("Code to review".to_string()),
+        required: true,
+    };
+
+    assert!(prompt_info.arguments.contains(&language_arg));
+    assert!(prompt_info.arguments.contains(&code_arg));
 }

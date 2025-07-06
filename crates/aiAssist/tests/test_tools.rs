@@ -1,5 +1,5 @@
 use uuid::Uuid;
-use chrono::Utc;
+use chrono::{Utc, Datelike};
 
 #[test]
 fn test_tool_call_id_generation() {

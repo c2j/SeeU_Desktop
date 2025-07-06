@@ -22,11 +22,14 @@ pub struct Plugin {
 /// Plugin metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginMetadata {
+    pub id: uuid::Uuid,
     pub name: String,
     pub display_name: String,
     pub description: String,
     pub version: String,
     pub author: String,
+    pub email: Option<String>,
+    pub website: Option<String>,
     pub homepage: Option<String>,
     pub repository: Option<String>,
     pub license: String,
@@ -35,6 +38,22 @@ pub struct PluginMetadata {
     pub target_roles: Vec<UserRole>,
     pub icon: Option<String>,
     pub screenshots: Vec<String>,
+    pub min_itools_version: Option<String>,
+    pub supported_platforms: Vec<String>,
+    pub supported_architectures: Vec<String>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub plugin_type: String,
+    pub entry_point: String,
+    pub runtime_requirements: Option<RuntimeRequirements>,
+}
+
+/// Runtime requirements for a plugin
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeRequirements {
+    pub memory_mb: u64,
+    pub cpu_cores: u32,
+    pub disk_mb: u64,
 }
 
 /// Plugin manifest defining capabilities and requirements
@@ -165,7 +184,7 @@ impl Plugin {
     /// Create a new plugin instance
     pub fn new(metadata: PluginMetadata, manifest: PluginManifest) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: metadata.id,
             metadata,
             manifest,
             status: PluginStatus::NotInstalled,

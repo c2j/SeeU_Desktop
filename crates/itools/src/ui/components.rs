@@ -1,5 +1,4 @@
 use eframe::egui;
-use uuid::Uuid;
 use crate::state::IToolsState;
 use crate::plugins::marketplace::MarketplacePlugin;
 

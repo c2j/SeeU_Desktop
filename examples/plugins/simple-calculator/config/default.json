@@ -1,0 +1,14 @@
+{
+  "precision": 6,
+  "angle_unit": "degrees",
+  "enable_advanced_functions": false,
+  "max_expression_length": 100,
+  "supported_units": {
+    "length": ["m", "km", "cm", "mm", "ft", "in", "mile", "yard"],
+    "weight": ["g", "kg", "lb", "oz", "ton"],
+    "temperature": ["celsius", "fahrenheit", "kelvin"]
+  },
+  "output_format": "formatted",
+  "enable_history": true,
+  "max_history_entries": 100
+}

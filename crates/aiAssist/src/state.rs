@@ -497,7 +497,7 @@ impl AIAssistState {
 
         // 使用标准线程而不是tokio任务
         let state_mutex_clone = state_mutex.clone();
-        let request_id_clone = request_id;
+        let _request_id_clone = request_id;
 
         // 检查是否有选中的MCP服务器，如果有则准备工具
         let tools = if let Some(server_id) = self.selected_mcp_server {
@@ -670,7 +670,7 @@ impl AIAssistState {
                 },
                 MessageRole::Assistant => {
                     // 如果有工具调用，需要特殊处理
-                    if let Some(tool_calls) = &message.tool_calls {
+                    if let Some(_tool_calls) = &message.tool_calls {
                         // 添加助手的工具调用消息
                         let mut content = message.content.clone();
                         if content.is_empty() {
