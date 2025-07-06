@@ -1,12 +1,27 @@
-use crate::terminal::TerminalManager;
 use crate::config::TerminalConfig;
+use crate::egui_terminal::EguiTerminalManager;
+use crate::export_ui::ExportDialog;
+use crate::session_history::SessionHistoryManager;
+use crate::session_history_ui::SessionHistoryUI;
+use crate::help_ui::TerminalHelpUI;
+use eframe::egui;
 use uuid::Uuid;
 
 /// Main state for the iTerminal module
 #[derive(Debug)]
 pub struct ITerminalState {
-    /// Terminal manager
-    pub terminal_manager: TerminalManager,
+    /// egui_term based terminal manager
+    pub egui_terminal_manager: EguiTerminalManager,
+    /// Terminal configuration
+    pub config: TerminalConfig,
+    /// Export dialog state
+    pub export_dialog: ExportDialog,
+    /// Session history manager
+    pub session_history_manager: Option<SessionHistoryManager>,
+    /// Session history UI state
+    pub session_history_ui: SessionHistoryUI,
+    /// Terminal help UI state
+    pub help_ui: TerminalHelpUI,
     /// Whether to show command history
     pub show_history: bool,
     /// Search query for history
@@ -19,8 +34,6 @@ pub struct ITerminalState {
     pub font_scale: f32,
     /// Last update time for cursor blinking
     pub last_cursor_blink: std::time::Instant,
-    /// Command input for the interface
-    pub command_input: String,
     /// Terminal history for display
     pub terminal_history: Vec<String>,
     /// Current session name
@@ -31,17 +44,33 @@ impl ITerminalState {
     /// Create a new terminal state
     pub fn new() -> Self {
         let config = TerminalConfig::load();
-        let terminal_manager = TerminalManager::new(config);
+        let egui_terminal_manager = EguiTerminalManager::new();
+
+        // Initialize session history manager
+        let session_history_manager = match SessionHistoryManager::new() {
+            Ok(manager) => {
+                log::info!("Session history manager initialized successfully");
+                Some(manager)
+            }
+            Err(e) => {
+                log::warn!("Failed to initialize session history manager: {}", e);
+                None
+            }
+        };
 
         Self {
-            terminal_manager,
+            egui_terminal_manager,
+            config,
+            export_dialog: ExportDialog::default(),
+            session_history_manager,
+            session_history_ui: SessionHistoryUI::default(),
+            help_ui: TerminalHelpUI::default(),
             show_history: false,
             history_search: String::new(),
             has_focus: false,
             cursor_visible: true,
             font_scale: 1.0,
             last_cursor_blink: std::time::Instant::now(),
-            command_input: String::new(),
             terminal_history: Vec::new(),
             current_session: "主会话".to_string(),
         }
@@ -49,14 +78,13 @@ impl ITerminalState {
 
     /// Update the terminal state
     pub fn update(&mut self) {
-        // Update terminal manager
-        self.terminal_manager.update();
+        // Update egui terminal manager
+        self.egui_terminal_manager.update();
 
         // Handle cursor blinking
-        let config = self.terminal_manager.get_config();
-        if self.has_focus && config.cursor_blink_interval > 0 {
+        if self.has_focus && self.config.cursor_blink_interval > 0 {
             let elapsed = self.last_cursor_blink.elapsed();
-            if elapsed.as_millis() >= config.cursor_blink_interval as u128 {
+            if elapsed.as_millis() >= self.config.cursor_blink_interval as u128 {
                 self.cursor_visible = !self.cursor_visible;
                 self.last_cursor_blink = std::time::Instant::now();
             }
@@ -66,103 +94,24 @@ impl ITerminalState {
     }
 
     /// Create a new terminal session
-    pub fn create_session(&mut self, title: Option<String>) -> Uuid {
-        let title = title.unwrap_or_else(|| {
-            format!("Terminal {}", self.terminal_manager.session_count() + 1)
-        });
-        self.terminal_manager.create_session(title)
+    pub fn create_session(&mut self, title: Option<String>, ctx: Option<&egui::Context>) -> Result<Uuid, String> {
+        if let Some(ctx) = ctx {
+            self.egui_terminal_manager.create_session(title, ctx)
+        } else {
+            let error_msg = "Cannot create egui_term session without context";
+            log::error!("{}", error_msg);
+            Err(error_msg.to_string())
+        }
     }
 
     /// Close a terminal session
     pub fn close_session(&mut self, session_id: Uuid) -> bool {
-        self.terminal_manager.close_session(session_id)
+        self.egui_terminal_manager.close_session(session_id)
     }
 
     /// Set the active session
     pub fn set_active_session(&mut self, session_id: Uuid) -> bool {
-        self.terminal_manager.set_active_session(session_id)
-    }
-
-    /// Execute a command in the active session
-    pub fn execute_command(&mut self, command: String) -> bool {
-        self.terminal_manager.execute_command(command)
-    }
-
-    /// Execute command in current session
-    pub fn execute_current_input(&mut self) -> bool {
-        if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            let command = session.execute_current_input();
-            if !command.trim().is_empty() {
-                let session_id = session.id;
-                // Drop the mutable borrow before calling execute_command_in_session
-                let _ = session;
-                self.terminal_manager.execute_command_in_session(session_id, command);
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Insert character at cursor position
-    pub fn insert_char(&mut self, ch: char) -> bool {
-        if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            session.insert_char(ch);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Delete character before cursor
-    pub fn delete_char_before_cursor(&mut self) -> bool {
-        if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            session.delete_char_before_cursor();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Move cursor left
-    pub fn move_cursor_left(&mut self) -> bool {
-        if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            session.move_cursor_left();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Move cursor right
-    pub fn move_cursor_right(&mut self) -> bool {
-        if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            session.move_cursor_right();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Navigate to previous command in history
-    pub fn history_previous(&mut self) -> bool {
-        if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            if let Some(prev_command) = session.history.get_previous() {
-                session.set_input(prev_command);
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Navigate to next command in history
-    pub fn history_next(&mut self) -> bool {
-        if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            if let Some(next_command) = session.history.get_next() {
-                session.set_input(next_command);
-                return true;
-            }
-        }
-        false
+        self.egui_terminal_manager.set_active_session(session_id)
     }
 
     /// Toggle history dialog
@@ -172,17 +121,17 @@ impl ITerminalState {
 
     /// Save current configuration
     pub fn save_config(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.terminal_manager.get_config().save()
+        self.config.save()
     }
 
     /// Update configuration
     pub fn update_config(&mut self, config: TerminalConfig) {
-        self.terminal_manager.update_config(config);
+        self.config = config;
     }
 
     /// Get current configuration
     pub fn get_config(&self) -> &TerminalConfig {
-        self.terminal_manager.get_config()
+        &self.config
     }
 
     /// Increase font size
@@ -200,28 +149,22 @@ impl ITerminalState {
         self.font_scale = 1.0;
     }
 
-    /// Execute command directly
-    pub fn execute_command_direct(&mut self, command: String) {
-        if let Some(session) = self.terminal_manager.get_active_session_mut() {
-            let session_id = session.id;
-            session.current_input = command.clone();
-            let executed_command = session.execute_current_input();
-            if !executed_command.trim().is_empty() {
-                let _ = session;
-                self.terminal_manager.execute_command_in_session(session_id, executed_command);
-            }
-        }
-    }
-
-    /// Check if there are any running commands
-    pub fn has_running_commands(&self) -> bool {
-        self.terminal_manager.has_active_commands()
-    }
-
     /// Get the number of sessions
     pub fn session_count(&self) -> usize {
-        self.terminal_manager.session_count()
+        self.egui_terminal_manager.session_count()
     }
+
+    /// Get the egui terminal manager
+    pub fn get_egui_terminal_manager(&self) -> &EguiTerminalManager {
+        &self.egui_terminal_manager
+    }
+
+    /// Get the egui terminal manager (mutable)
+    pub fn get_egui_terminal_manager_mut(&mut self) -> &mut EguiTerminalManager {
+        &mut self.egui_terminal_manager
+    }
+
+
 }
 
 impl Default for ITerminalState {

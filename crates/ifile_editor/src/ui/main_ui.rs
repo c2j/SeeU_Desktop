@@ -90,19 +90,13 @@ fn render_editor_area(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     let available_height = ui.available_height();
 
     ui.vertical(|ui| {
-        // 顶部工具栏
-        render_toolbar(ui, state);
+        // 合并的工具栏和标签页
+        tabs::render_tabs_with_toolbar(ui, state);
+        ui.separator();
 
-        // 标签页
-        if !state.editor.tabs.is_empty() {
-            tabs::render_tabs(ui, state);
-            ui.separator();
-        }
-
-        // 计算编辑器内容区域的高度（减去工具栏和标签页的高度）
-        let toolbar_height = 40.0; // 工具栏大概高度
-        let tabs_height = if !state.editor.tabs.is_empty() { 30.0 } else { 0.0 }; // 标签页高度
-        let content_height = available_height - toolbar_height - tabs_height;
+        // 计算编辑器内容区域的高度（减去合并工具栏的高度）
+        let toolbar_height = 40.0; // 合并工具栏大概高度
+        let content_height = available_height - toolbar_height;
 
         // 编辑器内容区域，确保撑满剩余高度
         ui.allocate_ui_with_layout(
@@ -120,14 +114,16 @@ fn render_editor_area(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     });
 }
 
-/// 渲染工具栏
-fn render_toolbar(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+// 原工具栏函数已合并到标签页组件中
+// 保留此函数以防需要单独使用
+#[allow(dead_code)]
+fn render_toolbar_legacy(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     ui.horizontal(|ui| {
         // 文件操作按钮
         if ui.button("📁 打开").clicked() {
             state.open_file_dialog();
         }
-        
+
         if ui.button("💾 保存").clicked() {
             if let Err(e) = state.editor.save_active_file() {
                 log::error!("Failed to save file: {}", e);
@@ -161,30 +157,30 @@ fn render_toolbar(ui: &mut egui::Ui, state: &mut IFileEditorState) {
         }
 
         ui.separator();
-        
+
         // 视图切换按钮
         let tree_button_text = if state.ui_state.show_file_tree {
             "🗂️ 隐藏文件树"
         } else {
             "🗂️ 显示文件树"
         };
-        
+
         if ui.button(tree_button_text).clicked() {
             state.ui_state.show_file_tree = !state.ui_state.show_file_tree;
             log::info!("File tree visibility toggled: {}", state.ui_state.show_file_tree);
         }
-        
+
         ui.separator();
-        
+
         // 搜索框
         ui.label("🔍");
         ui.text_edit_singleline(&mut state.ui_state.search_query);
-        
+
         if ui.button("搜索").clicked() {
             state.ui_state.show_search = !state.ui_state.search_query.is_empty();
         }
     });
-    
+
     ui.separator();
 }
 

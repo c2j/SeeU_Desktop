@@ -45,6 +45,9 @@ pub struct IFileEditorState {
     /// 文件树状态
     pub file_tree: FileTreeState,
 
+    /// 上一帧的展开状态，用于检测展开状态变化
+    pub previous_expanded_dirs: std::collections::HashSet<PathBuf>,
+
     /// 编辑器状态
     pub editor: EditorState,
 
@@ -77,6 +80,7 @@ impl IFileEditorState {
             initialized: false,
             workspace_root: None,
             file_tree: FileTreeState::new(),
+            previous_expanded_dirs: std::collections::HashSet::new(),
             editor: EditorState::new(),
             ui_state: EditorUIState::new(),
             settings,
@@ -829,6 +833,13 @@ impl TextBuffer {
         self.cursor.line = line;
         self.cursor.column = column;
     }
+
+    /// 获取行高估算值（用于滚动计算）
+    pub fn get_line_height_estimate(&self) -> f32 {
+        // 基于字体大小估算行高
+        // 通常行高 = 字体大小 * 1.2 到 1.5
+        16.0 // 默认行高，可以根据实际字体大小调整
+    }
 }
 
 /// 光标位置
@@ -1019,6 +1030,25 @@ impl FileTreeState {
     /// 获取文件条目
     pub fn get_file_entry(&self, path: &PathBuf) -> Option<&FileEntry> {
         self.file_entries.get(path)
+    }
+
+    /// 获取当前展开的目录列表
+    pub fn get_expanded_directories(&self) -> std::collections::HashSet<PathBuf> {
+        let mut expanded_dirs = std::collections::HashSet::new();
+
+        // 遍历所有目录条目，检查哪些是展开状态的
+        for (path, entry) in self.file_entries.iter() {
+            if entry.is_dir {
+                let node_id = FileNodeId(path.clone());
+                // 使用一个间接方法来检测展开状态：
+                // 如果目录有已加载的子项，并且在TreeViewState中有状态记录，则认为它可能是展开的
+                if self.directory_children.contains_key(path) {
+                    expanded_dirs.insert(path.clone());
+                }
+            }
+        }
+
+        expanded_dirs
     }
 
     /// 获取根目录的子项

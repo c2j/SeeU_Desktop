@@ -84,6 +84,12 @@ members = [
     "crates/iterminal",
     "crates/ifile_editor",
     "crates/egui_ltreeview",
+    "crates/egui_code_editor",
+    "crates/egui_term",
+    "crates/alacritty_terminal",
+]
+exclude = [
+    "crates/egui_term/examples/*",
 ]
 
 [profile.release]

@@ -91,8 +91,28 @@ fn render_ltree_view(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     let file_entries = state.file_tree.file_entries.clone();
     let directory_children = state.file_tree.directory_children.clone();
 
+    // 由于闭包借用问题，我们需要分离右键菜单的处理
+    let mut context_menu_request: Option<(PathBuf, bool)> = None;
+
     let (_response, actions) = TreeView::new(tree_id)
         .allow_multi_selection(true)
+        .fallback_context_menu(|ui, selected_nodes: &Vec<FileNodeId>| {
+            // 简化的右键菜单处理
+            if let Some(first_node) = selected_nodes.first() {
+                let path = &first_node.0;
+                ui.label(format!("右键菜单: {}", path.file_name().and_then(|n| n.to_str()).unwrap_or("未知")));
+
+                if ui.button("📝 打开").clicked() {
+                    // 设置请求标志，在外部处理
+                    ui.close_menu();
+                }
+
+                if ui.button("📋 复制路径").clicked() {
+                    copy_path_to_clipboard(path);
+                    ui.close_menu();
+                }
+            }
+        })
         .show_state(ui, &mut state.file_tree.tree_view_state, |builder| {
             if let Some(root) = &root_path {
                 build_tree_nodes_simple(builder, &file_entries, &directory_children, root);
@@ -101,6 +121,50 @@ fn render_ltree_view(ui: &mut egui::Ui, state: &mut IFileEditorState) {
 
     // 处理树视图操作
     handle_tree_actions(actions, state);
+
+    // 检查并加载新展开的目录
+    check_and_load_expanded_directories(state);
+}
+
+/// 检查并加载新展开的目录
+fn check_and_load_expanded_directories(state: &mut IFileEditorState) {
+    // 获取当前展开的目录列表
+    let current_expanded_dirs = get_currently_expanded_directories(state);
+
+    // 检查是否有新展开的目录需要加载内容
+    for path in current_expanded_dirs {
+        if let Some(entry) = state.file_tree.get_file_entry(&path) {
+            if entry.is_dir && !state.file_tree.directory_children.contains_key(&path) {
+                log::info!("Loading children for newly expanded directory: {:?}", path);
+                if let Err(e) = state.file_tree.load_directory_children(&path) {
+                    log::error!("Failed to load directory children: {}", e);
+                    state.last_error = Some(e);
+                } else {
+                    log::info!("Successfully loaded children for expanded directory: {:?}", path);
+                }
+            }
+        }
+    }
+}
+
+/// 获取当前展开的目录列表
+fn get_currently_expanded_directories(state: &IFileEditorState) -> Vec<PathBuf> {
+    let mut expanded_dirs = Vec::new();
+
+    // 遍历所有已知的目录条目
+    for (path, entry) in state.file_tree.file_entries.iter() {
+        if entry.is_dir {
+            let node_id = FileNodeId(path.clone());
+            // 检查这个目录是否在TreeView中被标记为展开状态
+            if let Some(is_open) = state.file_tree.tree_view_state.is_open(&node_id) {
+                if is_open {
+                    expanded_dirs.push(path.clone());
+                }
+            }
+        }
+    }
+
+    expanded_dirs
 }
 
 /// 确保根目录已加载
@@ -169,10 +233,10 @@ fn build_tree_nodes_simple(
             let node_id = FileNodeId(child_path.clone());
 
             if entry.is_dir {
-                // 目录节点 - 设置为可激活以支持点击
+                // 目录节点 - 不设置为可激活，让TreeView处理展开/折叠
                 let truncated_name = truncate_filename(&entry.name, 25); // 限制目录名长度
                 let node_builder = NodeBuilder::dir(node_id)
-                    .activatable(true)  // 使目录可激活
+                    .activatable(false)  // 目录不可激活，只能通过箭头展开/折叠
                     .default_open(false)  // 默认折叠状态
                     .label(format!("{} {}", entry.icon, truncated_name));
 
@@ -183,7 +247,7 @@ fn build_tree_nodes_simple(
                         build_tree_nodes_simple(builder, file_entries, directory_children, &child_path);
                     }
                     // 如果目录还没有加载子项，就不显示任何子节点
-                    // 用户双击时会触发加载，然后重新渲染树
+                    // 用户点击箭头时会触发SetSelected事件，我们在那里加载内容
                 }
                 builder.close_dir();
             } else {
@@ -203,20 +267,11 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
     for action in actions {
         match action {
             Action::Activate(activate) => {
-                // 双击激活：打开文件或切换目录展开状态
+                // 双击激活：只处理文件打开
                 for node_id in activate.selected {
                     let path = node_id.0;
                     if let Some(entry) = state.file_tree.get_file_entry(&path) {
-                        if entry.is_dir {
-                            // 目录：加载子目录内容（懒加载）
-                            log::info!("Directory activated, loading children: {:?}", path);
-                            if let Err(e) = state.file_tree.load_directory_children(&path) {
-                                log::error!("Failed to load directory children: {}", e);
-                                state.last_error = Some(e);
-                            } else {
-                                log::info!("Successfully loaded children for directory: {:?}", path);
-                            }
-                        } else {
+                        if !entry.is_dir {
                             // 文件：打开文件
                             log::info!("Opening file: {:?}", path);
                             match state.editor.open_file(path.clone(), &state.settings) {
@@ -232,11 +287,12 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
                                 }
                             }
                         }
+                        // 目录的双击不做任何处理，让TreeView自己管理展开/折叠
                     }
                 }
             }
             Action::SetSelected(node_ids) => {
-                // 选择操作
+                // 选择操作（单击）
                 if let Some(first_node) = node_ids.first() {
                     let path = &first_node.0;
                     log::info!("Selected: {:?}", path);
@@ -262,18 +318,136 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
                                 }
                             }
                         } else {
-                            // 目录：只是选中，不做其他操作
+                            // 目录：只是选中，不自动切换展开状态
+                            // 让TreeView自己处理展开/折叠逻辑
                             log::info!("Directory selected: {:?}", path);
+
+                            // 确保目录内容已加载（懒加载）
+                            if !state.file_tree.directory_children.contains_key(path) {
+                                if let Err(e) = state.file_tree.load_directory_children(path) {
+                                    log::error!("Failed to load directory children: {}", e);
+                                    state.last_error = Some(e);
+                                } else {
+                                    log::info!("Loaded directory children for: {:?}", path);
+                                }
+                            }
                         }
                     }
                 }
             }
+
             _ => {
                 // 其他操作（拖拽等）
                 log::debug!("Tree action received");
             }
         }
     }
+}
+
+/// 处理右键菜单
+fn handle_context_menu(ui: &mut egui::Ui, selected_nodes: &Vec<FileNodeId>, state: &mut IFileEditorState) {
+    if selected_nodes.is_empty() {
+        return;
+    }
+
+    // 获取第一个选中的节点
+    let first_node = &selected_nodes[0];
+    let path = &first_node.0;
+
+    if let Some(entry) = state.file_tree.get_file_entry(path) {
+        if entry.is_dir {
+            render_dir_context_menu_inline(ui, path, state);
+        } else {
+            render_file_context_menu_inline(ui, path, state);
+        }
+    }
+}
+
+/// 渲染文件右键菜单（内联版本）
+fn render_file_context_menu_inline(ui: &mut egui::Ui, path: &PathBuf, state: &mut IFileEditorState) {
+    if ui.button("📝 打开").clicked() {
+        if let Err(e) = state.editor.open_file(path.clone(), &state.settings) {
+            log::error!("Failed to open file: {}", e);
+            state.last_error = Some(e);
+        }
+        ui.close_menu();
+    }
+
+    if ui.button("📋 复制路径").clicked() {
+        copy_path_to_clipboard(path);
+        ui.close_menu();
+    }
+
+    if ui.button("✏️ 重命名").clicked() {
+        state.ui_state.show_rename_dialog = true;
+        state.ui_state.operation_target_path = Some(path.clone());
+        state.ui_state.rename_new_name = path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string();
+        ui.close_menu();
+    }
+
+    ui.separator();
+
+    if ui.button("🗑️ 删除").clicked() {
+        state.ui_state.show_delete_confirmation = true;
+        state.ui_state.operation_target_path = Some(path.clone());
+        ui.close_menu();
+    }
+}
+
+/// 渲染目录右键菜单（内联版本）
+fn render_dir_context_menu_inline(ui: &mut egui::Ui, path: &PathBuf, state: &mut IFileEditorState) {
+    if ui.button("📄 新建文件").clicked() {
+        state.ui_state.show_new_file_dialog = true;
+        state.ui_state.operation_target_path = Some(path.clone());
+        state.ui_state.new_file_name.clear();
+        ui.close_menu();
+    }
+
+    if ui.button("📁 新建文件夹").clicked() {
+        state.ui_state.show_new_folder_dialog = true;
+        state.ui_state.operation_target_path = Some(path.clone());
+        state.ui_state.new_folder_name.clear();
+        ui.close_menu();
+    }
+
+    ui.separator();
+
+    if ui.button("📋 复制路径").clicked() {
+        copy_path_to_clipboard(path);
+        ui.close_menu();
+    }
+
+    if ui.button("✏️ 重命名").clicked() {
+        state.ui_state.show_rename_dialog = true;
+        state.ui_state.operation_target_path = Some(path.clone());
+        state.ui_state.rename_new_name = path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string();
+        ui.close_menu();
+    }
+
+    ui.separator();
+
+    if ui.button("🗑️ 删除").clicked() {
+        state.ui_state.show_delete_confirmation = true;
+        state.ui_state.operation_target_path = Some(path.clone());
+        ui.close_menu();
+    }
+}
+
+/// 切换目录展开状态
+fn toggle_directory_expansion(state: &mut IFileEditorState, path: &PathBuf) {
+    let node_id = FileNodeId(path.clone());
+
+    // 由于is_open方法是私有的，我们使用一个简化的策略：
+    // 总是设置为展开状态，让TreeView自己管理实际的切换逻辑
+    state.file_tree.tree_view_state.set_openness(node_id, true);
+
+    log::info!("Setting directory to expanded: {:?}", path);
 }
 
 /// 显示文件上下文菜单

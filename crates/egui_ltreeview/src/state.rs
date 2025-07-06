@@ -102,7 +102,9 @@ impl<NodeIdType: NodeId> TreeViewState<NodeIdType> {
         self.node_states.insert(id, open);
     }
 
-    pub(crate) fn is_open(&self, id: &NodeIdType) -> Option<bool> {
+    /// Check if a node is open (expanded).
+    /// Returns Some(true) if the node is open, Some(false) if closed, None if not tracked.
+    pub fn is_open(&self, id: &NodeIdType) -> Option<bool> {
         self.node_states.get(id).cloned()
     }
 

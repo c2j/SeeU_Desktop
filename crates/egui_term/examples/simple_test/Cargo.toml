@@ -1,0 +1,12 @@
+[package]
+name = "simple_test"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+eframe = "0.28.1"
+egui = "0.28.1"
+egui_term = { path = "../.." }
+alacritty_terminal = { path = "../../../alacritty_terminal" }

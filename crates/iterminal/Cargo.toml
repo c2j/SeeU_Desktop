@@ -7,6 +7,7 @@ description = "Terminal module for SeeU Desktop - Cross-platform terminal emulat
 
 [dependencies]
 # GUI Framework - using egui through eframe
+eframe = { version = "0.28.1", default-features = false, features = ["default_fonts"] }
 
 # Async runtime
 tokio = { version = "1.32.0", features = ["full"] }
@@ -24,24 +25,34 @@ log = "0.4.20"
 # Date and time
 chrono = { version = "0.4.31", features = ["serde"] }
 
-# Cross-platform process handling
-portable-pty = "0.8.1"
-
-# ANSI escape sequence parsing
-vte = "0.11.1"
-
 # Configuration
 dirs = "5.0.1"
 
-# Terminal utilities
-crossterm = "0.27.0"
+# Terminal emulator
+egui_term = { path = "../egui_term" }
+alacritty_terminal = { path = "../alacritty_terminal" }
 
-# Text processing
-regex = "1.10.0"
+# HTML escaping for export
+html-escape = "0.2.13"
 
-# System information
-hostname = "0.3.1"
-sysinfo = "0.30.0"
+# Clipboard support
+arboard = "3.2.0"
 
-# For egui compatibility - 升级版本以改善IME支持
-eframe = { version = "0.28.1", default-features = false, features = ["default_fonts"] }
+# Error handling
+thiserror = "1.0.50"
+
+[[example]]
+name = "export_demo"
+path = "examples/export_demo.rs"
+
+[[example]]
+name = "clipboard_test"
+path = "examples/clipboard_test.rs"
+
+[[example]]
+name = "session_history_demo"
+path = "examples/session_history_demo.rs"
+
+[[example]]
+name = "help_system_demo"
+path = "examples/help_system_demo.rs"

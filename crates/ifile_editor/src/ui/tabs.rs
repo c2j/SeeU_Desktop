@@ -3,89 +3,246 @@
 use egui;
 use crate::state::IFileEditorState;
 
-/// 渲染标签页
+/// 渲染标签页和工具栏（合并版本）
+pub fn render_tabs_with_toolbar(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+    ui.horizontal(|ui| {
+        // 左侧：文件操作按钮
+        render_file_operation_buttons(ui, state);
+
+        ui.separator();
+
+        // 中间：标签页
+        if !state.editor.tabs.is_empty() {
+            render_tab_buttons(ui, state);
+            ui.separator();
+        }
+
+        // 右侧：编辑和视图操作按钮
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            render_view_operation_buttons(ui, state);
+            ui.separator();
+            render_edit_operation_buttons(ui, state);
+        });
+    });
+}
+
+/// 渲染文件操作按钮
+fn render_file_operation_buttons(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+    // 文件操作按钮（图标+文字风格）
+    if ui.button("📁 打开").clicked() {
+        state.open_file_dialog();
+    }
+
+    if ui.button("💾 保存").clicked() {
+        if let Err(e) = state.editor.save_active_file() {
+            log::error!("Failed to save file: {}", e);
+            state.last_error = Some(e);
+        } else {
+            log::info!("File saved successfully");
+        }
+    }
+
+    if ui.button("📂 文件夹").clicked() {
+        state.open_folder_dialog();
+    }
+
+    if ui.button("📄 新建").clicked() {
+        create_new_file(state);
+    }
+}
+
+/// 渲染编辑操作按钮
+fn render_edit_operation_buttons(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+    // 编辑操作按钮
+    if ui.button("↶ 撤销").clicked() {
+        undo_edit(state);
+    }
+
+    if ui.button("↷ 重做").clicked() {
+        redo_edit(state);
+    }
+
+    if ui.button("🔍 查找").clicked() {
+        state.ui_state.show_find_replace = !state.ui_state.show_find_replace;
+    }
+}
+
+/// 渲染视图操作按钮
+fn render_view_operation_buttons(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+    // 视图切换按钮
+    let tree_button_text = if state.ui_state.show_file_tree {
+        "🗂️ 隐藏树"
+    } else {
+        "🗂️ 显示树"
+    };
+
+    if ui.button(tree_button_text).clicked() {
+        state.ui_state.show_file_tree = !state.ui_state.show_file_tree;
+        log::info!("File tree visibility toggled: {}", state.ui_state.show_file_tree);
+    }
+
+    // 标签页操作按钮
+    if !state.editor.tabs.is_empty() {
+        if ui.small_button("×").on_hover_text("关闭所有").clicked() {
+            close_all_tabs(state);
+        }
+
+        if ui.small_button("⊗").on_hover_text("关闭其他").clicked() {
+            close_other_tabs(state);
+        }
+    }
+}
+
+/// 渲染标签页按钮
+fn render_tab_buttons(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+    let mut tab_to_close = None;
+    let mut new_active_tab = state.editor.active_tab;
+
+    for (index, tab_path) in state.editor.tabs.iter().enumerate() {
+        let is_active = state.editor.active_tab == Some(index);
+        let buffer = state.editor.buffers.get(tab_path);
+
+        // 获取文件名
+        let file_name = tab_path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("未知文件");
+
+        // 检查是否已修改
+        let is_modified = buffer.map(|b| b.modified).unwrap_or(false);
+
+        // 标签页按钮
+        let tab_text = if is_modified {
+            format!("● {}", file_name)
+        } else {
+            file_name.to_string()
+        };
+
+        let tab_button = egui::Button::new(&tab_text)
+            .selected(is_active)
+            .min_size(egui::vec2(80.0, 24.0));
+
+        let tab_response = ui.add(tab_button);
+
+        // 处理标签页点击
+        if tab_response.clicked() {
+            new_active_tab = Some(index);
+        }
+
+        // 标签页右键菜单
+        tab_response.context_menu(|ui| {
+            render_tab_context_menu(ui, index, tab_path, &mut tab_to_close);
+        });
+
+        // 关闭按钮
+        let close_button = egui::Button::new("×")
+            .small()
+            .fill(egui::Color32::TRANSPARENT);
+
+        if ui.add(close_button).clicked() {
+            tab_to_close = Some(index);
+        }
+
+        // 标签页分隔符
+        if index < state.editor.tabs.len() - 1 {
+            ui.separator();
+        }
+    }
+
+    // 应用标签页切换
+    if new_active_tab != state.editor.active_tab {
+        state.editor.active_tab = new_active_tab;
+    }
+
+    // 处理标签页关闭
+    if let Some(close_index) = tab_to_close {
+        close_tab(state, close_index);
+    }
+}
+
+/// 渲染标签页（保持向后兼容）
 pub fn render_tabs(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     if state.editor.tabs.is_empty() {
         return;
     }
-    
-    ui.horizontal(|ui| {
-        let mut tab_to_close = None;
-        let mut new_active_tab = state.editor.active_tab;
-        
-        for (index, tab_path) in state.editor.tabs.iter().enumerate() {
-            let is_active = state.editor.active_tab == Some(index);
-            let buffer = state.editor.buffers.get(tab_path);
-            
-            // 获取文件名
-            let file_name = tab_path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("未知文件");
-            
-            // 检查是否已修改
-            let is_modified = buffer.map(|b| b.modified).unwrap_or(false);
-            
-            // 标签页按钮
-            let tab_text = if is_modified {
-                format!("● {}", file_name)
+
+    render_tab_buttons(ui, state);
+}
+
+/// 创建新文件
+fn create_new_file(state: &mut IFileEditorState) {
+    // 创建新文件对话框
+    let initial_dir = state.workspace_root.clone()
+        .or_else(|| dirs::home_dir())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let file_dialog = rfd::FileDialog::new()
+        .set_title("新建文件")
+        .set_directory(&initial_dir)
+        .set_file_name("untitled.txt");
+
+    if let Some(path) = file_dialog.save_file() {
+        // 创建空文件
+        if let Err(e) = std::fs::write(&path, "") {
+            log::error!("Failed to create new file: {}", e);
+            state.last_error = Some(crate::FileEditorError::IoError(e));
+        } else {
+            // 打开新创建的文件
+            if let Err(e) = state.editor.open_file(path.clone(), &state.settings) {
+                log::error!("Failed to open new file: {}", e);
+                state.last_error = Some(e);
             } else {
-                file_name.to_string()
-            };
-            
-            let tab_button = egui::Button::new(&tab_text)
-                .selected(is_active)
-                .min_size(egui::vec2(80.0, 24.0));
-            
-            let tab_response = ui.add(tab_button);
-            
-            // 处理标签页点击
-            if tab_response.clicked() {
-                new_active_tab = Some(index);
-            }
-            
-            // 标签页右键菜单
-            tab_response.context_menu(|ui| {
-                render_tab_context_menu(ui, index, tab_path, &mut tab_to_close);
-            });
-            
-            // 关闭按钮
-            let close_button = egui::Button::new("×")
-                .small()
-                .fill(egui::Color32::TRANSPARENT);
-            
-            if ui.add(close_button).clicked() {
-                tab_to_close = Some(index);
-            }
-            
-            // 标签页分隔符
-            if index < state.editor.tabs.len() - 1 {
-                ui.separator();
+                log::info!("Created and opened new file: {:?}", path);
             }
         }
-        
-        // 应用标签页切换
-        if new_active_tab != state.editor.active_tab {
-            state.editor.active_tab = new_active_tab;
-        }
-        
-        // 处理标签页关闭
-        if let Some(close_index) = tab_to_close {
-            close_tab(state, close_index);
-        }
-        
-        // 右侧空间和操作按钮
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // 关闭所有标签页按钮
-            if ui.small_button("×").on_hover_text("关闭所有").clicked() {
-                close_all_tabs(state);
+    }
+}
+
+/// 撤销编辑
+fn undo_edit(state: &mut IFileEditorState) {
+    if let Some(active_tab) = state.editor.active_tab {
+        if let Some(path) = state.editor.tabs.get(active_tab).cloned() {
+            if let Some(undo_stack) = state.editor.undo_stack.get_mut(&path) {
+                if let Some(operation) = undo_stack.operations.pop() {
+                    // 应用撤销操作
+                    if let Some(buffer) = state.editor.buffers.get_mut(&path) {
+                        apply_undo_operation(buffer, operation);
+                        log::info!("Undo operation applied");
+                    }
+                } else {
+                    log::info!("No more operations to undo");
+                }
             }
-            
-            // 关闭其他标签页按钮
-            if ui.small_button("⊗").on_hover_text("关闭其他").clicked() {
-                close_other_tabs(state);
-            }
-        });
-    });
+        }
+    }
+}
+
+/// 重做编辑
+fn redo_edit(state: &mut IFileEditorState) {
+    // TODO: 实现重做功能（需要重做栈）
+    log::info!("Redo operation requested (not implemented yet)");
+}
+
+/// 应用撤销操作
+fn apply_undo_operation(buffer: &mut crate::state::TextBuffer, operation: crate::state::EditOperation) {
+    use crate::state::OperationType;
+
+    match operation.operation_type {
+        OperationType::Insert => {
+            // 撤销插入：删除文本
+            buffer.delete_text(operation.range);
+        }
+        OperationType::Delete => {
+            // 撤销删除：插入文本
+            buffer.insert_text(operation.range.start, &operation.text);
+        }
+        OperationType::Replace => {
+            // 撤销替换：恢复原文本
+            buffer.replace_text(operation.range, &operation.text);
+        }
+    }
+
+    // 恢复光标位置
+    buffer.cursor = operation.cursor_before;
 }
 
 /// 渲染标签页右键菜单
