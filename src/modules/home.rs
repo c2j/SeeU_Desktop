@@ -123,6 +123,10 @@ fn render_dashboard_blocks(ui: &mut egui::Ui, app: &mut SeeUApp) {
             render_file_editor_block(ui, app);
             ui.add_space(12.0);
 
+            // 终端豆腐块
+            render_terminal_block(ui, app);
+            ui.add_space(12.0);
+
             // MCP工具豆腐块
             render_mcp_tools_block(ui, app);
         });
@@ -547,6 +551,86 @@ fn render_file_editor_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
                     // 如果是首次使用，会显示目录选择界面
                 }
             });
+
+            ui.add_space(4.0);
+
+            // 快捷键提示
+            ui.small("快捷键: Ctrl+S 保存, Ctrl+Z 撤销, Ctrl+Y 重做, Ctrl+F 查找");
+        });
+    });
+}
+
+/// 渲染终端豆腐块
+fn render_terminal_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
+    let block_frame = egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::same(12.0))
+        .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
+        .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
+
+    block_frame.show(ui, |ui| {
+        ui.vertical(|ui| {
+            // 标题栏
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("💻").size(18.0));
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("智能终端").size(16.0).strong());
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("打开").clicked() {
+                        app.active_module = Module::Terminal;
+                    }
+                });
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // 终端状态信息
+            let session_count = app.iterminal_state.egui_terminal_manager.session_count();
+            let active_session = app.iterminal_state.egui_terminal_manager.get_active_session();
+
+            ui.horizontal(|ui| {
+                ui.label(format!("📟 {} 个会话", session_count));
+                if let Some(session) = active_session {
+                    ui.add_space(12.0);
+                    ui.label(format!("🎯 当前: {}", session.title));
+                }
+            });
+
+            ui.add_space(4.0);
+
+            // 显示当前会话状态
+            if let Some(session) = active_session {
+                // For now, we'll show the session title and creation time
+                // Working directory information is not directly available from EguiTerminalSession
+                let time_str = session.created_at.format("%H:%M").to_string();
+                ui.small(format!("📂 会话创建于 {}", time_str));
+            } else {
+                ui.small("准备就绪，等待启动");
+            }
+
+            ui.add_space(8.0);
+
+            // 快速操作
+            ui.horizontal(|ui| {
+                if ui.button("🆕 新标签").clicked() {
+                    app.active_module = Module::Terminal;
+                    // 这里可以添加创建新标签的逻辑
+                }
+
+                ui.add_space(4.0);
+
+                if ui.button("📜 历史").clicked() {
+                    app.active_module = Module::Terminal;
+                    // 这里可以添加显示历史的逻辑
+                }
+            });
+
+            ui.add_space(4.0);
+
+            // 快捷键提示
+            ui.small("快捷键: Ctrl+C 中断, Ctrl+L 清屏, Ctrl+R 搜索历史");
         });
     });
 }
@@ -661,6 +745,10 @@ fn render_quick_actions_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 columns[0].vertical(|ui| {
                     if ui.button("💻 终端").clicked() {
                         app.active_module = Module::Terminal;
+                    }
+                    ui.add_space(4.0);
+                    if ui.button("📝 编辑器").clicked() {
+                        app.active_module = Module::FileEditor;
                     }
                     ui.add_space(4.0);
                     if ui.button("📁 文件").clicked() {
@@ -1006,6 +1094,17 @@ fn render_footer_section(ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new("快捷键:").strong());
                 ui.add_space(8.0);
                 ui.label("Ctrl+/ 打开命令面板，Ctrl+K 快速搜索");
+            });
+
+            ui.add_space(4.0);
+
+            // 模块快捷键提示
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("⌨️").size(16.0));
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("模块快捷键:").strong());
+                ui.add_space(8.0);
+                ui.label("终端: Ctrl+C 中断, Ctrl+L 清屏 | 编辑器: Ctrl+S 保存, Ctrl+Z 撤销");
             });
 
             ui.add_space(8.0);
