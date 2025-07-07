@@ -8,6 +8,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
+use rustix_openpty::rustix::fd::AsRawFd as RustixAsRawFd;
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::{env, ptr};
@@ -19,7 +20,7 @@ use rustix_openpty::openpty;
 use rustix_openpty::rustix::termios::Winsize;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use rustix_openpty::rustix::termios::{self, InputModes, OptionalActions};
-use rustix_openpty::rustix::fd::{OwnedFd as RustixOwnedFd, AsRawFd as RustixAsRawFd, FromRawFd as RustixFromRawFd};
+use rustix_openpty::rustix::fd::{OwnedFd as RustixOwnedFd, FromRawFd as RustixFromRawFd};
 use signal_hook::low_level::{pipe as signal_pipe, unregister as unregister_signal};
 use signal_hook::{consts as sigconsts, SigId};
 
@@ -189,8 +190,8 @@ pub fn new(config: &Options, window_size: WindowSize, window_id: u64) -> Result<
         .map_err(|e| Error::new(ErrorKind::Other, format!("openpty failed: {}", e)))?;
 
     // Convert rustix OwnedFd to std OwnedFd
-    let master = unsafe { OwnedFd::from_raw_fd(pty.controller.as_raw_fd()) };
-    let slave = unsafe { OwnedFd::from_raw_fd(pty.user.as_raw_fd()) };
+    let master = unsafe { OwnedFd::from_raw_fd(RustixAsRawFd::as_raw_fd(&pty.controller)) };
+    let slave = unsafe { OwnedFd::from_raw_fd(RustixAsRawFd::as_raw_fd(&pty.user)) };
 
     // Prevent double close by forgetting the rustix fds
     std::mem::forget(pty.controller);

@@ -1,8 +1,6 @@
 use eframe::egui;
-use std::path::PathBuf;
 use crate::db_state::DbINoteState;
 use crate::hex_to_color32;
-use crate::siyuan_import::SiyuanImporter;
 
 /// Create a highlighted layout job for text editor with search terms
 fn create_highlighted_layout_job(

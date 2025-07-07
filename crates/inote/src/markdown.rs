@@ -162,7 +162,7 @@ impl<'a> MarkdownRenderer<'a> {
 
     fn render(&mut self, parser: Parser) {
         use pulldown_cmark::Event::*;
-        use pulldown_cmark::Tag::*;
+
 
         for event in parser {
             match event {
@@ -751,7 +751,7 @@ fn append_text(
 }
 
 /// Append a link to the layout job
-fn append_link(job: &mut LayoutJob, text: &str, url: &str) {
+fn append_link(job: &mut LayoutJob, text: &str, _url: &str) {
     let mut format = TextFormat::default();
     format.color = Color32::from_rgb(0, 102, 204); // Blue for links
     format.underline = egui::Stroke::new(1.0, Color32::from_rgb(0, 102, 204));

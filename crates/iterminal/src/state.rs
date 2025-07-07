@@ -163,8 +163,6 @@ impl ITerminalState {
     pub fn get_egui_terminal_manager_mut(&mut self) -> &mut EguiTerminalManager {
         &mut self.egui_terminal_manager
     }
-
-
 }
 
 impl Default for ITerminalState {

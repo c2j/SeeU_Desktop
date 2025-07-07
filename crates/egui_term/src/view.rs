@@ -143,7 +143,7 @@ impl<'a> TerminalView<'a> {
         layout: &Response,
         state: &mut TerminalViewState,
     ) -> Self {
-        if !layout.has_focus() || !layout.contains_pointer() {
+        if !layout.has_focus() {
             return self;
         }
 
@@ -157,6 +157,7 @@ impl<'a> TerminalView<'a> {
                 | egui::Event::Key { .. }
                 | egui::Event::Copy
                 | egui::Event::Paste(_) => {
+                    // Keyboard events only need focus, not mouse pointer
                     input_actions.push(process_keyboard_event(
                         event,
                         self.backend,
@@ -164,37 +165,49 @@ impl<'a> TerminalView<'a> {
                         modifiers,
                     ))
                 },
-                egui::Event::MouseWheel { unit, delta, .. } => input_actions
-                    .push(process_mouse_wheel(
-                        state,
-                        self.font.font_type().size,
-                        unit,
-                        delta,
-                    )),
+                egui::Event::MouseWheel { unit, delta, .. } => {
+                    // Mouse events need both focus and pointer over the terminal
+                    if layout.contains_pointer() {
+                        input_actions.push(process_mouse_wheel(
+                            state,
+                            self.font.font_type().size,
+                            unit,
+                            delta,
+                        ))
+                    }
+                },
                 egui::Event::PointerButton {
                     button,
                     pressed,
                     modifiers,
                     pos,
                     ..
-                } => input_actions.push(process_button_click(
-                    state,
-                    layout,
-                    self.backend,
-                    &self.bindings_layout,
-                    button,
-                    pos,
-                    &modifiers,
-                    pressed,
-                )),
+                } => {
+                    // Mouse events need both focus and pointer over the terminal
+                    if layout.contains_pointer() {
+                        input_actions.push(process_button_click(
+                            state,
+                            layout,
+                            self.backend,
+                            &self.bindings_layout,
+                            button,
+                            pos,
+                            &modifiers,
+                            pressed,
+                        ))
+                    }
+                },
                 egui::Event::PointerMoved(pos) => {
-                    input_actions = process_mouse_move(
-                        state,
-                        layout,
-                        self.backend,
-                        pos,
-                        &modifiers,
-                    )
+                    // Mouse events need both focus and pointer over the terminal
+                    if layout.contains_pointer() {
+                        input_actions = process_mouse_move(
+                            state,
+                            layout,
+                            self.backend,
+                            pos,
+                            &modifiers,
+                        )
+                    }
                 },
                 _ => {},
             };

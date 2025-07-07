@@ -1,4 +1,4 @@
-use arboard::{Clipboard, ImageData};
+use arboard::Clipboard;
 use std::error::Error;
 use std::fmt;
 use regex::Regex;
@@ -252,7 +252,7 @@ impl ClipboardManager {
         let lines: Vec<&str> = text.lines().collect();
         let mut result = Vec::new();
         let mut in_list = false;
-        let mut list_indent_level = 0;
+        let _list_indent_level = 0;
 
         for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim();

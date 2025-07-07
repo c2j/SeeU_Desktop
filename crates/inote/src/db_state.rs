@@ -1,18 +1,16 @@
-use eframe::egui;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 use log;
 
 use crate::notebook::Notebook;
-use crate::note::{Note, Attachment};
+use crate::note::Note;
 use crate::tag::Tag;
 use crate::db_storage::DbStorageManager;
 use crate::clipboard::ClipboardManager;
-use crate::migration::DataMigration;
 use crate::db_ui_import::SiyuanImportState;
 use crate::slide::{SlidePlayState, SlideParser, SlideStyleManager};
-use crate::document_converter::{DocumentConverter, ConversionError};
+use crate::document_converter::DocumentConverter;
 use crate::notebook_selector::NotebookSelectorState;
 
 /// 删除确认类型
@@ -312,7 +310,7 @@ impl DbINoteState {
     }
 
     /// Initialize database storage asynchronously
-    pub fn initialize_storage_async(&mut self, db_path: String) {
+    pub fn initialize_storage_async(&mut self, _db_path: String) {
         log::info!("Initializing database storage asynchronously...");
 
         let storage_clone = self.storage.clone();
@@ -517,7 +515,7 @@ impl DbINoteState {
     }
 
     /// Find notebook for note
-    pub fn find_notebook_for_note(&self, note_id: &str) -> Option<String> {
+    pub fn find_notebook_for_note(&self, _note_id: &str) -> Option<String> {
         // For now, return the first notebook's ID if available
         self.notebooks.first().map(|nb| nb.id.clone())
     }

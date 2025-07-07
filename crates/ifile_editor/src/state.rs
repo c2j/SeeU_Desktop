@@ -765,15 +765,7 @@ impl TextBuffer {
         self.update_cursor_line_column();
     }
 
-    /// 更新替换后的光标位置
-    fn update_cursor_after_replace(&mut self, range: std::ops::Range<usize>, text: &str) {
-        if self.cursor.byte_offset >= range.end {
-            self.cursor.byte_offset = self.cursor.byte_offset - range.len() + text.len();
-        } else if self.cursor.byte_offset > range.start {
-            self.cursor.byte_offset = range.start + text.len();
-        }
-        self.update_cursor_line_column();
-    }
+
 
     /// 根据字节偏移更新行列位置
     pub fn update_cursor_line_column(&mut self) {
@@ -801,7 +793,7 @@ impl TextBuffer {
     }
 
     /// 简化的替换后光标更新
-    fn update_cursor_after_replace_simple(&mut self, new_text_len: usize) {
+    fn update_cursor_after_replace_simple(&mut self, _new_text_len: usize) {
         // 简化实现：将光标移动到替换文本的末尾
         self.update_cursor_line_column();
     }
@@ -1039,7 +1031,7 @@ impl FileTreeState {
         // 遍历所有目录条目，检查哪些是展开状态的
         for (path, entry) in self.file_entries.iter() {
             if entry.is_dir {
-                let node_id = FileNodeId(path.clone());
+                let _node_id = FileNodeId(path.clone());
                 // 使用一个间接方法来检测展开状态：
                 // 如果目录有已加载的子项，并且在TreeViewState中有状态记录，则认为它可能是展开的
                 if self.directory_children.contains_key(path) {

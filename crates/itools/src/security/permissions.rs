@@ -290,7 +290,7 @@ impl PermissionManager {
                 // TODO: Implement permission level checking
                 false
             }
-            PolicyCondition::TimeWindow { start, end } => {
+            PolicyCondition::TimeWindow { start: _, end: _ } => {
                 // TODO: Implement time window checking
                 true
             }

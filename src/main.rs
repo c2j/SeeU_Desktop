@@ -72,42 +72,4 @@ fn main() -> Result<(), eframe::Error> {
     )
 }
 
-/// Load saved window state or return default
-fn load_window_state() -> app::WindowState {
-    use std::fs;
-    use serde_json;
 
-    let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let config_path = base_path.join("seeu_desktop").join("app_settings.json");
-
-    if let Ok(content) = fs::read_to_string(config_path) {
-        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(window_state) = settings.get("window_state") {
-                return app::WindowState {
-                    width: window_state.get("width")
-                        .and_then(|v| v.as_f64())
-                        .map(|v| v as f32)
-                        .unwrap_or(1280.0),
-                    height: window_state.get("height")
-                        .and_then(|v| v.as_f64())
-                        .map(|v| v as f32)
-                        .unwrap_or(720.0),
-                    x: window_state.get("x")
-                        .and_then(|v| v.as_f64())
-                        .map(|v| v as f32)
-                        .unwrap_or(100.0),
-                    y: window_state.get("y")
-                        .and_then(|v| v.as_f64())
-                        .map(|v| v as f32)
-                        .unwrap_or(100.0),
-                    maximized: window_state.get("maximized")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                };
-            }
-        }
-    }
-
-    // Return default window state if loading fails
-    app::WindowState::default()
-}

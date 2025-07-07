@@ -96,7 +96,7 @@ impl PluginManager {
         }
 
         // Load installed plugins asynchronously to avoid blocking startup
-        let install_dir = self.install_dir.clone();
+        let _install_dir = self.install_dir.clone();
 
         std::thread::spawn(move || {
             // Plugin loading logic would go here
@@ -735,7 +735,7 @@ impl PluginManager {
             return Err(anyhow::anyhow!("HTTP error: {}", response.status()));
         }
 
-        let content_length = response.content_length().unwrap_or(0);
+        let _content_length = response.content_length().unwrap_or(0);
         let bytes = response.bytes()?;
 
         log::info!("Downloaded {} bytes for plugin {}", bytes.len(), plugin_id);
@@ -863,7 +863,7 @@ impl PluginManager {
     }
 
     /// Validate and load plugin from directory
-    fn validate_and_load_plugin(&self, plugin_id: &uuid::Uuid, plugin_dir: &std::path::Path) -> Result<super::plugin::Plugin> {
+    fn validate_and_load_plugin(&self, _plugin_id: &uuid::Uuid, plugin_dir: &std::path::Path) -> Result<super::plugin::Plugin> {
         log::info!("Validating plugin in directory: {:?}", plugin_dir);
 
         // Check for required files
@@ -885,7 +885,7 @@ impl PluginManager {
 
         // Load and parse metadata
         let metadata_content = std::fs::read_to_string(&metadata_path)?;
-        let mut metadata: super::plugin::PluginMetadata = serde_json::from_str(&metadata_content)
+        let metadata: super::plugin::PluginMetadata = serde_json::from_str(&metadata_content)
             .map_err(|e| anyhow::anyhow!("Invalid metadata.json: {}", e))?;
 
         // Use the provided plugin_id for local installations

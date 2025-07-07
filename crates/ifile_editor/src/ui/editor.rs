@@ -28,18 +28,7 @@ pub fn render_editor(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     }
 }
 
-/// 渲染文本编辑器内容
-fn render_text_editor(ui: &mut egui::Ui, buffer: &TextBuffer, state: &IFileEditorState) {
-    // 主编辑区域（移除了编辑器信息栏，状态信息将显示在主状态栏中）
-    let _scroll_area_response = egui::ScrollArea::both()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            render_text_content_interactive(ui, buffer, state)
-        });
 
-    // 处理编辑器级别的键盘快捷键
-    handle_editor_shortcuts(ui, state);
-}
 
 /// 渲染文本编辑器内容（完整编辑功能）
 fn render_text_editor_optimized(ui: &mut egui::Ui, state: &mut IFileEditorState) {
@@ -88,7 +77,7 @@ fn render_text_editor_optimized(ui: &mut egui::Ui, state: &mut IFileEditorState)
 }
 
 /// 渲染可交互的文本内容
-fn render_text_content_interactive(ui: &mut egui::Ui, buffer: &TextBuffer, state: &IFileEditorState) -> egui::Response {
+fn render_text_content_interactive(ui: &mut egui::Ui, buffer: &TextBuffer, _state: &IFileEditorState) -> egui::Response {
     let available_rect = ui.available_rect_before_wrap();
     let line_height = ui.text_style_height(&egui::TextStyle::Monospace);
 
@@ -107,7 +96,7 @@ fn render_text_content_interactive(ui: &mut egui::Ui, buffer: &TextBuffer, state
 }
 
 /// 处理编辑器快捷键
-fn handle_editor_shortcuts(ui: &mut egui::Ui, state: &IFileEditorState) {
+fn handle_editor_shortcuts(ui: &mut egui::Ui, _state: &IFileEditorState) {
     let ctx = ui.ctx();
 
     // Ctrl+S: 保存文件
@@ -364,7 +353,7 @@ fn handle_text_click(
     line_number_width: f32,
     line_height: f32,
     visible_start: usize,
-    buffer: &TextBuffer,
+    _buffer: &TextBuffer,
 ) {
     // 计算点击的行
     let relative_y = click_pos.y - text_rect.min.y;
@@ -801,7 +790,7 @@ fn render_text_editor_direct(ui: &mut egui::Ui, state: &mut IFileEditorState, ed
             let line_number_width = (line_count.to_string().len() as f32 * 8.0).max(40.0);
 
             // 行号区域矩形
-            let line_numbers_rect = egui::Rect::from_min_size(
+            let _line_numbers_rect = egui::Rect::from_min_size(
                 editor_rect.min,
                 egui::vec2(line_number_width, editor_rect.height())
             );

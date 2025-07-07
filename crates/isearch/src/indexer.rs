@@ -17,10 +17,10 @@ use crate::file_types::FileTypeUtils;
 /// Represents a match of a search term in content
 #[derive(Debug, Clone)]
 struct TermMatch {
-    term: String,
+    _term: String,
     start: usize,
     end: usize,
-    score: f32,
+    _score: f32,
 }
 
 /// Match with its index in the original matches array
@@ -288,10 +288,7 @@ impl Indexer {
         FileTypeUtils::should_index_content(file_type)
     }
 
-    /// Get file type category for display
-    fn get_file_type_category(&self, file_type: &str) -> String {
-        FileTypeUtils::get_display_name(file_type)
-    }
+
 
     /// Read file content with optimized strategy
     fn read_file_content(&self, path: &Path, file_type: &str) -> String {
@@ -646,35 +643,7 @@ impl Indexer {
         filename.to_lowercase().contains(&pattern.to_lowercase())
     }
 
-    /// Create content preview with highlighted matches
-    fn create_content_preview(&self, content: &str, query: &dyn Query) -> String {
-        if content.is_empty() {
-            log::debug!("Content is empty for preview generation, returning empty preview");
-            return String::new();
-        }
 
-        // Try to extract relevant snippets based on the query
-        let preview = self.extract_relevant_snippet(content, query);
-
-        log::debug!("Created preview from content with {} characters -> preview: '{}'",
-                   content.chars().count(),
-                   if preview.len() > 100 { format!("{}...", &preview[..100]) } else { preview.clone() });
-
-        preview
-    }
-
-    /// Extract relevant snippet from content based on query
-    fn extract_relevant_snippet(&self, content: &str, _query: &dyn Query) -> String {
-        // For now, we'll implement a simple approach
-        // In a production app, you would use more sophisticated snippet extraction
-
-        // Clean up the content first (remove excessive whitespace, HTML tags for HTML files)
-        let cleaned_content = self.clean_content_for_preview(content);
-
-        // For now, just return the first meaningful paragraph or sentence
-        // TODO: In the future, we can implement proper query-based snippet extraction
-        self.extract_first_meaningful_content(&cleaned_content, 200)
-    }
 
     /// Clean content for preview (remove HTML tags, excessive whitespace, etc.)
     fn clean_content_for_preview(&self, content: &str) -> String {
@@ -881,10 +850,10 @@ impl Indexer {
                     let byte_end = content_chars[..char_start + term_chars.len()].iter().collect::<String>().len();
 
                     matches.push(TermMatch {
-                        term: term.clone(),
+                        _term: term.clone(),
                         start: byte_start,
                         end: byte_end,
-                        score: self.calculate_term_score(term, content, byte_start),
+                        _score: self.calculate_term_score(term, content, byte_start),
                     });
                     char_start += term_chars.len();
                 } else {

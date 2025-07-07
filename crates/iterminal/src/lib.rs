@@ -78,7 +78,7 @@ pub fn render_egui_terminal(ui: &mut eframe::egui::Ui, state: &mut ITerminalStat
             ui.separator();
 
             // Session management buttons
-            if ui.button("+ New Session").clicked() {
+            if ui.button("+ 新建会话").clicked() {
                 log::info!("Creating new terminal session");
                 match state.create_session(None, Some(ui.ctx())) {
                     Ok(session_id) => {
@@ -91,7 +91,7 @@ pub fn render_egui_terminal(ui: &mut eframe::egui::Ui, state: &mut ITerminalStat
                 }
             }
 
-            if ui.button("Close Session").clicked() {
+            if ui.button("关闭会话").clicked() {
                 if let Some(session_id) = state.get_egui_terminal_manager().get_active_session_id() {
                     log::info!("Closing terminal session");
                     state.close_session(session_id);
@@ -101,35 +101,23 @@ pub fn render_egui_terminal(ui: &mut eframe::egui::Ui, state: &mut ITerminalStat
             ui.separator();
 
             // Session history buttons
-            if ui.button("💾 Save Session").clicked() {
-                if let Some(history_manager) = &mut state.session_history_manager {
-                    match state.egui_terminal_manager.save_active_session_to_history(history_manager) {
-                        Ok(_) => {
-                            state.session_history_ui.set_success("Session saved to history successfully!".to_string());
-                            log::info!("Session saved to history");
-                        }
-                        Err(e) => {
-                            state.session_history_ui.set_error(format!("Failed to save session: {}", e));
-                            log::error!("Failed to save session: {}", e);
-                        }
-                    }
-                } else {
-                    state.session_history_ui.set_error("Session history not available".to_string());
-                }
+            if ui.button("💾 保存会话").clicked() {
+                // Open save session dialog
+                state.session_history_ui.open_save_dialog();
             }
 
-            if ui.button("📚 Session History").clicked() {
+            if ui.button("📚 会话历史").clicked() {
                 state.session_history_ui.open();
             }
 
             ui.separator();
 
             // Export buttons
-            if ui.button("📤 Export").clicked() {
+            if ui.button("📤 导出").clicked() {
                 state.export_dialog.open();
             }
 
-            if ui.button("📋 Quick Copy").clicked() {
+            if ui.button("📋 快速复制").clicked() {
                 match crate::export_ui::QuickExport::copy_as_text(state.get_egui_terminal_manager()) {
                     Ok(_) => log::info!("Terminal content copied to clipboard"),
                     Err(e) => log::error!("Failed to copy terminal content: {}", e),
@@ -387,6 +375,46 @@ fn handle_preview_export(
 /// Handle session history actions
 fn handle_session_history_action(state: &mut ITerminalState, action: SessionHistoryAction) {
     match action {
+        SessionHistoryAction::SaveSession(session_name) => {
+            if let Some(history_manager) = &mut state.session_history_manager {
+                // Create a custom saved session with the provided name
+                if let Some(session) = state.egui_terminal_manager.get_active_session() {
+                    // Get session content
+                    let content = match state.egui_terminal_manager.get_active_session_text() {
+                        Ok(content) => content,
+                        Err(e) => {
+                            log::warn!("Failed to get session content for saving: {}", e);
+                            format!("Session content unavailable: {}", e)
+                        }
+                    };
+
+                    // Create saved session with custom name
+                    let saved_session = crate::session_history::SavedSession::new(
+                        session.id,
+                        session_name,
+                        session.created_at,
+                        session.last_activity,
+                        content,
+                    );
+
+                    // Save to history
+                    match history_manager.save_session(saved_session.clone()) {
+                        Ok(_) => {
+                            state.session_history_ui.set_success("会话保存成功！".to_string());
+                            log::info!("Saved session with custom name: {}", saved_session.title);
+                        }
+                        Err(e) => {
+                            state.session_history_ui.set_error(format!("保存会话失败: {}", e));
+                            log::error!("Failed to save session: {}", e);
+                        }
+                    }
+                } else {
+                    state.session_history_ui.set_error("没有活动会话可保存".to_string());
+                }
+            } else {
+                state.session_history_ui.set_error("会话历史不可用".to_string());
+            }
+        }
         SessionHistoryAction::RestoreSession(session_id) => {
             if let Some(history_manager) = &state.session_history_manager {
                 if let Some(saved_session) = history_manager.get_session(&session_id) {
@@ -396,11 +424,12 @@ fn handle_session_history_action(state: &mut ITerminalState, action: SessionHist
                     let ctx = eframe::egui::Context::default();
                     match state.egui_terminal_manager.restore_session_from_history(&saved_session, &ctx) {
                         Ok(_) => {
-                            state.session_history_ui.set_success(format!("Session '{}' restored successfully!", saved_session.title));
-                            log::info!("Restored session: {}", saved_session.title);
+                            // Close the session history dialog after successful restoration
+                            state.session_history_ui.close();
+                            log::info!("Restored session: {} and closed history dialog", saved_session.title);
                         }
                         Err(e) => {
-                            state.session_history_ui.set_error(format!("Failed to restore session: {}", e));
+                            state.session_history_ui.set_error(format!("恢复会话失败: {}", e));
                             log::error!("Failed to restore session: {}", e);
                         }
                     }

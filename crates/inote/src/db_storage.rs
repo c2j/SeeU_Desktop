@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Result as SqlResult, Error as SqlError};
 use r2d2::{Pool, PooledConnection};
@@ -699,11 +699,11 @@ impl DbStorageManager {
             let updated_at_str: String = row.get(4)?;
 
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map_err(|e| rusqlite::Error::InvalidColumnType(3, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_e| rusqlite::Error::InvalidColumnType(3, "created_at".to_string(), rusqlite::types::Type::Text))?
                 .with_timezone(&Utc);
 
             let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
-                .map_err(|e| rusqlite::Error::InvalidColumnType(4, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_e| rusqlite::Error::InvalidColumnType(4, "updated_at".to_string(), rusqlite::types::Type::Text))?
                 .with_timezone(&Utc);
 
             Ok(Note {
@@ -1168,7 +1168,7 @@ impl DbStorageManager {
     }
 
     /// Upgrade database to the latest version
-    fn upgrade_database(&self, conn: &Connection, current_version: i32) -> Result<(), Box<dyn std::error::Error>> {
+    fn upgrade_database(&self, _conn: &Connection, current_version: i32) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Upgrading database from version {} to {}", current_version, DB_VERSION);
 
         // Implement database migrations here when needed
@@ -1303,12 +1303,12 @@ impl DbStorageManager {
 
                 let created_at_str: String = row.get(11)?;
                 let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
+                    .map_err(|_e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
                     .with_timezone(&Utc);
 
                 let updated_at_str: String = row.get(12)?;
                 let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                    .map_err(|_e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
                     .with_timezone(&Utc);
 
                 Ok(McpServerRecord {
@@ -1349,12 +1349,12 @@ impl DbStorageManager {
 
             let created_at_str: String = row.get(11)?;
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map_err(|e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
                 .with_timezone(&Utc);
 
             let updated_at_str: String = row.get(12)?;
             let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
-                .map_err(|e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
                 .with_timezone(&Utc);
 
             Ok(McpServerRecord {
@@ -1399,12 +1399,12 @@ impl DbStorageManager {
 
             let created_at_str: String = row.get(11)?;
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map_err(|e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_e| SqlError::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
                 .with_timezone(&Utc);
 
             let updated_at_str: String = row.get(12)?;
             let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
-                .map_err(|e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_e| SqlError::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
                 .with_timezone(&Utc);
 
             Ok(McpServerRecord {

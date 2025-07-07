@@ -300,7 +300,7 @@ fn undo_edit(state: &mut IFileEditorState) {
 }
 
 /// 重做编辑
-fn redo_edit(state: &mut IFileEditorState) {
+fn redo_edit(_state: &mut IFileEditorState) {
     // TODO: 实现重做功能（需要重做栈）
     log::info!("Redo operation requested (not implemented yet)");
 }

@@ -67,7 +67,7 @@ fn render_role_specific_components(ui: &mut egui::Ui, state: &IToolsState) {
 }
 
 /// Render a component card
-fn render_component_card(ui: &mut egui::Ui, component: &UiComponent, state: &IToolsState) {
+fn render_component_card(ui: &mut egui::Ui, component: &UiComponent, _state: &IToolsState) {
     let (title, description, icon) = match component {
         UiComponent::DataDashboard => ("数据看板", "查看和分析业务数据", "📊"),
         UiComponent::DocumentTemplates => ("文档模板", "使用预定义的文档模板", "📄"),
@@ -177,7 +177,7 @@ fn render_system_status(ui: &mut egui::Ui, state: &IToolsState) {
         ui.label("最近活动:");
 
         // Show last few audit entries
-        for (i, entry) in state.security_context.audit_log.iter().rev().take(3).enumerate() {
+        for (_i, entry) in state.security_context.audit_log.iter().rev().take(3).enumerate() {
             ui.horizontal(|ui| {
                 let time_str = entry.timestamp.format("%H:%M:%S").to_string();
                 ui.label(format!("[{}]", time_str));

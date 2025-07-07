@@ -75,7 +75,7 @@ pub struct ISearchState {
     // Search optimization
     search_cache: HashMap<String, (Vec<SearchResult>, SearchStats)>,
     last_search_query: String,
-    search_result_receiver: Option<Receiver<SearchResponse>>,
+    _search_result_receiver: Option<Receiver<SearchResponse>>,
 
     // File type filter UI
     pub show_file_type_filter: bool,
@@ -296,7 +296,7 @@ impl Default for ISearchState {
             show_directory_input_dialog: false,
             search_cache: HashMap::new(),
             last_search_query: String::new(),
-            search_result_receiver: Some(search_result_receiver),
+            _search_result_receiver: Some(search_result_receiver),
             show_file_type_filter: false,
             selected_file_types: Vec::new(),
             show_document_import_dialog: false,

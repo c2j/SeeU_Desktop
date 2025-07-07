@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
 
 /// User roles in the iTools system
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

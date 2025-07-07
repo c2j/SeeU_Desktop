@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 use anyhow::{Result, anyhow};
-use wasmtime::{Engine, Module, Store, Instance, Func, Caller, AsContextMut};
+use wasmtime::{Engine, Module, Store, Instance, Func, Caller};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder};
 use uuid::Uuid;
 use serde_json::Value;
 
-use super::plugin::{Plugin, PluginStatus, PluginCapabilities, PluginMetadata, PluginPermission};
+use super::plugin::{PluginStatus, PluginCapabilities, PluginMetadata, PluginPermission};
 
 /// WASM plugin runtime for secure plugin execution
 pub struct WasmPluginRuntime {

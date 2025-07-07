@@ -160,7 +160,7 @@ impl BatchOperationsManager {
             BatchOperation::Import(_) => 0, // Unknown until we read the file
         };
 
-        let mut result = BatchOperationResult {
+        let result = BatchOperationResult {
             operation_id,
             operation: operation.clone(),
             total_servers: server_count,

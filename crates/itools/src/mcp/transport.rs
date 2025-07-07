@@ -177,7 +177,7 @@ impl TransportFactory {
     /// Create transport for a plugin based on its configuration
     pub fn create_for_plugin(plugin_config: &PluginTransportConfig) -> Result<McpTransport> {
         let transport_type = match plugin_config {
-            PluginTransportConfig::Command { command, args, .. } => {
+            PluginTransportConfig::Command { .. } => {
                 // For command-based plugins, use STDIO
                 TransportType::stdio()
             }

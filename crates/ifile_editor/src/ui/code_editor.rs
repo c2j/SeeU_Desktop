@@ -148,7 +148,7 @@ fn render_find_replace_panel(ui: &mut egui::Ui, state: &mut IFileEditorState) {
 /// 渲染代码编辑器组件
 fn render_code_editor_widget(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     // 获取活动缓冲区的信息
-    let (file_path, language, read_only, rope_content, cursor_line) = {
+    let (file_path, language, read_only, rope_content, _cursor_line) = {
         if let Some(buffer) = state.editor.get_active_buffer() {
             (
                 buffer.file_path.clone(),
@@ -278,7 +278,7 @@ fn update_cursor_line_column_from_byte_offset(buffer: &mut crate::state::TextBuf
     let text = buffer.rope.to_string();
     let mut line = 0;
     let mut column = 0;
-    let mut current_offset = 0;
+    let mut _current_offset = 0;
 
     for (i, ch) in text.char_indices() {
         if i >= byte_offset {
@@ -291,7 +291,7 @@ fn update_cursor_line_column_from_byte_offset(buffer: &mut crate::state::TextBuf
         } else {
             column += 1;
         }
-        current_offset = i + ch.len_utf8();
+        _current_offset = i + ch.len_utf8();
     }
 
     buffer.cursor.line = line;
@@ -379,7 +379,7 @@ fn ensure_cursor_visible_with_scroll_area(
 }
 
 /// 处理编辑器快捷键
-fn handle_editor_shortcuts(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+fn handle_editor_shortcuts(ui: &mut egui::Ui, _state: &mut IFileEditorState) {
     let ctx = ui.ctx();
     
     // Ctrl+S 保存

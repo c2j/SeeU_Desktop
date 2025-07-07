@@ -2069,7 +2069,7 @@ impl RmcpClient {
         log::debug!("� Proceeding directly to tool call without health check");
 
         // Create call_tool request
-        let request = super::protocol::McpRequest::new(
+        let _request = super::protocol::McpRequest::new(
             serde_json::Value::Number(serde_json::Number::from(100)),
             super::protocol::methods::CALL_TOOL.to_string(),
             Some(serde_json::json!({
@@ -2223,7 +2223,7 @@ impl RmcpClient {
         }
 
         // Create read_resource request
-        let request = super::protocol::McpRequest::new(
+        let _request = super::protocol::McpRequest::new(
             serde_json::Value::Number(serde_json::Number::from(101)),
             super::protocol::methods::READ_RESOURCE.to_string(),
             Some(serde_json::json!({
@@ -2270,7 +2270,7 @@ impl RmcpClient {
         }
 
         // Create get_prompt request
-        let request = super::protocol::McpRequest::new(
+        let _request = super::protocol::McpRequest::new(
             serde_json::Value::Number(serde_json::Number::from(102)),
             super::protocol::methods::GET_PROMPT.to_string(),
             Some(serde_json::json!({
@@ -2446,8 +2446,8 @@ impl RmcpClient {
     }
 
     /// Test server using rmcp service (following git_stdio.rs pattern)
-    async fn test_server_with_rmcp(&self, server_id: Uuid, command: &str, args: &[String]) -> TestResult {
-        let start_time = std::time::Instant::now();
+    async fn test_server_with_rmcp(&self, _server_id: Uuid, command: &str, args: &[String]) -> TestResult {
+        let _start_time = std::time::Instant::now();
         let mut test_stdout = String::new();
         let mut test_stderr = String::new();
 
@@ -2596,7 +2596,7 @@ impl RmcpClient {
     }
 
     /// Test SSE server using rmcp service
-    async fn test_server_with_sse(&self, server_id: Uuid, url: &str) -> TestResult {
+    async fn test_server_with_sse(&self, _server_id: Uuid, url: &str) -> TestResult {
         let start_time = std::time::Instant::now();
         let mut test_stdout = String::new();
         let mut test_stderr = String::new();

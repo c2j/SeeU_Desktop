@@ -43,8 +43,8 @@ pub fn render_isearch_with_sidebar_info(ui: &mut egui::Ui, state: &mut ISearchSt
 fn render_isearch_with_sidebar_info_internal<F>(
     ui: &mut egui::Ui,
     state: &mut ISearchState,
-    right_sidebar_open: bool,
-    right_sidebar_width: Option<f32>,
+    _right_sidebar_open: bool,
+    _right_sidebar_width: Option<f32>,
     open_in_editor_callback: Option<F>
 ) where F: Fn(String) {
     // Process directory dialog
@@ -295,10 +295,7 @@ fn render_search_results_content_with_callback<F>(
     render_search_results_content_internal(ui, state, open_in_editor_callback);
 }
 
-/// Render the search results content area
-fn render_search_results_content(ui: &mut egui::Ui, state: &mut ISearchState) {
-    render_search_results_content_internal(ui, state, &None::<fn(String)>);
-}
+
 
 /// Internal search results content rendering
 fn render_search_results_content_internal<F>(
@@ -734,10 +731,7 @@ fn render_detailed_view_with_callback<F>(
     render_detailed_view_internal(ui, state, open_in_editor_callback);
 }
 
-/// Render search results in detailed view (card-style)
-fn render_detailed_view(ui: &mut egui::Ui, state: &mut ISearchState) {
-    render_detailed_view_internal(ui, state, &None::<fn(String)>);
-}
+
 
 /// Internal detailed view rendering
 fn render_detailed_view_internal<F>(
@@ -966,10 +960,7 @@ fn render_list_view_with_callback<F>(
     render_list_view_internal(ui, state, available_width, open_in_editor_callback);
 }
 
-/// Render search results in list view (table-style) using egui_extras::TableBuilder
-fn render_list_view(ui: &mut egui::Ui, state: &mut ISearchState, available_width: f32) {
-    render_list_view_internal(ui, state, available_width, &None::<fn(String)>);
-}
+
 
 /// Internal list view rendering
 fn render_list_view_internal<F>(

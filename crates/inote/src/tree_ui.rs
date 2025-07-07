@@ -1,7 +1,7 @@
 use eframe::egui;
 use crate::db_state::DbINoteState;
 use crate::hex_to_color32;
-use crate::db_ui_import;
+
 
 /// 渲染树状结构的笔记本和笔记
 pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
@@ -242,7 +242,7 @@ pub fn render_tag_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 ui.add_space(15.0);
 
                 // 计算可用宽度并限制标签文本宽度
-                let available_width = ui.available_width() - 30.0; // 减去删除按钮的宽度
+                let _available_width = ui.available_width() - 30.0; // 减去删除按钮的宽度
 
                 // 更严格地限制标签名称长度
                 let original_name = tag.name.clone();

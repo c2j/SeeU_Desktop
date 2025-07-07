@@ -92,7 +92,7 @@ fn render_ltree_view(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     let directory_children = state.file_tree.directory_children.clone();
 
     // 由于闭包借用问题，我们需要分离右键菜单的处理
-    let mut context_menu_request: Option<(PathBuf, bool)> = None;
+    let _context_menu_request: Option<(PathBuf, bool)> = None;
 
     // 将TreeView包装在ScrollArea中以支持滚动
     let actions = egui::ScrollArea::vertical()
@@ -187,7 +187,7 @@ fn ensure_root_loaded(state: &mut IFileEditorState) {
 }
 
 /// 确保所有展开的目录都已加载子项（真正的懒加载）
-fn ensure_expanded_directories_loaded(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+fn ensure_expanded_directories_loaded(_ui: &mut egui::Ui, _state: &mut IFileEditorState) {
     // 这个函数现在只确保根目录已加载
     // 子目录只在用户主动展开时才加载，实现真正的懒加载
 
@@ -351,203 +351,17 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
     }
 }
 
-/// 处理右键菜单
-fn handle_context_menu(ui: &mut egui::Ui, selected_nodes: &Vec<FileNodeId>, state: &mut IFileEditorState) {
-    if selected_nodes.is_empty() {
-        return;
-    }
 
-    // 获取第一个选中的节点
-    let first_node = &selected_nodes[0];
-    let path = &first_node.0;
 
-    if let Some(entry) = state.file_tree.get_file_entry(path) {
-        if entry.is_dir {
-            render_dir_context_menu_inline(ui, path, state);
-        } else {
-            render_file_context_menu_inline(ui, path, state);
-        }
-    }
-}
 
-/// 渲染文件右键菜单（内联版本）
-fn render_file_context_menu_inline(ui: &mut egui::Ui, path: &PathBuf, state: &mut IFileEditorState) {
-    if ui.button("📝 打开").clicked() {
-        if let Err(e) = state.editor.open_file(path.clone(), &state.settings) {
-            log::error!("Failed to open file: {}", e);
-            state.last_error = Some(e);
-        }
-        ui.close_menu();
-    }
 
-    if ui.button("📋 复制路径").clicked() {
-        copy_path_to_clipboard(path);
-        ui.close_menu();
-    }
 
-    if ui.button("✏️ 重命名").clicked() {
-        state.ui_state.show_rename_dialog = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        state.ui_state.rename_new_name = path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_string();
-        ui.close_menu();
-    }
 
-    ui.separator();
 
-    if ui.button("🗑️ 删除").clicked() {
-        state.ui_state.show_delete_confirmation = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        ui.close_menu();
-    }
-}
 
-/// 渲染目录右键菜单（内联版本）
-fn render_dir_context_menu_inline(ui: &mut egui::Ui, path: &PathBuf, state: &mut IFileEditorState) {
-    if ui.button("📄 新建文件").clicked() {
-        state.ui_state.show_new_file_dialog = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        state.ui_state.new_file_name.clear();
-        ui.close_menu();
-    }
 
-    if ui.button("📁 新建文件夹").clicked() {
-        state.ui_state.show_new_folder_dialog = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        state.ui_state.new_folder_name.clear();
-        ui.close_menu();
-    }
 
-    ui.separator();
 
-    if ui.button("📋 复制路径").clicked() {
-        copy_path_to_clipboard(path);
-        ui.close_menu();
-    }
-
-    if ui.button("✏️ 重命名").clicked() {
-        state.ui_state.show_rename_dialog = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        state.ui_state.rename_new_name = path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_string();
-        ui.close_menu();
-    }
-
-    ui.separator();
-
-    if ui.button("🗑️ 删除").clicked() {
-        state.ui_state.show_delete_confirmation = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        ui.close_menu();
-    }
-}
-
-/// 切换目录展开状态
-fn toggle_directory_expansion(state: &mut IFileEditorState, path: &PathBuf) {
-    let node_id = FileNodeId(path.clone());
-
-    // 由于is_open方法是私有的，我们使用一个简化的策略：
-    // 总是设置为展开状态，让TreeView自己管理实际的切换逻辑
-    state.file_tree.tree_view_state.set_openness(node_id, true);
-
-    log::info!("Setting directory to expanded: {:?}", path);
-}
-
-/// 显示文件上下文菜单
-fn show_file_context_menu(path: &PathBuf, state: &mut IFileEditorState) {
-    // 这里我们设置一个标志，在主UI循环中显示上下文菜单
-    state.ui_state.show_context_menu = true;
-    state.ui_state.context_menu_path = Some(path.clone());
-    state.ui_state.context_menu_is_dir = false;
-}
-
-/// 显示目录上下文菜单
-fn show_dir_context_menu(path: &PathBuf, state: &mut IFileEditorState) {
-    // 这里我们设置一个标志，在主UI循环中显示上下文菜单
-    state.ui_state.show_context_menu = true;
-    state.ui_state.context_menu_path = Some(path.clone());
-    state.ui_state.context_menu_is_dir = true;
-}
-
-/// 渲染文件上下文菜单
-fn render_file_context_menu(ui: &mut egui::Ui, path: &PathBuf, state: &mut IFileEditorState) {
-    if ui.button("📝 打开").clicked() {
-        if let Err(e) = state.editor.open_file(path.clone(), &state.settings) {
-            log::error!("Failed to open file: {}", e);
-            state.last_error = Some(e);
-        }
-        ui.close_menu();
-    }
-
-    if ui.button("📋 复制路径").clicked() {
-        copy_path_to_clipboard(path);
-        ui.close_menu();
-    }
-
-    if ui.button("✏️ 重命名").clicked() {
-        state.ui_state.show_rename_dialog = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        state.ui_state.rename_new_name = path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_string();
-        ui.close_menu();
-    }
-
-    ui.separator();
-
-    if ui.button("🗑️ 删除").clicked() {
-        state.ui_state.show_delete_confirmation = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        ui.close_menu();
-    }
-}
-
-/// 渲染目录上下文菜单
-fn render_dir_context_menu(ui: &mut egui::Ui, path: &PathBuf, state: &mut IFileEditorState) {
-    if ui.button("� 新建文件").clicked() {
-        state.ui_state.show_new_file_dialog = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        state.ui_state.new_file_name.clear();
-        ui.close_menu();
-    }
-
-    if ui.button("� 新建文件夹").clicked() {
-        state.ui_state.show_new_folder_dialog = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        state.ui_state.new_folder_name.clear();
-        ui.close_menu();
-    }
-
-    ui.separator();
-
-    if ui.button("� 复制路径").clicked() {
-        copy_path_to_clipboard(path);
-        ui.close_menu();
-    }
-
-    if ui.button("✏️ 重命名").clicked() {
-        state.ui_state.show_rename_dialog = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        state.ui_state.rename_new_name = path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_string();
-        ui.close_menu();
-    }
-
-    ui.separator();
-
-    if ui.button("🗑️ 删除").clicked() {
-        state.ui_state.show_delete_confirmation = true;
-        state.ui_state.operation_target_path = Some(path.clone());
-        ui.close_menu();
-    }
-}
 
 /// 显示目录选择器
 fn show_directory_picker(state: &mut IFileEditorState) {

@@ -18,13 +18,7 @@ impl<'a> TextBufferAdapter<'a> {
         }
     }
     
-    /// 获取缓存的字符串，如果没有则创建
-    fn get_cached_string(&mut self) -> &str {
-        if self.cached_string.is_none() {
-            self.cached_string = Some(self.buffer.rope.to_string());
-        }
-        self.cached_string.as_ref().unwrap()
-    }
+
     
     /// 更新 ROPE 内容并清除缓存
     fn update_rope(&mut self, text: String) {
@@ -40,12 +34,6 @@ impl<'a> TextBufferAdapter<'a> {
             .nth(char_index)
             .map(|(byte_idx, _)| byte_idx)
             .unwrap_or(text.len())
-    }
-    
-    /// 字节索引转换为字符索引
-    fn byte_to_char_index(&self, byte_index: usize) -> usize {
-        let text = self.buffer.rope.to_string();
-        text[..byte_index.min(text.len())].chars().count()
     }
 }
 

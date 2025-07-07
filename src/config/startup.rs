@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// Startup configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +42,8 @@ impl Default for StartupConfig {
 impl StartupConfig {
     /// Load configuration from file
     pub fn load() -> Self {
-        let config_path = Self::config_path();
+        let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let config_path = base_path.join("seeu_desktop").join("startup.toml");
         
         if config_path.exists() {
             match std::fs::read_to_string(&config_path) {
@@ -71,7 +71,8 @@ impl StartupConfig {
     
     /// Save configuration to file
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let config_path = Self::config_path();
+        let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let config_path = base_path.join("seeu_desktop").join("startup.toml");
         
         // Create parent directory if it doesn't exist
         if let Some(parent) = config_path.parent() {
@@ -84,11 +85,7 @@ impl StartupConfig {
         Ok(())
     }
     
-    /// Get the configuration file path
-    fn config_path() -> PathBuf {
-        let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        base_path.join("seeu_desktop").join("startup.toml")
-    }
+
 }
 
 /// Startup performance metrics

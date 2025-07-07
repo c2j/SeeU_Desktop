@@ -16,6 +16,10 @@ pub struct EguiTerminalSession {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_activity: chrono::DateTime<chrono::Utc>,
     pub event_receiver: Option<mpsc::Receiver<(u64, PtyEvent)>>,
+    /// Original content for restored sessions
+    pub restored_content: Option<String>,
+    /// Whether to show the restored content panel
+    pub show_restored_content: bool,
 }
 
 impl EguiTerminalSession {
@@ -31,6 +35,8 @@ impl EguiTerminalSession {
             created_at: now,
             last_activity: now,
             event_receiver: None,
+            restored_content: None,
+            show_restored_content: false,
         }
     }
 
@@ -65,15 +71,32 @@ impl EguiTerminalSession {
         self.backend.is_some()
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui) {
+    pub fn render(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut content_panel_toggled = false;
+
+        // Show restored content panel if available
+        if let Some(content) = self.restored_content.clone() {
+            self.render_restored_content_panel(ui, &content);
+            content_panel_toggled = true;
+        }
+
         if let Some(ref mut backend) = self.backend {
             // Update last activity
             self.last_activity = chrono::Utc::now();
 
+            // Calculate available size for terminal (subtract restored content panel height if shown)
+            let available_size = if content_panel_toggled && self.show_restored_content {
+                let mut size = ui.available_size();
+                size.y = size.y.max(200.0); // Ensure minimum terminal height
+                size
+            } else {
+                ui.available_size()
+            };
+
             // Create and render the terminal view
             let terminal_view = TerminalView::new(ui, backend)
                 .set_focus(self.is_active)
-                .set_size(ui.available_size());
+                .set_size(available_size);
 
             ui.add(terminal_view);
         } else {
@@ -89,6 +112,56 @@ impl EguiTerminalSession {
                 }
             });
         }
+
+        content_panel_toggled
+    }
+
+    /// Render the restored content panel above the terminal
+    fn render_restored_content_panel(&mut self, ui: &mut egui::Ui, content: &str) {
+        ui.vertical(|ui| {
+            // Header with toggle button
+            ui.horizontal(|ui| {
+                let toggle_text = if self.show_restored_content { "🔽" } else { "▶️" };
+                if ui.button(format!("{} 原始会话内容", toggle_text)).clicked() {
+                    self.show_restored_content = !self.show_restored_content;
+                }
+
+                ui.separator();
+
+                ui.label(format!("📄 恢复时间: {}", self.created_at.format("%Y-%m-%d %H:%M:%S")));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("📋").on_hover_text("复制原始内容").clicked() {
+                        ui.output_mut(|o| o.copied_text = content.to_string());
+                    }
+
+                    if ui.small_button("❌").on_hover_text("隐藏原始内容").clicked() {
+                        self.show_restored_content = false;
+                    }
+                });
+            });
+
+            // Content area (only show if expanded)
+            if self.show_restored_content {
+                ui.separator();
+
+                // Scrollable content area with fixed height
+                egui::ScrollArea::vertical()
+                    .id_source(format!("restored_content_{}", self.id))
+                    .max_height(200.0)
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut content.as_ref())
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace)
+                                .interactive(false)
+                        );
+                    });
+
+                ui.separator();
+            }
+        });
     }
 
     /// Export terminal content with the given options
@@ -227,7 +300,7 @@ impl EguiTerminalManager {
     pub fn render_active_session(&mut self, ui: &mut egui::Ui) {
         if let Some(active_id) = self.active_session_id {
             if let Some(session) = self.sessions.get_mut(&active_id) {
-                session.render(ui);
+                let _content_panel_shown = session.render(ui);
             } else {
                 ui.vertical_centered(|ui| {
                     ui.add_space(50.0);
@@ -269,20 +342,27 @@ impl EguiTerminalManager {
             return;
         }
 
-        ui.horizontal(|ui| {
-            let session_ids: Vec<_> = self.sessions.keys().copied().collect();
-            
-            for session_id in session_ids {
-                if let Some(session) = self.sessions.get(&session_id) {
-                    let is_active = self.active_session_id == Some(session_id);
-                    let button_text = &session.title;
+        let mut switch_to_session = None;
 
-                    if ui.selectable_label(is_active, button_text).clicked() && !is_active {
-                        self.set_active_session(session_id);
-                    }
+        // Collect session data first to avoid borrowing issues
+        let session_data: Vec<_> = self.sessions.iter().map(|(id, session)| {
+            (*id, session.title.clone())
+        }).collect();
+
+        ui.horizontal(|ui| {
+            for (session_id, title) in session_data {
+                let is_active = self.active_session_id == Some(session_id);
+
+                if ui.selectable_label(is_active, &title).clicked() && !is_active {
+                    switch_to_session = Some(session_id);
                 }
             }
         });
+
+        // Handle session switch outside the closure
+        if let Some(session_id) = switch_to_session {
+            self.set_active_session(session_id);
+        }
     }
 
     pub fn update(&mut self) {
@@ -431,16 +511,38 @@ impl EguiTerminalManager {
             return Err(error_msg.to_string());
         }
 
-        // TODO: Set the terminal content to the saved content
-        // This would require backend-specific implementation to restore content
-        // For now, we'll start with a fresh terminal in the correct working directory
+        // Update the session title and store the original content
+        session.title = format!("{} (已恢复)", saved_session.title);
+        session.restored_content = Some(saved_session.content.clone());
+        session.show_restored_content = true; // Default to showing the content
 
         // Add session to manager
         self.sessions.insert(session_id, session);
-        self.active_session_id = Some(session_id);
 
-        log::info!("Successfully restored session '{}' from history with working terminal", saved_session.title);
+        // Properly set the active session (this also sets is_active flag)
+        self.set_active_session(session_id);
+
+        // Create a welcome message in the new terminal
+        self.display_restore_welcome_message(session_id, saved_session);
+
+        log::info!("Successfully restored session '{}' from history", saved_session.title);
         Ok(session_id)
+    }
+
+    /// Display a welcome message for restored sessions
+    fn display_restore_welcome_message(&mut self, _session_id: Uuid, saved_session: &SavedSession) {
+        // For now, we'll just log the restoration
+        // In a future implementation, we could display the saved content in a separate panel
+        // or provide a command to view the original session content
+
+        log::info!("Session '{}' has been restored. Original content length: {} characters",
+                  saved_session.title, saved_session.content.len());
+
+        // TODO: In the future, we could:
+        // 1. Add a "View Original Content" button to the session tab
+        // 2. Store the original content in the session for reference
+        // 3. Provide a command like "show-original-content" in the terminal
+        // 4. Display the content in a separate scrollable panel
     }
 }
 

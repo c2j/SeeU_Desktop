@@ -244,9 +244,9 @@ impl SeeUApp {
         inote_state.initialize();
         inote_state.initialize_storage_async("notes.db".to_string());
 
-        let mut isearch_state = ISearchState::default();
+        let isearch_state = ISearchState::default();
         let mut ai_assist_state = aiAssist::initialize();
-        let mut itools_state = itools::initialize();
+        let itools_state = itools::initialize();
         let iterminal_state = iterminal::initialize();
         let ifile_editor_state = ifile_editor::initialize();
 
@@ -435,7 +435,7 @@ impl SeeUApp {
         let start_time = std::time::Instant::now();
 
         // 设置一个合理的初始化时间（比如2秒）
-        let target_duration = std::time::Duration::from_secs(2);
+        let _target_duration = std::time::Duration::from_secs(2);
 
         // 记录开始时间用于进度计算
         self.startup_metrics.start_time = start_time;
@@ -694,7 +694,7 @@ impl SeeUApp {
                                 log::info!("🔄 尝试手动触发服务器 '{}' 的能力提取", server_name);
 
                                 // 创建一个异步任务来执行能力提取
-                                let server_id_copy = *server_id;
+                                let _server_id_copy = *server_id;
                                 let server_name_copy = server_name.clone();
 
                                 // 注意：这里我们不能直接调用异步方法，因为我们在同步上下文中
@@ -837,7 +837,7 @@ impl SeeUApp {
                                 log::warn!("⚠️ 服务器 '{}' 没有能力信息", server_record.name);
 
                                 // 对于绿灯但没有能力信息的服务器，记录需要获取能力的服务器
-                                if let Ok(server_uuid) = server_record.get_uuid() {
+                                if let Ok(_server_uuid) = server_record.get_uuid() {
                                     log::info!("⚠️ 绿灯服务器 '{}' 没有能力信息，需要手动测试以获取能力", server_record.name);
                                     // 这里可以添加到一个待处理列表，供用户手动触发测试
                                 }
@@ -1844,7 +1844,7 @@ impl eframe::App for SeeUApp {
         self.save_all_settings();
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Show startup screen if not complete
         if !self.startup_complete {
             self.update_startup_progress();
@@ -2029,7 +2029,7 @@ impl SeeUApp {
                     log::info!("🔧 开始执行 {} 个工具调用...", batch.tool_calls.len());
 
                     // 执行真正的MCP工具调用
-                    let mcp_integration = self.mcp_integration.clone();
+                    let _mcp_integration = self.mcp_integration.clone();
                     let mut results = Vec::new();
 
                     for pending_call in &batch.tool_calls {

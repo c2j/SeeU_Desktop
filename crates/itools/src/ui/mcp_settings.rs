@@ -2053,7 +2053,7 @@ impl McpSettingsUi {
         log::info!("🔄 触发后台连接服务器: {} ({})", server_name, server_id);
 
         // Try to connect using the existing synchronous method but with better error handling
-        let connect_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let connect_result = if let Ok(_handle) = tokio::runtime::Handle::try_current() {
             // Use a very short timeout to avoid blocking UI
             match std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2491,7 +2491,7 @@ impl McpSettingsUi {
                 None
             };
 
-            if let Some((server_id, selected_category, selected_tool_index, selected_resource_index, selected_prompt_index, capabilities, parameter_inputs)) = test_data {
+            if let Some((_server_id, _selected_category, _selected_tool_index, _selected_resource_index, _selected_prompt_index, _capabilities, _parameter_inputs)) = test_data {
                 // Set testing state and start frame-based test execution
                 if let Some(dialog) = &mut self.ui_state.tool_test_dialog {
                     dialog.is_testing = true;
@@ -3017,7 +3017,7 @@ impl McpSettingsUi {
             }
         };
 
-        let params_str = if parameters.is_empty() {
+        let _params_str = if parameters.is_empty() {
             "{}".to_string()
         } else {
             serde_json::to_string(parameters).unwrap_or_default()
@@ -3098,7 +3098,7 @@ impl McpSettingsUi {
 
         if let Some(dialog) = &mut self.ui_state.functionality_test_dialog {
             let server_name = dialog.server_name.clone();
-            let server_id = dialog.server_id;
+            let _server_id = dialog.server_id;
 
             // Handle test progress
             if dialog.is_testing {

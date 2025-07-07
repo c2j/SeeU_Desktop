@@ -1,6 +1,6 @@
 use eframe::egui;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+
 use crate::db_state::DbINoteState;
 use crate::siyuan_import::{SiyuanImporter, ImportStats};
 

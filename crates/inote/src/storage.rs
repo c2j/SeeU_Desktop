@@ -1,6 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use crate::{Notebook, Note, Tag};
 
 /// Storage manager for iNote

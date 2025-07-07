@@ -208,7 +208,7 @@ impl PluginSandbox {
 
     /// Setup isolation for a sandbox instance
     fn setup_isolation(&self, instance_id: Uuid) -> Result<()> {
-        let instance = self.instances.get(&instance_id)
+        let _instance = self.instances.get(&instance_id)
             .ok_or_else(|| anyhow::anyhow!("Sandbox instance not found"))?;
 
         log::debug!("Setting up isolation for instance {}", instance_id);

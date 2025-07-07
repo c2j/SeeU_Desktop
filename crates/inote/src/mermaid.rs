@@ -1,4 +1,4 @@
-use egui::{ColorImage, TextureHandle, Ui};
+use egui::{TextureHandle, Ui};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use usvg::TreeParsing;
@@ -334,7 +334,7 @@ impl SvgTestRenderer {
     }
 
     /// Get the appropriate font family for SVG rendering with optimized font selection
-    fn get_svg_font_family(&self, font_family: Option<&str>) -> String {
+    fn get_svg_font_family(&self, _font_family: Option<&str>) -> String {
         // Always use Arial Unicode MS as the primary font to avoid fallback warnings
         // This font has the best Unicode support and is what usvg ultimately falls back to anyway
         "Arial Unicode MS, Arial, Helvetica, sans-serif".to_string()
@@ -493,7 +493,7 @@ impl MermaidRenderer {
     }
 
     /// Get the appropriate font family for SVG rendering with optimized font selection
-    fn get_svg_font_family(&self, font_family: Option<&str>) -> String {
+    fn get_svg_font_family(&self, _font_family: Option<&str>) -> String {
         // Always use Arial Unicode MS as the primary font to avoid fallback warnings
         // This font has the best Unicode support and is what usvg ultimately falls back to anyway
         "Arial Unicode MS, Arial, Helvetica, sans-serif".to_string()

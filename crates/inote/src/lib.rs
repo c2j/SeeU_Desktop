@@ -26,14 +26,12 @@ pub mod settings_ui;
 
 use eframe::egui;
 use notebook::Notebook;
-use note::{Note, Attachment};
+use note::Note;
 use tag::Tag;
 use storage::StorageManager;
-use db_storage::DbStorageManager;
-use db_state::{DbINoteState, SaveStatus};
+use db_state::DbINoteState;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
 use chrono::Utc;
 
 /// 截断笔记标题，最多显示16个汉字，超过部分用...代替

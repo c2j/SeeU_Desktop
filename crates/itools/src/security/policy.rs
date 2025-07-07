@@ -3,7 +3,7 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 
 use crate::roles::UserRole;
-use crate::state::PermissionLevel;
+
 
 /// Security policy engine
 #[derive(Debug)]
@@ -389,7 +389,7 @@ impl PolicyEngine {
     }
     
     /// Handle policy actions that don't affect the decision
-    fn handle_policy_action(&self, action: &PolicyAction, context: &PolicyEvaluationContext) {
+    fn handle_policy_action(&self, action: &PolicyAction, _context: &PolicyEvaluationContext) {
         match action {
             PolicyAction::Log { level, message } => {
                 match level {

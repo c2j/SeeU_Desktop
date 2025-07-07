@@ -238,7 +238,7 @@ impl McpClient {
         // TODO: Send messages via transport layers
 
         for (connection_id, message) in self.outgoing_queue.drain(..) {
-            if let Some(connection) = self.connections.get_mut(&connection_id) {
+            if let Some(_connection) = self.connections.get_mut(&connection_id) {
                 // TODO: Actually send the message via transport
                 log::debug!("Sending message to connection {}: {:?}", connection_id, message);
             }
@@ -299,7 +299,7 @@ impl McpClient {
     }
 
     /// Handle initialize response
-    fn handle_initialize_response(&mut self, connection_id: Uuid, result: &Value) {
+    fn handle_initialize_response(&mut self, connection_id: Uuid, _result: &Value) {
         if let Some(connection) = self.connections.get_mut(&connection_id) {
             // TODO: Parse server capabilities from result
             connection.status = ConnectionStatus::Connected;
