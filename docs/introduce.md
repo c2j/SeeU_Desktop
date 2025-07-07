@@ -96,6 +96,554 @@
 └─────────────────────────────────────────────────────┘
 ```
 
+#### 🔧 技术栈详解
+
+##### 前端UI层 - egui框架
+- **即时模式GUI** - 无状态渲染，每帧重绘，简化状态管理
+- **GPU加速渲染** - 基于wgpu的硬件加速图形渲染
+- **跨平台原生** - 直接调用系统API，无Web技术依赖
+- **内存高效** - 零拷贝渲染，最小化内存分配
+
+##### 核心语言 - Rust
+- **内存安全** - 编译时保证内存安全，无运行时开销
+- **零成本抽象** - 高级特性不影响运行时性能
+- **并发安全** - 所有权系统防止数据竞争
+- **生态丰富** - 活跃的crates生态系统
+
+--slide
+
+### 2.2 核心技术组件
+
+#### 2.2.1 UI渲染引擎
+
+##### egui架构特点
+```rust
+// 即时模式GUI核心概念
+fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    egui::CentralPanel::default().show(ctx, |ui| {
+        // UI在每帧重新构建，状态由应用管理
+        if ui.button("点击我").clicked() {
+            self.counter += 1;
+        }
+        ui.label(format!("计数: {}", self.counter));
+    });
+}
+```
+
+##### 渲染管线
+- **布局计算** - 自动布局系统，响应式设计
+- **绘制指令** - 高效的绘制命令生成
+- **GPU提交** - 批量提交到GPU进行硬件加速
+- **帧率控制** - 智能帧率管理，节能优化
+
+#### 2.2.2 异步运行时
+
+##### Tokio集成
+```rust
+// 异步任务管理
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 启动异步运行时
+    let rt = tokio::runtime::Runtime::new()?;
+
+    // 并发执行多个任务
+    tokio::join!(
+        file_watcher_task(),
+        terminal_process_task(),
+        ai_service_task()
+    );
+
+    Ok(())
+}
+```
+
+##### 并发模型
+- **任务调度** - 工作窃取调度器，高效利用多核
+- **异步I/O** - 非阻塞文件和网络操作
+- **通道通信** - 线程安全的消息传递
+- **资源管理** - 自动资源清理和生命周期管理
+
+--slide
+
+### 2.3 数据存储架构
+
+#### 2.3.1 SQLite集成
+
+##### 数据库设计
+```sql
+-- 笔记本表
+CREATE TABLE notebooks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 笔记表
+CREATE TABLE notes (
+    id TEXT PRIMARY KEY,
+    notebook_id TEXT REFERENCES notebooks(id),
+    title TEXT NOT NULL,
+    content TEXT,
+    tags TEXT, -- JSON数组
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 全文搜索索引
+CREATE VIRTUAL TABLE notes_fts USING fts5(
+    title, content, tags,
+    content='notes',
+    content_rowid='rowid'
+);
+```
+
+##### 性能优化
+- **连接池管理** - 复用数据库连接，减少开销
+- **事务批处理** - 批量操作提升写入性能
+- **索引优化** - 智能索引策略，加速查询
+- **WAL模式** - Write-Ahead Logging，并发读写
+
+#### 2.3.2 文件系统管理
+
+##### 文件监控
+```rust
+use notify::{Watcher, RecursiveMode, Result};
+use std::sync::mpsc::channel;
+
+// 文件变化监控
+fn setup_file_watcher(path: &Path) -> Result<()> {
+    let (tx, rx) = channel();
+    let mut watcher = notify::recommended_watcher(tx)?;
+
+    watcher.watch(path, RecursiveMode::Recursive)?;
+
+    for res in rx {
+        match res {
+            Ok(event) => handle_file_event(event),
+            Err(e) => log::error!("文件监控错误: {:?}", e),
+        }
+    }
+    Ok(())
+}
+```
+
+##### 存储策略
+- **增量备份** - 只备份变更的文件内容
+- **版本控制** - 文件历史版本管理
+- **压缩存储** - 自动压缩减少存储空间
+- **缓存机制** - 智能缓存提升访问速度
+
+### 2.4 模块化架构设计
+
+#### 2.4.1 Crate组织结构
+
+##### 项目结构
+```
+SeeU-Desktop/
+├── src/                    # 主应用程序
+│   ├── main.rs            # 应用入口点
+│   ├── app.rs             # 应用状态管理
+│   ├── modules/           # 功能模块
+│   └── ui/                # UI组件
+├── crates/                # 独立功能crates
+│   ├── inote/             # 笔记模块
+│   ├── isearch/           # 搜索模块
+│   ├── iterminal/         # 终端模块
+│   ├── ifile_editor/      # 文件编辑器
+│   ├── itools/            # 工具集成
+│   └── zhushoude_duckdb/  # 数据库引擎
+└── docs/                  # 文档
+```
+
+##### 模块依赖关系
+```rust
+// 主应用依赖
+[dependencies]
+inote = { path = "crates/inote" }
+isearch = { path = "crates/isearch" }
+iterminal = { path = "crates/iterminal" }
+ifile_editor = { path = "crates/ifile_editor" }
+itools = { path = "crates/itools" }
+
+// 共享依赖
+egui = "0.28.1"
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+```
+
+#### 2.4.2 进程间通信
+
+##### 消息传递架构
+```rust
+// 模块间消息定义
+#[derive(Debug, Clone)]
+pub enum AppMessage {
+    // 笔记模块消息
+    NoteCreated { id: String, title: String },
+    NoteUpdated { id: String, content: String },
+
+    // 搜索模块消息
+    SearchQuery { query: String, filters: SearchFilters },
+    SearchResults { results: Vec<SearchResult> },
+
+    // 终端模块消息
+    TerminalCommand { command: String, tab_id: usize },
+    TerminalOutput { output: String, tab_id: usize },
+
+    // 文件编辑器消息
+    FileOpened { path: PathBuf },
+    FileModified { path: PathBuf, content: String },
+}
+
+// 消息总线
+pub struct MessageBus {
+    sender: mpsc::UnboundedSender<AppMessage>,
+    receiver: mpsc::UnboundedReceiver<AppMessage>,
+}
+```
+
+##### 事件驱动架构
+- **发布订阅模式** - 模块间松耦合通信
+- **异步消息处理** - 非阻塞消息传递
+- **事件溯源** - 完整的操作历史记录
+- **错误恢复** - 消息重试和错误处理
+
+--slide
+
+### 2.5 性能优化技术
+
+#### 2.5.1 内存管理
+
+##### 零拷贝优化
+```rust
+// 使用Cow避免不必要的克隆
+use std::borrow::Cow;
+
+pub struct TextBuffer<'a> {
+    content: Cow<'a, str>,
+    modifications: Vec<TextEdit>,
+}
+
+impl<'a> TextBuffer<'a> {
+    // 只在需要时才克隆数据
+    pub fn modify(&mut self, edit: TextEdit) {
+        if let Cow::Borrowed(_) = self.content {
+            self.content = Cow::Owned(self.content.to_string());
+        }
+        self.apply_edit(edit);
+    }
+}
+```
+
+##### 内存池技术
+- **对象池** - 复用频繁创建的对象
+- **字符串池** - 共享相同的字符串实例
+- **缓冲区复用** - 避免频繁的内存分配
+- **智能指针** - Arc/Rc实现高效的引用计数
+
+#### 2.5.2 渲染优化
+
+##### 增量渲染
+```rust
+// 脏标记系统
+pub struct RenderState {
+    dirty_regions: Vec<Rect>,
+    last_frame_hash: u64,
+}
+
+impl RenderState {
+    pub fn mark_dirty(&mut self, region: Rect) {
+        self.dirty_regions.push(region);
+    }
+
+    pub fn should_redraw(&self, current_hash: u64) -> bool {
+        current_hash != self.last_frame_hash || !self.dirty_regions.is_empty()
+    }
+}
+```
+
+##### GPU加速策略
+- **批量绘制** - 合并绘制调用减少GPU开销
+- **纹理缓存** - 缓存常用的UI元素纹理
+- **几何实例化** - 复用相同几何体的多个实例
+- **着色器优化** - 高效的GPU着色器程序
+
+--slide
+
+### 2.6 安全架构
+
+#### 2.6.1 内存安全保障
+
+##### Rust安全特性
+```rust
+// 所有权系统防止内存泄漏
+fn safe_string_processing(data: String) -> String {
+    // 编译时保证内存安全
+    let processed = data.trim().to_uppercase();
+    processed // 自动释放原始data
+}
+
+// 借用检查器防止数据竞争
+fn concurrent_access(shared_data: &Arc<Mutex<Vec<String>>>) {
+    let data = shared_data.lock().unwrap();
+    // 编译时保证线程安全
+    println!("数据长度: {}", data.len());
+} // 自动释放锁
+```
+
+##### 类型安全
+- **强类型系统** - 编译时类型检查
+- **Option/Result** - 显式错误处理
+- **生命周期管理** - 自动内存管理
+- **借用检查** - 防止悬垂指针
+
+#### 2.6.2 数据安全
+
+##### 加密存储
+```rust
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, NewAead};
+
+// 敏感数据加密
+pub struct SecureStorage {
+    cipher: Aes256Gcm,
+}
+
+impl SecureStorage {
+    pub fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>, Error> {
+        let nonce = Nonce::from_slice(b"unique nonce");
+        self.cipher.encrypt(nonce, data)
+    }
+
+    pub fn decrypt(&self, encrypted: &[u8]) -> Result<Vec<u8>, Error> {
+        let nonce = Nonce::from_slice(b"unique nonce");
+        self.cipher.decrypt(nonce, encrypted)
+    }
+}
+```
+
+##### 权限控制
+- **最小权限原则** - 模块只获得必需的权限
+- **沙箱隔离** - 插件在受限环境中运行
+- **审计日志** - 记录所有敏感操作
+- **访问控制** - 基于角色的权限管理
+
+### 2.7 跨平台适配层
+
+#### 2.7.1 平台抽象
+
+##### 操作系统适配
+```rust
+// 平台特定实现
+#[cfg(target_os = "windows")]
+mod windows {
+    use winapi::um::winuser::*;
+
+    pub fn get_system_theme() -> Theme {
+        // Windows主题检测
+        unsafe {
+            let is_dark = is_dark_mode_enabled();
+            if is_dark { Theme::Dark } else { Theme::Light }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use cocoa::base::*;
+
+    pub fn get_system_theme() -> Theme {
+        // macOS主题检测
+        unsafe {
+            let appearance = NSApp::effectiveAppearance();
+            if appearance.is_dark() { Theme::Dark } else { Theme::Light }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    pub fn get_system_theme() -> Theme {
+        // Linux主题检测（通过环境变量或dbus）
+        std::env::var("GTK_THEME")
+            .map(|theme| if theme.contains("dark") { Theme::Dark } else { Theme::Light })
+            .unwrap_or(Theme::Light)
+    }
+}
+```
+
+##### 文件系统适配
+- **路径处理** - 跨平台路径分隔符处理
+- **权限管理** - 不同系统的文件权限模型
+- **文件监控** - 平台特定的文件变化通知
+- **系统集成** - 文件关联和上下文菜单
+
+#### 2.7.2 硬件加速
+
+##### GPU渲染管线
+```rust
+// wgpu渲染后端
+pub struct Renderer {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    surface: wgpu::Surface,
+    render_pipeline: wgpu::RenderPipeline,
+}
+
+impl Renderer {
+    pub async fn new(window: &Window) -> Self {
+        let instance = wgpu::Instance::new(wgpu::Backends::all());
+        let surface = unsafe { instance.create_surface(window) };
+
+        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        }).await.unwrap();
+
+        let (device, queue) = adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                features: wgpu::Features::empty(),
+                limits: wgpu::Limits::default(),
+                label: None,
+            },
+            None,
+        ).await.unwrap();
+
+        // 创建渲染管线...
+        Self { device, queue, surface, render_pipeline }
+    }
+}
+```
+
+##### 性能监控
+- **帧率统计** - 实时FPS监控和优化
+- **内存使用** - GPU和CPU内存使用追踪
+- **渲染分析** - 绘制调用和批次优化
+- **热点检测** - 性能瓶颈识别和优化
+
+--slide
+
+### 2.8 开发工具链
+
+#### 2.8.1 构建系统
+
+##### Cargo配置
+```toml
+[workspace]
+members = [
+    "crates/inote",
+    "crates/isearch",
+    "crates/iterminal",
+    "crates/ifile_editor",
+    "crates/itools",
+    "crates/zhushoude_duckdb"
+]
+
+[workspace.dependencies]
+egui = "0.28.1"
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
+
+# 优化配置
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+debug = true
+```
+
+##### 交叉编译支持
+```bash
+# Windows目标
+cargo build --target x86_64-pc-windows-gnu
+
+# macOS目标
+cargo build --target x86_64-apple-darwin
+cargo build --target aarch64-apple-darwin
+
+# Linux目标
+cargo build --target x86_64-unknown-linux-gnu
+```
+
+#### 2.8.2 测试框架
+
+##### 单元测试
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_note_creation() {
+        let mut note_service = NoteService::new().await;
+        let note = note_service.create_note("测试笔记", "内容").await.unwrap();
+
+        assert_eq!(note.title, "测试笔记");
+        assert_eq!(note.content, "内容");
+    }
+
+    #[test]
+    fn test_text_buffer_operations() {
+        let mut buffer = TextBuffer::new("Hello World");
+        buffer.insert(5, ", Rust");
+        assert_eq!(buffer.to_string(), "Hello, Rust World");
+    }
+}
+```
+
+##### 集成测试
+- **端到端测试** - 完整用户流程测试
+- **性能基准** - 自动化性能回归测试
+- **UI测试** - 界面交互自动化测试
+- **兼容性测试** - 多平台兼容性验证
+
+#### 2.8.3 调试工具
+
+##### 日志系统
+```rust
+use tracing::{info, warn, error, debug};
+use tracing_subscriber;
+
+// 结构化日志
+#[tracing::instrument]
+async fn process_file(path: &Path) -> Result<(), Error> {
+    info!("开始处理文件: {}", path.display());
+
+    let content = tokio::fs::read_to_string(path).await?;
+    debug!("文件大小: {} bytes", content.len());
+
+    // 处理逻辑...
+
+    info!("文件处理完成");
+    Ok(())
+}
+
+// 日志配置
+fn setup_logging() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true)
+        .init();
+}
+```
+
+##### 性能分析
+- **CPU分析** - 函数调用热点分析
+- **内存分析** - 内存分配和泄漏检测
+- **I/O分析** - 文件和网络操作性能
+- **并发分析** - 线程竞争和死锁检测
+
 --slide
 
 ## 3. 核心功能模块

@@ -94,30 +94,37 @@ fn render_ltree_view(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     // 由于闭包借用问题，我们需要分离右键菜单的处理
     let mut context_menu_request: Option<(PathBuf, bool)> = None;
 
-    let (_response, actions) = TreeView::new(tree_id)
-        .allow_multi_selection(true)
-        .fallback_context_menu(|ui, selected_nodes: &Vec<FileNodeId>| {
-            // 简化的右键菜单处理
-            if let Some(first_node) = selected_nodes.first() {
-                let path = &first_node.0;
-                ui.label(format!("右键菜单: {}", path.file_name().and_then(|n| n.to_str()).unwrap_or("未知")));
+    // 将TreeView包装在ScrollArea中以支持滚动
+    let actions = egui::ScrollArea::vertical()
+        .id_source("file_tree_scroll")
+        .auto_shrink([false, false])  // 不自动收缩，保持固定大小
+        .show(ui, |ui| {
+            let (_response, actions) = TreeView::new(tree_id)
+                .allow_multi_selection(true)
+                .fallback_context_menu(|ui, selected_nodes: &Vec<FileNodeId>| {
+                    // 简化的右键菜单处理
+                    if let Some(first_node) = selected_nodes.first() {
+                        let path = &first_node.0;
+                        ui.label(format!("右键菜单: {}", path.file_name().and_then(|n| n.to_str()).unwrap_or("未知")));
 
-                if ui.button("📝 打开").clicked() {
-                    // 设置请求标志，在外部处理
-                    ui.close_menu();
-                }
+                        if ui.button("📝 打开").clicked() {
+                            // 设置请求标志，在外部处理
+                            ui.close_menu();
+                        }
 
-                if ui.button("📋 复制路径").clicked() {
-                    copy_path_to_clipboard(path);
-                    ui.close_menu();
-                }
-            }
-        })
-        .show_state(ui, &mut state.file_tree.tree_view_state, |builder| {
-            if let Some(root) = &root_path {
-                build_tree_nodes_simple(builder, &file_entries, &directory_children, root);
-            }
-        });
+                        if ui.button("📋 复制路径").clicked() {
+                            copy_path_to_clipboard(path);
+                            ui.close_menu();
+                        }
+                    }
+                })
+                .show_state(ui, &mut state.file_tree.tree_view_state, |builder| {
+                    if let Some(root) = &root_path {
+                        build_tree_nodes_simple(builder, &file_entries, &directory_children, root);
+                    }
+                });
+            actions
+        }).inner;
 
     // 处理树视图操作
     handle_tree_actions(actions, state);

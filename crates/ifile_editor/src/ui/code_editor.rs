@@ -28,25 +28,13 @@ pub fn render_code_editor(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     }
 }
 
-/// 渲染带工具栏的代码编辑器
+/// 渲染代码编辑器（工具栏已在主UI中渲染）
 fn render_code_editor_with_toolbar(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     // 获取完整的可用区域
     let full_rect = ui.available_rect_before_wrap();
     let mut current_y = full_rect.min.y;
 
-    // 1. 渲染工具栏（固定高度）
-    let toolbar_height = 28.0; // 紧凑的工具栏高度
-    let toolbar_rect = egui::Rect::from_min_size(
-        egui::pos2(full_rect.min.x, current_y),
-        egui::vec2(full_rect.width(), toolbar_height)
-    );
-
-    ui.allocate_ui_at_rect(toolbar_rect, |ui| {
-        render_editor_toolbar_compact(ui, state);
-    });
-    current_y += toolbar_height;
-
-    // 2. 渲染查找替换面板（如果启用）
+    // 1. 渲染查找替换面板（如果启用）
     if state.ui_state.show_find_replace {
         let find_height = 32.0; // 查找面板高度
         let find_rect = egui::Rect::from_min_size(
@@ -60,7 +48,7 @@ fn render_code_editor_with_toolbar(ui: &mut egui::Ui, state: &mut IFileEditorSta
         current_y += find_height;
     }
 
-    // 3. 渲染编辑器内容区域
+    // 2. 渲染编辑器内容区域
     let editor_rect = egui::Rect::from_min_size(
         egui::pos2(full_rect.min.x, current_y),
         egui::vec2(full_rect.width(), full_rect.height() - (current_y - full_rect.min.y))

@@ -284,9 +284,24 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                                 // 处理消息内容
                                                 render_formatted_message(ui, &message.content, max_content_width - 0.0, false, text_color);
 
-                                                // 如果消息包含工具调用，显示工具调用信息（包括相关的执行结果）
+                                                // 如果消息包含工具调用，先添加视觉分隔，然后显示工具调用信息
                                                 if let Some(tool_calls) = &message.tool_calls {
                                                     log::debug!("🎨 UI渲染: 检测到消息包含 {} 个工具调用，消息ID: {}", tool_calls.len(), message.id);
+
+                                                    // 添加内容和工具调用之间的视觉分隔
+                                                    if !message.content.trim().is_empty() {
+                                                        ui.add_space(16.0); // 增加间距
+
+                                                        // 添加一个细分隔线来明确区分content和tool_calls
+
+                                                        ui.horizontal(|ui| {
+                                                            ui.add_space(10.0);
+                                                            ui.separator();
+                                                            ui.add_space(10.0);
+                                                        });
+                                                        ui.add_space(8.0);
+                                                    }
+
                                                     if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 10.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
                                                         pending_tool_executions.push(tool_call_request);
                                                     }
@@ -298,6 +313,16 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                                                     // 如果没有工具调用但有工具调用结果，单独显示结果（向后兼容）
                                                     if let Some(tool_results) = &message.tool_call_results {
+                                                        // 为工具调用结果也添加视觉分隔
+                                                        if !message.content.trim().is_empty() {
+                                                            ui.add_space(16.0);
+                                                            ui.horizontal(|ui| {
+                                                                ui.add_space(10.0);
+                                                                ui.separator();
+                                                                ui.add_space(10.0);
+                                                            });
+                                                            ui.add_space(8.0);
+                                                        }
                                                         render_tool_call_results_in_message(ui, tool_results, max_content_width - 10.0);
                                                     }
                                                 }
@@ -1110,7 +1135,8 @@ fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::Too
 
     // 使用传入的最大宽度，确保与对话框宽度一致
     ui.set_max_width(max_width);
-    ui.add_space(8.0);
+    // 移除这里的间距，因为调用方已经添加了适当的分隔
+    // ui.add_space(8.0);
 
     // 获取当前主题的颜色
     let visuals = &ui.style().visuals;
@@ -1146,14 +1172,16 @@ fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::Too
     ui.vertical(|ui|{
 
     
-        // 显示工具调用总标题（只显示一次）
+        // 显示工具调用总标题（只显示一次）- 使用更突出的样式
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("🔧").size(16.0));
+            ui.label(egui::RichText::new("🔧").size(18.0).color(title_color));
+            ui.add_space(6.0);
             ui.label(egui::RichText::new(format!("AI助手请求调用 {} 个工具", tool_calls.len()))
                 .strong()
+                .size(14.0)
                 .color(title_color));
         });
-        ui.add_space(8.0);
+        ui.add_space(12.0);
 
         for (index, tool_call) in tool_calls.iter().enumerate() {
             // 工具调用框架 - 使用主题适配的样式

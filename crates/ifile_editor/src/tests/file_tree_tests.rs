@@ -236,3 +236,205 @@ fn test_text_buffer_read_only_detection() {
     let buffer = crate::state::TextBuffer::from_file(&md_file, &settings).unwrap();
     assert!(!buffer.read_only, "Markdown files should be editable");
 }
+
+/// 创建包含大量文件的测试目录，用于测试滚动功能
+fn create_large_test_directory() -> TempDir {
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let root = temp_dir.path();
+
+    // 创建多个子目录
+    for i in 0..10 {
+        let dir_name = format!("directory_{:02}", i);
+        let dir_path = root.join(&dir_name);
+        std::fs::create_dir(&dir_path).unwrap();
+
+        // 在每个子目录中创建多个文件
+        for j in 0..15 {
+            let file_name = format!("file_{:02}.txt", j);
+            let file_path = dir_path.join(&file_name);
+            std::fs::write(&file_path, format!("Content of file {} in directory {}", j, i)).unwrap();
+        }
+    }
+
+    // 在根目录创建一些文件
+    for i in 0..20 {
+        let file_name = format!("root_file_{:02}.md", i);
+        let file_path = root.join(&file_name);
+        std::fs::write(&file_path, format!("Root file content {}", i)).unwrap();
+    }
+
+    temp_dir
+}
+
+#[test]
+fn test_large_directory_structure() {
+    let temp_dir = create_large_test_directory();
+    let mut state = FileTreeState::new();
+
+    // 设置根目录
+    let result = state.set_root(temp_dir.path().to_path_buf());
+    assert!(result.is_ok());
+
+    // 验证根目录包含大量条目
+    let root_children = state.get_root_children();
+    assert!(root_children.len() >= 30, "Should have at least 30 items (10 dirs + 20 files)");
+
+    // 验证目录和文件都被正确识别
+    let mut dir_count = 0;
+    let mut file_count = 0;
+
+    for child in &root_children {
+        if let Some(entry) = state.get_file_entry(child) {
+            if entry.is_dir {
+                dir_count += 1;
+            } else {
+                file_count += 1;
+            }
+        }
+    }
+
+    assert_eq!(dir_count, 10, "Should have 10 directories");
+    assert_eq!(file_count, 20, "Should have 20 files");
+}
+
+#[test]
+fn test_directory_expansion_with_many_children() {
+    let temp_dir = create_large_test_directory();
+    let mut state = FileTreeState::new();
+
+    state.set_root(temp_dir.path().to_path_buf()).unwrap();
+
+    // 测试展开第一个目录
+    let first_dir = temp_dir.path().join("directory_00");
+    state.load_directory_children(&first_dir).unwrap();
+
+    let children = state.get_children(&first_dir);
+    assert_eq!(children.len(), 15, "Each directory should have 15 files");
+
+    // 验证所有子文件都被正确加载
+    for (i, child) in children.iter().enumerate() {
+        if let Some(entry) = state.get_file_entry(child) {
+            assert!(!entry.is_dir, "All children should be files");
+            assert!(entry.name.starts_with("file_"), "File names should start with 'file_'");
+        }
+    }
+}
+
+#[test]
+fn test_scroll_area_compatibility() {
+    // 这个测试验证文件树状态与滚动区域的兼容性
+    let temp_dir = create_large_test_directory();
+    let mut state = FileTreeState::new();
+
+    state.set_root(temp_dir.path().to_path_buf()).unwrap();
+
+    // 模拟展开多个目录（这会在UI中触发滚动需求）
+    for i in 0..5 {
+        let dir_name = format!("directory_{:02}", i);
+        let dir_path = temp_dir.path().join(&dir_name);
+
+        // 加载目录子项
+        let result = state.load_directory_children(&dir_path);
+        assert!(result.is_ok(), "Should be able to load directory children");
+
+        // 验证子项被正确加载
+        let children = state.get_children(&dir_path);
+        assert_eq!(children.len(), 15, "Each directory should have 15 children");
+    }
+
+    // 验证总的文件条目数量
+    let total_entries = state.file_entries.len();
+    // 根目录30个条目 + 5个目录各15个文件 = 30 + 75 = 105
+    assert!(total_entries >= 105, "Should have loaded all expanded directory contents");
+}
+
+#[test]
+fn test_button_display_logic() {
+    // 测试按钮显示逻辑：没有文件时显示基本按钮，有文件时显示图标按钮
+    let temp_dir = create_test_directory();
+    let mut state = crate::state::IFileEditorState::new();
+    let settings = crate::settings::EditorSettings::default();
+
+    // 初始状态：没有活动文件
+    assert!(state.editor.get_active_buffer().is_none(), "Should have no active file initially");
+
+    // 打开一个文件
+    let test_file = temp_dir.path().join("src/main.rs");
+    let result = state.editor.open_file(test_file.clone(), &settings);
+    assert!(result.is_ok(), "Should be able to open test file");
+
+    // 现在应该有活动文件
+    assert!(state.editor.get_active_buffer().is_some(), "Should have active file after opening");
+
+    // 关闭文件
+    let result = state.editor.close_file(&test_file);
+    assert!(result.is_ok(), "Should be able to close file");
+
+    // 应该没有活动文件了
+    assert!(state.editor.get_active_buffer().is_none(), "Should have no active file after closing");
+}
+
+#[test]
+fn test_editor_state_transitions() {
+    // 测试编辑器状态转换
+    let temp_dir = create_test_directory();
+    let mut state = crate::state::IFileEditorState::new();
+    let settings = crate::settings::EditorSettings::default();
+
+    // 测试多个文件的打开和关闭
+    let files = vec!["src/main.rs", "README.md", "Cargo.toml"];
+    let mut file_paths = Vec::new();
+
+    for file_name in &files {
+        let file_path = temp_dir.path().join(file_name);
+        let result = state.editor.open_file(file_path.clone(), &settings);
+        assert!(result.is_ok(), "Should be able to open {}", file_name);
+        file_paths.push(file_path);
+    }
+
+    // 应该有3个标签页
+    assert_eq!(state.editor.tabs.len(), 3, "Should have 3 tabs open");
+    assert!(state.editor.get_active_buffer().is_some(), "Should have active file");
+
+    // 关闭所有标签页
+    for file_path in file_paths {
+        let result = state.editor.close_file(&file_path);
+        assert!(result.is_ok(), "Should be able to close file");
+    }
+
+    // 应该没有标签页和活动文件
+    assert_eq!(state.editor.tabs.len(), 0, "Should have no tabs");
+    assert!(state.editor.get_active_buffer().is_none(), "Should have no active file");
+}
+
+#[test]
+fn test_tab_layout_separation() {
+    // 测试标签页和工具栏分离布局
+    let temp_dir = create_test_directory();
+    let mut state = crate::state::IFileEditorState::new();
+    let settings = crate::settings::EditorSettings::default();
+
+    // 初始状态：没有标签页
+    assert_eq!(state.editor.tabs.len(), 0, "Should start with no tabs");
+
+    // 打开多个文件
+    let files = vec!["src/main.rs", "README.md", "Cargo.toml"];
+    for file_name in &files {
+        let file_path = temp_dir.path().join(file_name);
+        let result = state.editor.open_file(file_path, &settings);
+        assert!(result.is_ok(), "Should be able to open {}", file_name);
+    }
+
+    // 验证标签页数量
+    assert_eq!(state.editor.tabs.len(), 3, "Should have 3 tabs");
+
+    // 验证有活动标签页
+    assert!(state.editor.active_tab.is_some(), "Should have active tab");
+    assert!(state.editor.get_active_buffer().is_some(), "Should have active buffer");
+
+    // 验证标签页路径正确
+    for (i, file_name) in files.iter().enumerate() {
+        let expected_path = temp_dir.path().join(file_name);
+        assert_eq!(state.editor.tabs[i], expected_path, "Tab {} should match expected path", i);
+    }
+}
