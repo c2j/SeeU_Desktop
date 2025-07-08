@@ -281,40 +281,52 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                                 let cursor = if (ui.input(|i| i.time) * 2.0).sin() > 0.0 { "▋" } else { " " };
                                                 ui.label(egui::RichText::new(cursor).color(text_color));
                                             } else {
-                                                // 处理消息内容
-                                                render_formatted_message(ui, &message.content, max_content_width - 0.0, false, text_color);
+                                                // 根据消息内容和工具调用情况，分三种情况显示：
+                                                let has_content = !message.content.trim().is_empty();
+                                                let has_tool_calls = message.tool_calls.is_some();
 
-                                                // 如果消息包含工具调用，先添加视觉分隔，然后显示工具调用信息
-                                                if let Some(tool_calls) = &message.tool_calls {
-                                                    log::debug!("🎨 UI渲染: 检测到消息包含 {} 个工具调用，消息ID: {}", tool_calls.len(), message.id);
+                                                // 情况1: 仅包含content - 显示content内容
+                                                if has_content && !has_tool_calls {
+                                                    render_formatted_message(ui, &message.content, max_content_width - 0.0, false, text_color);
+                                                }
+                                                // 情况2: 仅包含tool_calls - 显示工具调用框
+                                                else if !has_content && has_tool_calls {
+                                                    if let Some(tool_calls) = &message.tool_calls {
+                                                        log::debug!("🎨 UI渲染: 仅包含工具调用，消息ID: {}", message.id);
+                                                        if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 10.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
+                                                            pending_tool_executions.push(tool_call_request);
+                                                        }
+                                                    }
+                                                }
+                                                // 情况3: 同时包含content和tool_calls - 先显示content，再显示tool_calls
+                                                else if has_content && has_tool_calls {
+                                                    // 先显示content
+                                                    render_formatted_message(ui, &message.content, max_content_width - 0.0, false, text_color);
 
-                                                    // 添加内容和工具调用之间的视觉分隔
-                                                    if !message.content.trim().is_empty() {
-                                                        ui.add_space(16.0); // 增加间距
+                                                    if let Some(tool_calls) = &message.tool_calls {
+                                                        log::debug!("🎨 UI渲染: 同时包含content和工具调用，消息ID: {}", message.id);
 
-                                                        // 添加一个细分隔线来明确区分content和tool_calls
-
+                                                        // 添加content和工具调用之间的视觉分隔
+                                                        ui.add_space(20.0);
                                                         ui.horizontal(|ui| {
-                                                            ui.add_space(10.0);
+                                                            ui.add_space(20.0);
                                                             ui.separator();
-                                                            ui.add_space(10.0);
+                                                            ui.add_space(20.0);
                                                         });
-                                                        ui.add_space(8.0);
-                                                    }
+                                                        ui.add_space(12.0);
 
-                                                    if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 10.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
-                                                        pending_tool_executions.push(tool_call_request);
+                                                        // 再显示工具调用框
+                                                        if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 10.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
+                                                            pending_tool_executions.push(tool_call_request);
+                                                        }
                                                     }
-                                                } else {
-                                                    // 添加调试信息，看看为什么没有工具调用
-                                                    if message.role == MessageRole::Assistant {
-                                                        log::trace!("🎨 UI渲染: 助手消息没有工具调用，消息ID: {}, 内容: {}", message.id, &message.content[..std::cmp::min(50, message.content.len())]);
-                                                    }
+                                                }
 
-                                                    // 如果没有工具调用但有工具调用结果，单独显示结果（向后兼容）
+                                                // 处理向后兼容：如果没有工具调用但有工具调用结果，单独显示结果
+                                                if !has_tool_calls && message.tool_call_results.is_some() {
                                                     if let Some(tool_results) = &message.tool_call_results {
-                                                        // 为工具调用结果也添加视觉分隔
-                                                        if !message.content.trim().is_empty() {
+                                                        // 为工具调用结果添加视觉分隔
+                                                        if has_content {
                                                             ui.add_space(16.0);
                                                             ui.horizontal(|ui| {
                                                                 ui.add_space(10.0);
@@ -661,15 +673,10 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
         render_slash_commands(ui.ctx(), state);
     }
 
-    // 显示工具调用确认对话框
+    // 工具调用现在嵌入在消息中显示，不使用外部弹出对话框
     // if state.show_tool_call_confirmation {
     //     log::info!("🎨 显示工具调用确认对话框");
     //     render_tool_call_confirmation(ui.ctx(), state);
-    // } else {
-    //     // 调试信息：检查为什么没有显示确认对话框
-    //     if state.current_tool_call_batch.is_some() {
-    //         log::debug!("🎨 有工具调用批次但未显示确认对话框，show_tool_call_confirmation: {}", state.show_tool_call_confirmation);
-    //     }
     // }
 
     // 显示MCP状态信息面板
@@ -1128,6 +1135,123 @@ pub struct ToolCallExecutionRequest {
     pub mcp_server_info: Option<crate::state::McpServerInfo>,
 }
 
+/// 渲染工具调用摘要信息（简化版本）
+fn render_tool_calls_summary(ui: &mut egui::Ui, tool_calls: &[crate::api::ToolCall], max_width: f32, tool_results: Option<&[crate::state::ToolCallResult]>, mcp_server_info: Option<&crate::state::McpServerInfo>) {
+    // 获取当前主题的颜色
+    let visuals = &ui.style().visuals;
+    let is_dark_mode = visuals.dark_mode;
+
+    let title_color = if is_dark_mode {
+        egui::Color32::from_rgb(100, 150, 255)
+    } else {
+        egui::Color32::from_rgb(0, 80, 160)
+    };
+
+    let background_color = if is_dark_mode {
+        egui::Color32::from_rgb(40, 45, 55)
+    } else {
+        egui::Color32::from_rgb(250, 252, 255)
+    };
+
+    let border_color = if is_dark_mode {
+        egui::Color32::from_rgb(70, 100, 180)
+    } else {
+        egui::Color32::from_rgb(120, 160, 255)
+    };
+
+    ui.set_max_width(max_width);
+
+    // 显示简化的工具调用摘要
+    egui::Frame::none()
+        .fill(background_color)
+        .stroke(egui::Stroke::new(1.0, border_color))
+        .inner_margin(egui::Margin::same(12.0))
+        .rounding(6.0)
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                // 工具调用标题
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("🔧").size(16.0).color(title_color));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(format!("AI助手请求调用 {} 个工具", tool_calls.len()))
+                        .strong()
+                        .color(title_color));
+                });
+
+                ui.add_space(8.0);
+
+                // 显示工具列表（简化版）
+                for (index, tool_call) in tool_calls.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{}.", index + 1)).color(title_color));
+                        ui.add_space(4.0);
+
+                        let tool_display = if let Some(mcp_info) = mcp_server_info {
+                            format!("{} ({})", &tool_call.function.name, &mcp_info.server_name)
+                        } else {
+                            tool_call.function.name.clone()
+                        };
+
+                        ui.label(egui::RichText::new(tool_display).color(title_color));
+
+                        // 显示执行状态
+                        if let Some(results) = tool_results {
+                            if let Some(result) = results.iter().find(|r| r.tool_call_id == tool_call.id) {
+                                ui.add_space(8.0);
+                                let (icon, color) = if result.success {
+                                    ("✅", egui::Color32::DARK_GREEN)
+                                } else {
+                                    ("❌", egui::Color32::DARK_RED)
+                                };
+                                ui.label(egui::RichText::new(icon).color(color));
+                            }
+                        }
+                    });
+
+                    if index < tool_calls.len() - 1 {
+                        ui.add_space(4.0);
+                    }
+                }
+
+                // 如果有执行结果，显示结果摘要
+                if let Some(results) = tool_results {
+                    let related_results: Vec<_> = results.iter()
+                        .filter(|result| tool_calls.iter().any(|tc| tc.id == result.tool_call_id))
+                        .collect();
+
+                    if !related_results.is_empty() {
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+
+                        ui.label(egui::RichText::new("📋 执行结果摘要").strong().color(title_color));
+                        ui.add_space(4.0);
+
+                        for result in related_results {
+                            ui.horizontal(|ui| {
+                                let (icon, color) = if result.success {
+                                    ("✅", egui::Color32::DARK_GREEN)
+                                } else {
+                                    ("❌", egui::Color32::DARK_RED)
+                                };
+                                ui.label(egui::RichText::new(icon).color(color));
+                                ui.add_space(4.0);
+
+                                let status = if result.success { "成功" } else { "失败" };
+                                ui.label(egui::RichText::new(status).color(color));
+
+                                if !result.success && result.error.is_some() {
+                                    ui.add_space(4.0);
+                                    ui.label(egui::RichText::new("(有错误信息)").small().color(egui::Color32::GRAY));
+                                }
+                            });
+                        }
+                    }
+                }
+            });
+        });
+}
+
 /// 在消息中渲染工具调用信息，包括相关的执行结果
 fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::ToolCall], max_width: f32, tool_results: Option<&[crate::state::ToolCallResult]>, mcp_server_info: Option<&crate::state::McpServerInfo>) -> Option<ToolCallExecutionRequest> {
     // 减少日志频率，只在第一次渲染时记录
@@ -1489,4 +1613,215 @@ fn render_tool_call_results_in_message(ui: &mut egui::Ui, tool_results: &[crate:
             ui.add_space(4.0);
         }
     }
+}
+
+/// 渲染工具调用确认对话框
+fn render_tool_call_confirmation(ctx: &egui::Context, state: &mut AIAssistState) {
+    // 克隆批次数据以避免借用冲突
+    let batch_clone = state.current_tool_call_batch.clone();
+
+    if let Some(batch) = batch_clone {
+        let mut should_approve = false;
+        let mut should_reject = false;
+
+        egui::Window::new("🔧 工具调用确认")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(750.0)
+            .default_height(550.0)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    // 标题区域
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("🔧").size(24.0));
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("AI助手请求执行工具调用")
+                            .size(18.0)
+                            .strong());
+                    });
+
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(12.0);
+
+                    // 统计信息
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("📊 工具调用总数: {}", batch.tool_calls.len()))
+                            .strong());
+
+                        // 显示服务器信息（如果有的话）
+                        if !batch.tool_calls.is_empty() {
+                            ui.add_space(20.0);
+                            ui.label(egui::RichText::new(format!("🖥️ 目标服务器: {}",
+                                &batch.tool_calls[0].server_name))
+                                .strong());
+                        }
+                    });
+
+                    ui.add_space(16.0);
+
+                    // 工具调用列表
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            for (index, pending_call) in batch.tool_calls.iter().enumerate() {
+                                render_tool_call_card(ui, pending_call, index);
+
+                                if index < batch.tool_calls.len() - 1 {
+                                    ui.add_space(12.0);
+                                }
+                            }
+                        });
+
+                    ui.add_space(16.0);
+
+                    // 安全提醒
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(255, 248, 220))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 193, 7)))
+                        .inner_margin(egui::Margin::same(12.0))
+                        .rounding(6.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("⚠️").size(16.0));
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new("安全提醒：请仔细检查工具调用参数，确认无误后再执行。")
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(133, 77, 14)));
+                            });
+                        });
+
+                    ui.add_space(20.0);
+
+                    // 操作按钮
+                    ui.horizontal(|ui| {
+                        // 确认按钮
+                        let confirm_button = ui.add_sized([120.0, 40.0],
+                            egui::Button::new(egui::RichText::new("✅ 确认执行").strong())
+                                .fill(egui::Color32::from_rgb(40, 167, 69)));
+
+                        if confirm_button.clicked() {
+                            log::info!("用户确认执行工具调用");
+                            should_approve = true;
+                        }
+
+                        ui.add_space(12.0);
+
+                        // 拒绝按钮
+                        let reject_button = ui.add_sized([120.0, 40.0],
+                            egui::Button::new(egui::RichText::new("❌ 拒绝执行").strong())
+                                .fill(egui::Color32::from_rgb(220, 53, 69)));
+
+                        if reject_button.clicked() {
+                            log::info!("用户拒绝执行工具调用");
+                            should_reject = true;
+                        }
+                    });
+                });
+            });
+
+        // 处理按钮点击
+        if should_approve {
+            state.approve_tool_calls();
+        } else if should_reject {
+            state.reject_tool_calls();
+        }
+    }
+}
+
+/// 渲染单个工具调用卡片
+fn render_tool_call_card(ui: &mut egui::Ui, pending_call: &crate::state::PendingToolCall, index: usize) {
+    let visuals = &ui.style().visuals;
+    let is_dark_mode = visuals.dark_mode;
+
+    let background_color = if is_dark_mode {
+        egui::Color32::from_rgb(45, 50, 65)
+    } else {
+        egui::Color32::from_rgb(248, 252, 255)
+    };
+
+    let border_color = if is_dark_mode {
+        egui::Color32::from_rgb(80, 120, 200)
+    } else {
+        egui::Color32::from_rgb(100, 150, 255)
+    };
+
+    let title_color = if is_dark_mode {
+        egui::Color32::from_rgb(100, 150, 255)
+    } else {
+        egui::Color32::from_rgb(0, 80, 160)
+    };
+
+    egui::Frame::none()
+        .fill(background_color)
+        .stroke(egui::Stroke::new(1.5, border_color))
+        .inner_margin(egui::Margin::same(16.0))
+        .rounding(8.0)
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                // 工具标题
+                ui.horizontal(|ui| {
+                    // 工具类型图标
+                    let icon = match pending_call.mcp_info.call_type {
+                        crate::mcp_tools::McpCallType::CallTool => "🔧",
+                        crate::mcp_tools::McpCallType::ReadResource => "📄",
+                        crate::mcp_tools::McpCallType::GetPrompt => "💬",
+                    };
+
+                    ui.label(egui::RichText::new(icon).size(18.0));
+                    ui.add_space(8.0);
+
+                    ui.label(egui::RichText::new(format!("{}. {}", index + 1, &pending_call.tool_call.function.name))
+                        .size(16.0)
+                        .strong()
+                        .color(title_color));
+
+                    ui.add_space(12.0);
+
+                    // 服务器信息
+                    ui.label(egui::RichText::new(format!("({})", &pending_call.server_name))
+                        .small()
+                        .color(egui::Color32::GRAY));
+                });
+
+                ui.add_space(8.0);
+
+                // 调用类型
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("类型:").strong());
+                    ui.add_space(4.0);
+                    let type_text = match pending_call.mcp_info.call_type {
+                        crate::mcp_tools::McpCallType::CallTool => "工具调用",
+                        crate::mcp_tools::McpCallType::ReadResource => "读取资源",
+                        crate::mcp_tools::McpCallType::GetPrompt => "获取提示",
+                    };
+                    ui.label(type_text);
+                });
+
+                ui.add_space(8.0);
+
+                // 参数显示
+                ui.label(egui::RichText::new("参数:").strong());
+                ui.add_space(4.0);
+
+                let formatted_args = if pending_call.tool_call.function.arguments.trim().is_empty() {
+                    "无参数".to_string()
+                } else {
+                    match serde_json::from_str::<serde_json::Value>(&pending_call.tool_call.function.arguments) {
+                        Ok(json) => serde_json::to_string_pretty(&json).unwrap_or_else(|_| pending_call.tool_call.function.arguments.clone()),
+                        Err(_) => pending_call.tool_call.function.arguments.clone(),
+                    }
+                };
+
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        ui.add(egui::TextEdit::multiline(&mut formatted_args.as_str())
+                            .desired_rows(3)
+                            .font(egui::TextStyle::Monospace)
+                            .interactive(false));
+                    });
+            });
+        });
 }

@@ -71,7 +71,7 @@ impl PluginManager {
         
         let install_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("SeeU")
+            .join("seeu_desktop")
             .join("itools")
             .join("plugins");
         
