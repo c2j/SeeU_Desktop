@@ -10,6 +10,13 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
     if state.is_sending {
         ui.ctx().request_repaint();
     }
+
+    // 如果需要强制布局更新，请求重绘并重置标志
+    if state.force_layout_update {
+        ui.ctx().request_repaint();
+        state.force_layout_update = false;
+        log::debug!("🎨 强制UI重新布局以解决消息重叠问题");
+    }
     // 获取可用高度，减去状态栏的高度（约30像素）以避免遮挡
     let available_height = ui.available_height() - 30.0;
 
@@ -285,41 +292,64 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                                 let has_content = !message.content.trim().is_empty();
                                                 let has_tool_calls = message.tool_calls.is_some();
 
+                                                log::debug!("🎨 UI渲染分析: 消息ID={}, has_content={}, has_tool_calls={}",
+                                                    message.id, has_content, has_tool_calls);
+                                                if has_content {
+                                                    log::debug!("🎨 Content内容: {}", &message.content[..std::cmp::min(100, message.content.len())]);
+                                                }
+                                                if has_tool_calls {
+                                                    if let Some(tool_calls) = &message.tool_calls {
+                                                        log::debug!("🎨 Tool calls数量: {}", tool_calls.len());
+                                                    }
+                                                }
+
                                                 // 情况1: 仅包含content - 显示content内容
                                                 if has_content && !has_tool_calls {
-                                                    render_formatted_message(ui, &message.content, max_content_width - 0.0, false, text_color);
+                                                    log::debug!("🎨 UI渲染: 仅包含content，消息ID: {}", message.id);
+                                                    ui.group(|ui| {
+                                                        render_formatted_message(ui, &message.content, max_content_width - 20.0, false, text_color);
+                                                    });
                                                 }
                                                 // 情况2: 仅包含tool_calls - 显示工具调用框
                                                 else if !has_content && has_tool_calls {
                                                     if let Some(tool_calls) = &message.tool_calls {
                                                         log::debug!("🎨 UI渲染: 仅包含工具调用，消息ID: {}", message.id);
-                                                        if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 10.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
-                                                            pending_tool_executions.push(tool_call_request);
-                                                        }
+                                                        ui.group(|ui| {
+                                                            if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 20.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
+                                                                pending_tool_executions.push(tool_call_request);
+                                                            }
+                                                        });
                                                     }
                                                 }
                                                 // 情况3: 同时包含content和tool_calls - 先显示content，再显示tool_calls
                                                 else if has_content && has_tool_calls {
-                                                    // 先显示content
-                                                    render_formatted_message(ui, &message.content, max_content_width - 0.0, false, text_color);
+                                                    log::debug!("🎨 UI渲染: 同时包含content和工具调用，消息ID: {}", message.id);
 
-                                                    if let Some(tool_calls) = &message.tool_calls {
-                                                        log::debug!("🎨 UI渲染: 同时包含content和工具调用，消息ID: {}", message.id);
-
-                                                        // 添加content和工具调用之间的视觉分隔
-                                                        ui.add_space(20.0);
-                                                        ui.horizontal(|ui| {
-                                                            ui.add_space(20.0);
-                                                            ui.separator();
-                                                            ui.add_space(20.0);
+                                                    // 使用垂直布局确保content和tool_calls不重叠
+                                                    ui.vertical(|ui| {
+                                                        // 先显示content
+                                                        ui.group(|ui| {
+                                                            render_formatted_message(ui, &message.content, max_content_width - 20.0, false, text_color);
                                                         });
-                                                        ui.add_space(12.0);
 
-                                                        // 再显示工具调用框
-                                                        if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 10.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
-                                                            pending_tool_executions.push(tool_call_request);
+                                                        if let Some(tool_calls) = &message.tool_calls {
+                                                            // 添加content和工具调用之间的视觉分隔
+                                                            ui.add_space(16.0);
+                                                            ui.horizontal(|ui| {
+                                                                ui.add_space(20.0);
+                                                                ui.separator();
+                                                                ui.add_space(20.0);
+                                                            });
+                                                            ui.add_space(12.0);
+
+                                                            // 再显示工具调用框
+                                                            ui.group(|ui| {
+                                                                if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 20.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
+                                                                    pending_tool_executions.push(tool_call_request);
+                                                                }
+                                                            });
                                                         }
-                                                    }
+                                                    });
                                                 }
 
                                                 // 处理向后兼容：如果没有工具调用但有工具调用结果，单独显示结果

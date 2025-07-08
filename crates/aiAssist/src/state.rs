@@ -127,6 +127,8 @@ pub struct AIAssistState {
     pub pending_tool_batch_creation: bool,
     /// 待创建批次的响应
     pub pending_batch_response: Option<crate::api::ChatResponse>,
+    /// 标记消息布局需要强制更新（用于解决占位符消息更新后的重叠问题）
+    pub force_layout_update: bool,
 
     // API Key 掩码显示控制
     pub show_api_key_masked: bool,
@@ -191,6 +193,7 @@ impl Default for AIAssistState {
             pending_auto_save: false,
             pending_tool_batch_creation: false,
             pending_batch_response: None,
+            force_layout_update: false,
             last_search_query: None,
             last_search_results: None,
             show_api_key_masked: true, // 默认启用掩码显示
@@ -1595,6 +1598,8 @@ impl AIAssistState {
                         message.tool_calls = Some(tool_calls.clone());
                         message.mcp_server_info = mcp_server_info.clone();
                         found_in_chat = true;
+                        // 标记需要强制布局更新，解决占位符消息更新后的重叠问题
+                        self.force_layout_update = true;
                         log::info!("📝 成功更新chat_messages中的占位符消息为工具调用消息，ID: {}", message.id);
                     } else {
                         log::warn!("⚠️ 在chat_messages中未找到占位符消息，ID: {}", streaming_id);
@@ -1785,7 +1790,8 @@ impl AIAssistState {
                     };
 
                     self.current_tool_call_batch = Some(batch);
-                    self.show_tool_call_confirmation = true;
+                    // 工具调用现在嵌入在消息中显示，不使用外部确认对话框
+                    self.show_tool_call_confirmation = false;
 
                     log::info!("✅ 成功创建工具调用批次:");
                     log::info!("  - 有效工具调用数: {}", pending_calls.len());
