@@ -158,9 +158,6 @@ impl TerminalBackend {
         let config = term::Config::default();
         let terminal_size = TerminalSize::default();
         let pty = tty::new(&pty_config, terminal_size.into(), id)?;
-        #[cfg(windows)]
-         let pty_id = pty.child_watcher().pid().map(|x| x.get()).unwrap_or(0);
-        #[cfg(not(windows))]
         let pty_id = pty.child().id();
         let (event_sender, event_receiver) = mpsc::channel();
         let event_proxy = EventProxy(event_sender);
