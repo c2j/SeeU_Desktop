@@ -111,30 +111,32 @@ fn render_header_section(ui: &mut egui::Ui) {
 
 /// 渲染豆腐块仪表板
 fn render_dashboard_blocks(ui: &mut egui::Ui, app: &mut SeeUApp) {
-    // 使用网格布局，2列
-    ui.columns(2, |columns| {
-        // 左列
+    // 使用网格布局，3列
+    ui.columns(3, |columns| {
+        // 第一列：终端、文件编辑器
         columns[0].vertical(|ui| {
-            // 笔记豆腐块
-            render_notes_block(ui, app);
-            ui.add_space(12.0);
-
-            // 文件编辑器豆腐块
-            render_file_editor_block(ui, app);
-            ui.add_space(12.0);
-
             // 终端豆腐块
             render_terminal_block(ui, app);
             ui.add_space(12.0);
 
-            // MCP工具豆腐块
-            render_mcp_tools_block(ui, app);
+            // 文件编辑器豆腐块
+            render_file_editor_block(ui, app);
         });
 
-        // 右列
+        // 第二列：笔记、搜索
         columns[1].vertical(|ui| {
+            // 笔记豆腐块
+            render_notes_block(ui, app);
+            ui.add_space(12.0);
+
             // 搜索豆腐块
             render_search_block(ui, app);
+        });
+
+        // 第三列：工具
+        columns[2].vertical(|ui| {
+            // MCP工具豆腐块
+            render_mcp_tools_block(ui, app);
             ui.add_space(12.0);
 
             // 快速操作豆腐块
