@@ -811,8 +811,24 @@ impl SlideRenderer {
                     SlideAlignment::Left
                 };
 
-                // 先渲染幻灯片内容，确保内容在最上层
-                Self::render_fullscreen_content(ui, play_state, &mut should_close);
+                // 为幻灯片内容添加左右margin，避免被翻页按钮遮挡
+                // 左箭头区域：20px + 60px = 80px，右箭头区域：80px + 60px = 140px
+                // 为了安全，我们预留更多空间
+                let left_margin = 120.0;  // 左侧预留120px
+                let right_margin = 160.0; // 右侧预留160px
+
+                // 创建一个带margin的内容区域
+                let content_rect = eframe::egui::Rect::from_min_size(
+                    eframe::egui::Pos2::new(left_margin, 0.0),
+                    eframe::egui::Vec2::new(
+                        ui.available_width() - left_margin - right_margin,
+                        ui.available_height()
+                    )
+                );
+
+                // 在指定区域内渲染内容
+                let mut content_ui = ui.child_ui(content_rect, eframe::egui::Layout::top_down(eframe::egui::Align::Center), None);
+                Self::render_fullscreen_content(&mut content_ui, play_state, &mut should_close);
 
                 // 然后在内容之上绘制导航箭头
                 // 左侧导航箭头
@@ -878,6 +894,9 @@ impl SlideRenderer {
                         arrow_color,
                     );
                 }
+
+                // 在右上角添加控制按钮
+                Self::render_control_buttons(ui, play_state, &mut should_close, &screen_rect);
             });
 
         // 渲染样式选择器
@@ -893,29 +912,11 @@ impl SlideRenderer {
 
     /// 渲染全屏内容（提取的公共方法）
     fn render_fullscreen_content(ui: &mut eframe::egui::Ui, play_state: &mut SlidePlayState, should_close: &mut bool) {
-        // 顶部控制栏
-        ui.horizontal(|ui| {
-            // 样式选择按钮
-            if ui.button("🎨 样式").clicked() {
-                play_state.toggle_style_selector();
-            }
-
-            ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
-                // 关闭按钮
-                if ui.button("✕ 退出").clicked() {
-                    *should_close = true;
-                }
-
-                // 窗口模式按钮
-                if ui.button("🗗 窗口").clicked() {
-                    play_state.fullscreen = false;
-                }
-            });
-        });
+        // 移除顶部控制栏，控制按钮将在外层与翻页箭头一起渲染
 
         ui.add_space(20.0);
 
-        // 幻灯片内容区域
+        // 幻灯片内容区域（margin已在外层处理）
         Self::render_slide_content(ui, play_state);
 
         ui.add_space(20.0);
@@ -964,6 +965,115 @@ impl SlideRenderer {
         Self::handle_keyboard_input(ui, play_state, &mut should_close);
 
         should_close
+    }
+
+    /// 渲染控制按钮（在幻灯片显示区域之外）
+    fn render_control_buttons(ui: &mut eframe::egui::Ui, play_state: &mut SlidePlayState, should_close: &mut bool, screen_rect: &eframe::egui::Rect) {
+        // 获取自适应颜色
+        let button_color = Self::get_adaptive_arrow_color(&play_state.current_template, false);
+        let button_bg_color = Self::get_arrow_background_color(&play_state.current_template, false);
+
+        // 右上角控制按钮区域
+        let button_size = 40.0;
+        let button_spacing = 50.0;
+        let margin_from_edge = 20.0;
+        let margin_from_top = 20.0;
+
+        // 退出按钮
+        let exit_button_rect = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::new(screen_rect.width() - margin_from_edge - button_size, margin_from_top),
+            eframe::egui::Vec2::new(button_size, button_size)
+        );
+
+        let exit_response = ui.allocate_rect(exit_button_rect, eframe::egui::Sense::click());
+        if exit_response.clicked() {
+            *should_close = true;
+        }
+
+        // 绘制退出按钮
+        let exit_bg_color = if exit_response.hovered() {
+            Self::get_arrow_background_color(&play_state.current_template, true)
+        } else {
+            button_bg_color
+        };
+        let exit_text_color = if exit_response.hovered() {
+            Self::get_adaptive_arrow_color(&play_state.current_template, true)
+        } else {
+            button_color
+        };
+
+        ui.painter().circle_filled(exit_button_rect.center(), button_size * 0.5, exit_bg_color);
+        ui.painter().text(
+            exit_button_rect.center(),
+            eframe::egui::Align2::CENTER_CENTER,
+            "✕",
+            eframe::egui::FontId::proportional(20.0),
+            exit_text_color,
+        );
+
+        // 窗口模式按钮
+        let window_button_rect = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::new(screen_rect.width() - margin_from_edge - button_size - button_spacing, margin_from_top),
+            eframe::egui::Vec2::new(button_size, button_size)
+        );
+
+        let window_response = ui.allocate_rect(window_button_rect, eframe::egui::Sense::click());
+        if window_response.clicked() {
+            play_state.fullscreen = false;
+        }
+
+        // 绘制窗口模式按钮
+        let window_bg_color = if window_response.hovered() {
+            Self::get_arrow_background_color(&play_state.current_template, true)
+        } else {
+            button_bg_color
+        };
+        let window_text_color = if window_response.hovered() {
+            Self::get_adaptive_arrow_color(&play_state.current_template, true)
+        } else {
+            button_color
+        };
+
+        ui.painter().circle_filled(window_button_rect.center(), button_size * 0.5, window_bg_color);
+        ui.painter().text(
+            window_button_rect.center(),
+            eframe::egui::Align2::CENTER_CENTER,
+            "🗗",
+            eframe::egui::FontId::proportional(16.0),
+            window_text_color,
+        );
+
+        // 样式选择按钮
+        let style_button_rect = eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::new(screen_rect.width() - margin_from_edge - button_size - button_spacing * 2.0, margin_from_top),
+            eframe::egui::Vec2::new(button_size, button_size)
+        );
+
+        let style_response = ui.allocate_rect(style_button_rect, eframe::egui::Sense::click());
+        if style_response.clicked() {
+            play_state.toggle_style_selector();
+        }
+
+        // 绘制样式选择按钮
+        let style_bg_color = if style_response.hovered() {
+            Self::get_arrow_background_color(&play_state.current_template, true)
+        } else {
+            button_bg_color
+        };
+        let style_text_color = if style_response.hovered() {
+            Self::get_adaptive_arrow_color(&play_state.current_template, true)
+        } else {
+            button_color
+        };
+
+        ui.painter().circle_filled(style_button_rect.center(), button_size * 0.5, style_bg_color);
+        ui.painter().text(
+            style_button_rect.center(),
+            eframe::egui::Align2::CENTER_CENTER,
+            "🎨",
+            eframe::egui::FontId::proportional(16.0),
+            style_text_color,
+        );
     }
 
     /// 渲染样式选择器

@@ -65,7 +65,7 @@ FROM macrosan/uos:v20-1070
 # Ubuntu
 # Install required dependencies
 #RUN  sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list &&  apt update
-RUN yum update
+RUN yum -y update
 RUN yum update && yum install gtk3
 
 

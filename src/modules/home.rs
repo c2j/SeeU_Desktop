@@ -554,6 +554,63 @@ fn render_file_editor_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
             ui.add_space(4.0);
 
+            // 最近打开的目录（TOP3）
+            let recent_directories = app.ifile_editor_state.settings_manager.get_recent_directories(3);
+            if !recent_directories.is_empty() {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("最近目录").size(12.0).weak());
+                ui.add_space(4.0);
+
+                for dir in recent_directories {
+                    ui.horizontal(|ui| {
+                        let dir_name = std::path::PathBuf::from(&dir.path)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("Unknown")
+                            .to_string();
+
+                        if ui.small_button(&dir_name).clicked() {
+                            app.active_module = Module::FileEditor;
+                            // 设置工作区到这个目录
+                            if let Err(e) = app.ifile_editor_state.set_workspace(std::path::PathBuf::from(&dir.path)) {
+                                log::error!("Failed to set workspace: {}", e);
+                            }
+                        }
+
+                        // 显示访问时间
+                        let time_str = dir.accessed_at.format("%m-%d %H:%M").to_string();
+                        ui.label(egui::RichText::new(format!("({})", time_str)).size(10.0).weak());
+                    });
+                }
+            }
+
+            // 最近打开的文件（TOP5）
+            let recent_files = app.ifile_editor_state.settings_manager.get_recent_files(5);
+            if !recent_files.is_empty() {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("最近文件").size(12.0).weak());
+                ui.add_space(4.0);
+
+                for file in recent_files {
+                    ui.horizontal(|ui| {
+                        if ui.small_button(&file.name).clicked() {
+                            app.active_module = Module::FileEditor;
+                            // 打开这个文件
+                            let file_path = std::path::PathBuf::from(&file.path);
+                            if let Err(e) = app.ifile_editor_state.open_file_from_search(file_path) {
+                                log::error!("Failed to open file from history: {}", e);
+                            }
+                        }
+
+                        // 显示访问时间
+                        let time_str = file.accessed_at.format("%m-%d %H:%M").to_string();
+                        ui.label(egui::RichText::new(format!("({})", time_str)).size(10.0).weak());
+                    });
+                }
+            }
+
+            ui.add_space(4.0);
+
             // 快捷键提示
             ui.small("快捷键: Ctrl+S 保存, Ctrl+Z 撤销, Ctrl+Y 重做, Ctrl+F 查找");
         });

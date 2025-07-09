@@ -2,6 +2,22 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use chrono::{DateTime, Utc};
+
+/// 最近访问的目录记录
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentDirectory {
+    pub path: String,
+    pub accessed_at: DateTime<Utc>,
+}
+
+/// 最近访问的文件记录
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentFile {
+    pub path: String,
+    pub name: String,
+    pub accessed_at: DateTime<Utc>,
+}
 
 /// 编辑器设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +49,12 @@ pub struct EditorSettings {
 
     // 工作区设置
     pub last_opened_directory: Option<String>,
+
+    // 历史记录设置
+    pub recent_directories: Vec<RecentDirectory>,
+    pub recent_files: Vec<RecentFile>,
+    pub max_recent_directories: usize,
+    pub max_recent_files: usize,
 }
 
 impl Default for EditorSettings {
@@ -56,6 +78,10 @@ impl Default for EditorSettings {
             max_file_size_mb: 10,
             virtual_scrolling: true,
             last_opened_directory: None,
+            recent_directories: Vec::new(),
+            recent_files: Vec::new(),
+            max_recent_directories: 5,
+            max_recent_files: 10,
         }
     }
 }
@@ -339,6 +365,89 @@ impl FileEditorSettingsModule {
             .as_ref()
             .and_then(|s| Some(PathBuf::from(s)))
             .filter(|p| p.exists() && p.is_dir())
+    }
+
+    /// 添加最近访问的目录
+    pub fn add_recent_directory(&mut self, path: &PathBuf) {
+        let path_str = path.to_string_lossy().to_string();
+
+        // 移除已存在的相同路径
+        self.settings.recent_directories.retain(|dir| dir.path != path_str);
+        self.temp_settings.recent_directories.retain(|dir| dir.path != path_str);
+
+        // 添加到前面
+        let recent_dir = RecentDirectory {
+            path: path_str,
+            accessed_at: Utc::now(),
+        };
+
+        self.settings.recent_directories.insert(0, recent_dir.clone());
+        self.temp_settings.recent_directories.insert(0, recent_dir);
+
+        // 保持最大数量限制
+        let max_dirs = self.settings.max_recent_directories;
+        if self.settings.recent_directories.len() > max_dirs {
+            self.settings.recent_directories.truncate(max_dirs);
+        }
+        if self.temp_settings.recent_directories.len() > max_dirs {
+            self.temp_settings.recent_directories.truncate(max_dirs);
+        }
+
+        self.save_settings();
+    }
+
+    /// 添加最近访问的文件
+    pub fn add_recent_file(&mut self, path: &PathBuf) {
+        let path_str = path.to_string_lossy().to_string();
+        let file_name = path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
+        // 移除已存在的相同路径
+        self.settings.recent_files.retain(|file| file.path != path_str);
+        self.temp_settings.recent_files.retain(|file| file.path != path_str);
+
+        // 添加到前面
+        let recent_file = RecentFile {
+            path: path_str,
+            name: file_name,
+            accessed_at: Utc::now(),
+        };
+
+        self.settings.recent_files.insert(0, recent_file.clone());
+        self.temp_settings.recent_files.insert(0, recent_file);
+
+        // 保持最大数量限制
+        let max_files = self.settings.max_recent_files;
+        if self.settings.recent_files.len() > max_files {
+            self.settings.recent_files.truncate(max_files);
+        }
+        if self.temp_settings.recent_files.len() > max_files {
+            self.temp_settings.recent_files.truncate(max_files);
+        }
+
+        self.save_settings();
+    }
+
+    /// 获取最近访问的目录
+    pub fn get_recent_directories(&self, limit: usize) -> Vec<RecentDirectory> {
+        self.settings.recent_directories
+            .iter()
+            .take(limit)
+            .filter(|dir| PathBuf::from(&dir.path).exists() && PathBuf::from(&dir.path).is_dir())
+            .cloned()
+            .collect()
+    }
+
+    /// 获取最近访问的文件
+    pub fn get_recent_files(&self, limit: usize) -> Vec<RecentFile> {
+        self.settings.recent_files
+            .iter()
+            .take(limit)
+            .filter(|file| PathBuf::from(&file.path).exists() && PathBuf::from(&file.path).is_file())
+            .cloned()
+            .collect()
     }
 }
 

@@ -178,6 +178,8 @@ impl IFileEditorState {
         self.file_tree.set_root(path.clone())?;
         self.workspace_root = Some(path.clone());
         self.settings_manager.update_last_opened_directory(&path);
+        // 添加到最近目录历史记录
+        self.settings_manager.add_recent_directory(&path);
         log::info!("Updated file tree root and saved to settings: {:?}", path);
         Ok(())
     }
@@ -196,7 +198,9 @@ impl IFileEditorState {
             }
             
             // 打开文件到编辑器
-            self.editor.open_file(path, &self.settings)?;
+            self.editor.open_file(path.clone(), &self.settings)?;
+            // 添加到最近文件历史记录
+            self.settings_manager.add_recent_file(&path);
         } else {
             return Err(FileEditorError::FileNotFound { 
                 path: path.to_string_lossy().to_string() 
@@ -244,6 +248,8 @@ impl IFileEditorState {
                 log::error!("Failed to open file: {}", e);
                 self.last_error = Some(e);
             } else {
+                // 添加到最近文件历史记录
+                self.settings_manager.add_recent_file(&path);
                 // 如果文件不在当前工作区，更新工作区到文件的父目录
                 if let Some(parent) = path.parent() {
                     if self.workspace_root.as_ref() != Some(&parent.to_path_buf()) {
@@ -300,6 +306,8 @@ impl IFileEditorState {
         self.file_tree.set_root(path.clone())?;
         // 保存设置到文件
         self.settings_manager.update_last_opened_directory(&path);
+        // 添加到最近目录历史记录
+        self.settings_manager.add_recent_directory(&path);
         log::info!("Updated workspace and saved to settings: {:?}", path);
         Ok(())
     }

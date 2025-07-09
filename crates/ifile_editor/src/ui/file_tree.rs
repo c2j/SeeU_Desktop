@@ -283,6 +283,8 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
                             log::info!("Opening file: {:?}", path);
                             match state.editor.open_file(path.clone(), &state.settings) {
                                 Ok(()) => {
+                                    // 添加到最近文件历史记录
+                                    state.settings_manager.add_recent_file(&path);
                                     if let Some(buffer) = state.editor.get_active_buffer() {
                                         let mode = if buffer.read_only { "只读" } else { "编辑" };
                                         log::info!("File opened successfully in {} mode: {:?}", mode, path);
@@ -314,6 +316,8 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
                             log::info!("Opening selected file: {:?}", path);
                             match state.editor.open_file(path.clone(), &state.settings) {
                                 Ok(()) => {
+                                    // 添加到最近文件历史记录
+                                    state.settings_manager.add_recent_file(&path);
                                     if let Some(buffer) = state.editor.get_active_buffer() {
                                         let mode = if buffer.read_only { "只读" } else { "编辑" };
                                         log::info!("File opened successfully in {} mode: {:?}", mode, path);
@@ -477,6 +481,8 @@ fn render_file_context_menu_direct(ui: &mut egui::Ui, path: &PathBuf, state: &mu
         log::info!("Opening file from context menu: {:?}", path);
         match state.editor.open_file(path.clone(), &state.settings) {
             Ok(()) => {
+                // 添加到最近文件历史记录
+                state.settings_manager.add_recent_file(&path);
                 if let Some(buffer) = state.editor.get_active_buffer() {
                     let mode = if buffer.read_only { "只读" } else { "编辑" };
                     log::info!("File opened successfully in {} mode: {:?}", mode, path);
