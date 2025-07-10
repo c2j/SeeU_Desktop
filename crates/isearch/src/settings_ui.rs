@@ -262,10 +262,164 @@ impl<'a> SettingsModule for ISearchSettingsModule<'a> {
                 if ui.checkbox(&mut self.state.search_on_typing, "输入时触发搜索").on_hover_text("启用后每次输入都会触发搜索，禁用后需按回车键触发").changed() {
                     settings_changed = true;
                 }
+                if ui.checkbox(&mut self.state.instant_search_enabled, "启用即时搜索").on_hover_text("启用后搜索会有延迟以避免频繁搜索").changed() {
+                    self.state.set_instant_search_enabled(self.state.instant_search_enabled);
+                    settings_changed = true;
+                }
 
                 // Auto-save search options when changed
                 if settings_changed {
                     self.state.save_search_options();
+                }
+            });
+        });
+
+        ui.add_space(10.0);
+
+        // Background indexing settings
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("🔄 后台索引设置").strong());
+                ui.add_space(5.0);
+
+                // Auto update toggle
+                if ui.checkbox(&mut self.state.auto_update_enabled, "启用自动后台更新")
+                    .on_hover_text("在系统空闲时自动更新文件索引")
+                    .changed() {
+                    self.state.set_auto_update_enabled(self.state.auto_update_enabled);
+                    settings_changed = true;
+                }
+
+                // Idle threshold setting
+                ui.horizontal(|ui| {
+                    ui.label("空闲阈值:");
+                    let mut threshold = self.state.idle_threshold_minutes as f32;
+                    if ui.add(egui::Slider::new(&mut threshold, 1.0..=60.0)
+                        .suffix(" 分钟")
+                        .text("系统空闲多久后开始后台更新"))
+                        .changed() {
+                        self.state.set_idle_threshold(threshold as u32);
+                        settings_changed = true;
+                    }
+                });
+
+                // System status
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    ui.label("系统状态:");
+                    if self.state.is_system_idle() {
+                        ui.label(egui::RichText::new("💤 空闲").color(egui::Color32::GRAY));
+                    } else {
+                        ui.label(egui::RichText::new("🔥 活跃").color(egui::Color32::GREEN));
+                    }
+                });
+
+                // Manual background update button
+                ui.add_space(5.0);
+                if ui.button("🚀 立即执行后台更新")
+                    .on_hover_text("手动触发后台索引更新")
+                    .clicked() {
+                    self.state.schedule_background_update();
+                }
+            });
+        });
+
+        ui.add_space(10.0);
+
+        // Search performance settings
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("⚡ 搜索性能设置").strong());
+                ui.add_space(5.0);
+
+                // Search delay setting
+                if self.state.instant_search_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label("搜索延迟:");
+                        let mut delay = self.state.search_delay_ms as f32;
+                        if ui.add(egui::Slider::new(&mut delay, 100.0..=2000.0)
+                            .suffix(" 毫秒")
+                            .text("输入后延迟多久开始搜索"))
+                            .changed() {
+                            self.state.set_search_delay(delay as u32);
+                            settings_changed = true;
+                        }
+                    });
+                }
+
+                // Search metrics display
+                ui.add_space(5.0);
+                let metrics = self.state.get_search_metrics();
+                ui.label(format!("搜索统计: 总搜索 {} 次", metrics.total_searches));
+                ui.label(format!("缓存命中率: {:.1}%", metrics.cache_hit_rate()));
+                ui.label(format!("平均搜索时间: {:.1}ms", metrics.average_search_time.as_millis()));
+
+                // Clear cache button
+                ui.add_space(5.0);
+                if ui.button("🗑 清除搜索缓存")
+                    .on_hover_text("清除所有搜索结果缓存")
+                    .clicked() {
+                    self.state.clear_search_cache();
+                }
+            });
+        });
+
+        ui.add_space(10.0);
+
+        // Enhanced file monitoring settings
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("👁 增强文件监控").strong());
+                ui.add_space(5.0);
+
+                // Enhanced monitoring toggle
+                if ui.checkbox(&mut self.state.enhanced_monitoring_enabled, "启用增强文件监控")
+                    .on_hover_text("启用更精确的文件变化检测和增量索引更新")
+                    .changed() {
+                    self.state.set_enhanced_monitoring_enabled(self.state.enhanced_monitoring_enabled);
+                    settings_changed = true;
+                }
+
+                // Incremental updates toggle
+                if ui.checkbox(&mut self.state.incremental_updates_enabled, "启用增量更新")
+                    .on_hover_text("仅更新发生变化的文件，而不是重新索引整个目录")
+                    .changed() {
+                    self.state.set_incremental_updates_enabled(self.state.incremental_updates_enabled);
+                    settings_changed = true;
+                }
+
+                // File change debounce setting
+                if self.state.enhanced_monitoring_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label("变化检测延迟:");
+                        let mut debounce = self.state.file_change_debounce_ms as f32;
+                        if ui.add(egui::Slider::new(&mut debounce, 100.0..=5000.0)
+                            .suffix(" 毫秒")
+                            .text("文件变化后延迟多久开始处理"))
+                            .changed() {
+                            self.state.set_file_change_debounce(debounce as u32);
+                            settings_changed = true;
+                        }
+                    });
+                }
+
+                // Monitoring statistics
+                if self.state.enhanced_monitoring_enabled {
+                    ui.add_space(5.0);
+                    ui.label("监控统计:");
+                    let stats = self.state.get_enhanced_monitoring_stats();
+                    if stats.is_empty() {
+                        ui.label(egui::RichText::new("暂无监控目录").weak());
+                    } else {
+                        for (path, stat) in stats.iter().take(3) { // Show max 3 directories
+                            ui.label(format!("📁 {} ({} 文件)",
+                                path.split('/').last().unwrap_or(path),
+                                stat.file_count));
+                        }
+                        if stats.len() > 3 {
+                            ui.label(format!("... 还有 {} 个目录", stats.len() - 3));
+                        }
+                    }
                 }
             });
         });

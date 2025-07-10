@@ -5,6 +5,11 @@ pub mod watcher;
 pub mod file_types;
 pub mod utils;
 pub mod settings_ui;
+pub mod advanced_search;
+pub mod background_indexer;
+pub mod search_optimizer;
+pub mod enhanced_watcher;
+pub mod export;
 
 
 
@@ -20,6 +25,11 @@ use std::collections::HashMap;
 // use rfd::FileDialog; // 移除 rfd 依赖以避免 async-recursion
 use indexer::Indexer;
 use watcher::FileWatcher;
+use advanced_search::AdvancedSearchParser;
+use background_indexer::{BackgroundIndexer, ActivityMonitor};
+use search_optimizer::SearchOptimizer;
+use enhanced_watcher::{EnhancedFileWatcher, UpdateResult};
+use export::{ExportFormat, ExportConfig, ExportMetadata, SearchResultExporter};
 
 /// iSearch state
 pub struct ISearchState {
@@ -41,6 +51,7 @@ pub struct ISearchState {
     // Shared components
     indexer: Arc<Mutex<Indexer>>,
     file_watcher: Arc<Mutex<FileWatcher>>,
+    enhanced_watcher: Option<EnhancedFileWatcher>,
 
     // Background indexing communication
     stats_sender: Option<Sender<DirectoryIndexResult>>,
@@ -85,6 +96,32 @@ pub struct ISearchState {
     pub show_document_import_dialog: bool,
     pub import_file_path: String,
     pub import_file_name: String,
+
+    // Advanced search parser
+    advanced_search_parser: AdvancedSearchParser,
+
+    // Background indexing
+    background_indexer: Option<BackgroundIndexer>,
+    activity_monitor: ActivityMonitor,
+    auto_update_enabled: bool,
+    idle_threshold_minutes: u32,
+
+    // Search optimization
+    search_optimizer: SearchOptimizer,
+    instant_search_enabled: bool,
+    search_delay_ms: u32,
+    next_request_id: u64,
+
+    // Enhanced file monitoring
+    enhanced_monitoring_enabled: bool,
+    file_change_debounce_ms: u32,
+    incremental_updates_enabled: bool,
+
+    // Export functionality
+    pub show_export_dialog: bool,
+    pub export_format: ExportFormat,
+    pub export_config: ExportConfig,
+    pub export_file_path: String,
 }
 
 /// Search result
@@ -276,8 +313,9 @@ impl Default for ISearchState {
             show_directories_panel: false,  // Default to collapsed
             search_stats: SearchStats::default(),
             has_more_results: false,
-            indexer,
+            indexer: indexer.clone(),
             file_watcher,
+            enhanced_watcher: Some(EnhancedFileWatcher::new(indexer.clone())),
             stats_sender: Some(stats_sender),
             stats_receiver: Some(stats_receiver),
             deletion_sender: Some(deletion_sender),
@@ -302,6 +340,22 @@ impl Default for ISearchState {
             show_document_import_dialog: false,
             import_file_path: String::new(),
             import_file_name: String::new(),
+            advanced_search_parser: AdvancedSearchParser::new(),
+            background_indexer: Some(BackgroundIndexer::new(indexer.clone())),
+            activity_monitor: ActivityMonitor::new(),
+            auto_update_enabled: true,
+            idle_threshold_minutes: 5,
+            search_optimizer: SearchOptimizer::new(),
+            instant_search_enabled: false, // Default to disabled for stability
+            search_delay_ms: 300,
+            next_request_id: 1,
+            enhanced_monitoring_enabled: true,
+            file_change_debounce_ms: 500,
+            incremental_updates_enabled: true,
+            show_export_dialog: false,
+            export_format: ExportFormat::Csv,
+            export_config: ExportConfig::default(),
+            export_file_path: String::new(),
         }
     }
 }
@@ -679,9 +733,19 @@ impl ISearchState {
 
         let query = self.search_query.trim().to_string();
 
-        // Check cache first
+        // Check optimizer cache first
+        if let Some((cached_results, cached_stats)) = self.search_optimizer.get_cached_result(&query) {
+            log::debug!("Using optimizer cached search results for query: {}", query);
+            self.search_results = cached_results;
+            self.search_stats = cached_stats;
+            self.has_more_results = self.search_results.len() >= 100;
+            self.sort_results();
+            return;
+        }
+
+        // Check legacy cache
         if let Some((cached_results, cached_stats)) = self.search_cache.get(&query) {
-            log::debug!("Using cached search results for query: {}", query);
+            log::debug!("Using legacy cached search results for query: {}", query);
             self.search_results = cached_results.clone();
             self.search_stats = cached_stats.clone();
             self.has_more_results = cached_results.len() >= 100;
@@ -759,7 +823,10 @@ impl ISearchState {
             query_time: Utc::now(),
         };
 
-        // Cache the results (limit cache size to prevent memory issues)
+        // Cache the results in both optimizer and legacy cache
+        self.search_optimizer.cache_result(&query, final_results.clone(), self.search_stats.clone());
+
+        // Legacy cache (limit cache size to prevent memory issues)
         if self.search_cache.len() >= 50 {
             // Remove oldest entries (simple FIFO, could be improved with LRU)
             let keys_to_remove: Vec<String> = self.search_cache.keys().take(10).cloned().collect();
@@ -784,8 +851,399 @@ impl ISearchState {
         // Currently using synchronous search, this method is reserved for future async implementation
     }
 
-    /// Parse advanced search query
-    fn parse_advanced_query(&self, query: &str) -> (String, Option<String>, Option<String>) {
+    /// Process background indexing results
+    pub fn process_background_indexing(&mut self) {
+        if let Some(background_indexer) = &self.background_indexer {
+            let results = background_indexer.get_results();
+            for result in results {
+                if result.success {
+                    log::info!("Background indexing completed for: {}", result.directory_path);
+                    // Update directory stats
+                    if let Some(dir) = self.indexed_directories.iter_mut()
+                        .find(|d| d.path == result.directory_path) {
+                        dir.last_indexed = result.stats.last_updated;
+                        dir.file_count = result.stats.total_files;
+                        dir.total_size_bytes = result.stats.total_size_bytes;
+                    }
+                    // Update global stats
+                    self.update_index_stats();
+                } else {
+                    log::error!("Background indexing failed for {}: {:?}",
+                        result.directory_path, result.error_message);
+                }
+            }
+        }
+    }
+
+    /// Record user activity for idle detection
+    pub fn record_activity(&self) {
+        self.activity_monitor.record_activity();
+        if let Some(background_indexer) = &self.background_indexer {
+            background_indexer.record_activity();
+        }
+    }
+
+    /// Check if system is idle
+    pub fn is_system_idle(&self) -> bool {
+        if let Some(background_indexer) = &self.background_indexer {
+            background_indexer.is_idle()
+        } else {
+            false
+        }
+    }
+
+    /// Enable or disable automatic background updates
+    pub fn set_auto_update_enabled(&mut self, enabled: bool) {
+        self.auto_update_enabled = enabled;
+        log::info!("Auto update {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    /// Set idle threshold in minutes
+    pub fn set_idle_threshold(&mut self, minutes: u32) {
+        self.idle_threshold_minutes = minutes;
+        if let Some(background_indexer) = &mut self.background_indexer {
+            background_indexer.set_idle_threshold(std::time::Duration::from_secs(minutes as u64 * 60));
+        }
+        log::info!("Idle threshold set to {} minutes", minutes);
+    }
+
+    /// Schedule background update for all directories
+    pub fn schedule_background_update(&self) {
+        if self.auto_update_enabled {
+            if let Some(background_indexer) = &self.background_indexer {
+                background_indexer.schedule_all_directories_update(self.indexed_directories.clone());
+                log::info!("Scheduled background update for {} directories", self.indexed_directories.len());
+            }
+        }
+    }
+
+    /// Check for pending background updates
+    pub fn check_background_updates(&self) {
+        if self.auto_update_enabled {
+            if let Some(background_indexer) = &self.background_indexer {
+                background_indexer.check_for_updates();
+            }
+        }
+    }
+
+    /// Enable or disable instant search
+    pub fn set_instant_search_enabled(&mut self, enabled: bool) {
+        self.instant_search_enabled = enabled;
+        self.search_optimizer.set_instant_search_enabled(enabled);
+        log::info!("Instant search {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    /// Set search delay for instant search
+    pub fn set_search_delay(&mut self, delay_ms: u32) {
+        self.search_delay_ms = delay_ms;
+        self.search_optimizer.set_search_delay(std::time::Duration::from_millis(delay_ms as u64));
+        log::info!("Search delay set to {}ms", delay_ms);
+    }
+
+    /// Check if instant search should be triggered
+    pub fn should_trigger_instant_search(&self) -> bool {
+        self.instant_search_enabled && self.search_optimizer.should_trigger_instant_search()
+    }
+
+    /// Trigger instant search if conditions are met
+    pub fn trigger_instant_search_if_ready(&mut self) {
+        if self.should_trigger_instant_search() && !self.search_query.trim().is_empty() {
+            self.search_optimizer.update_search_time();
+            self.search();
+        }
+    }
+
+    /// Submit async search request
+    pub fn submit_async_search(&mut self, query: String, file_type_filter: Option<String>, filename_filter: Option<String>) -> bool {
+        let request = search_optimizer::SearchRequest {
+            query,
+            file_type_filter,
+            filename_filter,
+            max_results: 100,
+            request_id: self.next_request_id,
+        };
+
+        self.next_request_id += 1;
+        self.search_optimizer.submit_async_search(request)
+    }
+
+    /// Process async search results
+    pub fn process_async_search_results(&mut self) {
+        let responses = self.search_optimizer.get_async_results();
+        for response in responses {
+            if response.success && response.query == self.search_query {
+                // Update results if this is for the current query
+                self.search_results = response.results;
+                self.search_stats = response.stats;
+                self.has_more_results = self.search_results.len() >= 100;
+                self.sort_results();
+                self.is_searching = false;
+            }
+        }
+    }
+
+    /// Get search performance metrics
+    pub fn get_search_metrics(&self) -> search_optimizer::SearchMetrics {
+        self.search_optimizer.get_metrics()
+    }
+
+    /// Clear search cache
+    pub fn clear_search_cache(&mut self) {
+        self.search_optimizer.clear_cache();
+        self.search_cache.clear();
+        log::info!("Search cache cleared");
+    }
+
+    /// Enable or disable enhanced file monitoring
+    pub fn set_enhanced_monitoring_enabled(&mut self, enabled: bool) {
+        self.enhanced_monitoring_enabled = enabled;
+        log::info!("Enhanced file monitoring {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    /// Set file change debounce duration
+    pub fn set_file_change_debounce(&mut self, debounce_ms: u32) {
+        self.file_change_debounce_ms = debounce_ms;
+        if let Some(enhanced_watcher) = &mut self.enhanced_watcher {
+            enhanced_watcher.set_debounce_duration(std::time::Duration::from_millis(debounce_ms as u64));
+        }
+        log::info!("File change debounce set to {}ms", debounce_ms);
+    }
+
+    /// Enable or disable incremental updates
+    pub fn set_incremental_updates_enabled(&mut self, enabled: bool) {
+        self.incremental_updates_enabled = enabled;
+        log::info!("Incremental updates {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    /// Process enhanced file monitoring events
+    pub fn process_enhanced_monitoring(&mut self) -> Vec<UpdateResult> {
+        if !self.enhanced_monitoring_enabled {
+            return Vec::new();
+        }
+
+        if let Some(enhanced_watcher) = &mut self.enhanced_watcher {
+            let results = enhanced_watcher.process_events();
+
+            // Log update results
+            for result in &results {
+                if result.success {
+                    log::info!("Enhanced monitoring update completed for {}: {} files processed, {} added, {} updated, {} removed",
+                        result.directory_path, result.processed_files, result.added_files, result.updated_files, result.removed_files);
+                } else {
+                    log::error!("Enhanced monitoring update failed for {}: {:?}",
+                        result.directory_path, result.error_message);
+                }
+            }
+
+            results
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Start enhanced monitoring for a directory
+    pub fn start_enhanced_monitoring(&mut self, directory: &IndexedDirectory) -> Result<(), String> {
+        if !self.enhanced_monitoring_enabled {
+            return Ok(());
+        }
+
+        if let Some(enhanced_watcher) = &mut self.enhanced_watcher {
+            enhanced_watcher.watch_directory(directory)
+                .map_err(|e| format!("Failed to start enhanced monitoring: {}", e))?;
+            log::info!("Started enhanced monitoring for: {}", directory.path);
+        }
+
+        Ok(())
+    }
+
+    /// Stop enhanced monitoring for a directory
+    pub fn stop_enhanced_monitoring(&mut self, directory_path: &str) -> Result<(), String> {
+        if let Some(enhanced_watcher) = &mut self.enhanced_watcher {
+            enhanced_watcher.unwatch_directory(directory_path)
+                .map_err(|e| format!("Failed to stop enhanced monitoring: {}", e))?;
+            log::info!("Stopped enhanced monitoring for: {}", directory_path);
+        }
+
+        Ok(())
+    }
+
+    /// Get enhanced monitoring statistics
+    pub fn get_enhanced_monitoring_stats(&self) -> HashMap<String, enhanced_watcher::WatchStatistics> {
+        if let Some(enhanced_watcher) = &self.enhanced_watcher {
+            enhanced_watcher.get_watch_statistics()
+        } else {
+            HashMap::new()
+        }
+    }
+
+    /// Open export dialog
+    pub fn open_export_dialog(&mut self) {
+        self.show_export_dialog = true;
+        // Set default export path
+        if self.export_file_path.is_empty() {
+            if let Some(downloads_dir) = dirs::download_dir() {
+                let filename = format!("search_results_{}.{}",
+                    Utc::now().format("%Y%m%d_%H%M%S"),
+                    self.export_format.extension());
+                self.export_file_path = downloads_dir.join(filename).to_string_lossy().to_string();
+            } else {
+                let filename = format!("search_results_{}.{}",
+                    Utc::now().format("%Y%m%d_%H%M%S"),
+                    self.export_format.extension());
+                self.export_file_path = filename;
+            }
+        }
+    }
+
+    /// Close export dialog
+    pub fn close_export_dialog(&mut self) {
+        self.show_export_dialog = false;
+    }
+
+    /// Set export format
+    pub fn set_export_format(&mut self, format: ExportFormat) {
+        self.export_format = format;
+        // Update file extension in path
+        if !self.export_file_path.is_empty() {
+            let path = std::path::Path::new(&self.export_file_path);
+            if let Some(parent) = path.parent() {
+                if let Some(stem) = path.file_stem() {
+                    let new_filename = format!("{}.{}", stem.to_string_lossy(), self.export_format.extension());
+                    self.export_file_path = parent.join(new_filename).to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+
+    /// Export search results to file
+    pub fn export_search_results(&self) -> Result<(), String> {
+        if self.search_results.is_empty() {
+            return Err("没有搜索结果可导出".to_string());
+        }
+
+        if self.export_file_path.is_empty() {
+            return Err("请指定导出文件路径".to_string());
+        }
+
+        let metadata = ExportMetadata {
+            query: self.search_query.clone(),
+            export_time: Utc::now(),
+            total_results: self.search_results.len(),
+            format: self.export_format.clone(),
+            stats: Some(self.search_stats.clone()),
+        };
+
+        SearchResultExporter::export_to_file(
+            &self.export_file_path,
+            &self.search_results,
+            &self.export_config,
+            &metadata,
+        ).map_err(|e| format!("导出失败: {}", e))?;
+
+        log::info!("Successfully exported {} search results to: {}",
+            self.search_results.len(), self.export_file_path);
+
+        Ok(())
+    }
+
+    /// Export search results to string
+    pub fn export_search_results_to_string(&self) -> Result<String, String> {
+        if self.search_results.is_empty() {
+            return Err("没有搜索结果可导出".to_string());
+        }
+
+        let metadata = ExportMetadata {
+            query: self.search_query.clone(),
+            export_time: Utc::now(),
+            total_results: self.search_results.len(),
+            format: self.export_format.clone(),
+            stats: Some(self.search_stats.clone()),
+        };
+
+        SearchResultExporter::export_to_string(
+            &self.search_results,
+            &self.export_config,
+            &metadata,
+        ).map_err(|e| format!("导出失败: {}", e))
+    }
+
+    /// Get available export formats
+    pub fn get_export_formats() -> Vec<ExportFormat> {
+        vec![
+            ExportFormat::Csv,
+            ExportFormat::Json,
+            ExportFormat::Text,
+            ExportFormat::Html,
+            ExportFormat::Markdown,
+        ]
+    }
+
+    /// Parse advanced search query using the new advanced search parser
+    fn parse_advanced_query(&mut self, query: &str) -> (String, Option<String>, Option<String>) {
+        // Try to parse with the advanced search parser
+        match self.advanced_search_parser.parse(query) {
+            Ok(advanced_query) => {
+                // Convert advanced query back to a format compatible with the current indexer
+                let mut parsed_query = String::new();
+                let mut file_type = None;
+                let mut filename = None;
+
+                // Extract filters
+                for (filter_name, filter_value) in &advanced_query.filters {
+                    match filter_name.as_str() {
+                        "filetype" | "type" => {
+                            if let crate::advanced_search::FilterValue::Text(value) = filter_value {
+                                file_type = Some(value.clone());
+                            }
+                        }
+                        "filename" | "name" => {
+                            if let crate::advanced_search::FilterValue::Text(value) = filter_value {
+                                filename = Some(value.clone());
+                            }
+                        }
+                        "ext" | "extension" => {
+                            if let crate::advanced_search::FilterValue::List(extensions) = filter_value {
+                                // Convert extension list to file type filter
+                                if !extensions.is_empty() {
+                                    file_type = Some(extensions[0].clone());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Build search terms
+                for (i, term) in advanced_query.terms.iter().enumerate() {
+                    if i > 0 {
+                        parsed_query.push(' ');
+                    }
+
+                    // Apply term modifiers
+                    if term.is_negated {
+                        parsed_query.push('-');
+                    } else if term.is_required {
+                        parsed_query.push('+');
+                    }
+
+                    if term.is_exact {
+                        parsed_query.push_str(&format!("\"{}\"", term.text));
+                    } else {
+                        parsed_query.push_str(&term.text);
+                    }
+                }
+
+                (parsed_query, file_type, filename)
+            }
+            Err(_) => {
+                // Fallback to simple parsing for backward compatibility
+                self.parse_simple_query(query)
+            }
+        }
+    }
+
+    /// Simple query parsing for backward compatibility
+    fn parse_simple_query(&self, query: &str) -> (String, Option<String>, Option<String>) {
         let mut parsed_query = String::new();
         let mut file_type = None;
         let mut filename = None;

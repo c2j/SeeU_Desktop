@@ -11,5 +11,6 @@ license = "MIT"
 [dependencies]
 egui = "0.28.1"
 alacritty_terminal = { path = "../alacritty_terminal" }
+crunchy = { path = "../crunchy" }
 anyhow = "1.0.96"
 open = "5.3.2"

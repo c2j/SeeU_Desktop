@@ -43,8 +43,8 @@ pub fn render_isearch_with_sidebar_info(ui: &mut egui::Ui, state: &mut ISearchSt
 fn render_isearch_with_sidebar_info_internal<F>(
     ui: &mut egui::Ui,
     state: &mut ISearchState,
-    _right_sidebar_open: bool,
-    _right_sidebar_width: Option<f32>,
+    right_sidebar_open: bool,
+    right_sidebar_width: Option<f32>,
     open_in_editor_callback: Option<F>
 ) where F: Fn(String) {
     // Process directory dialog
@@ -59,12 +59,41 @@ fn render_isearch_with_sidebar_info_internal<F>(
     // Process search results from background thread
     state.process_search_results();
 
-    // Use available_rect to get the actual available space
+    // Process background indexing results
+    state.process_background_indexing();
+
+    // Check for background updates periodically
+    state.check_background_updates();
+
+    // Process async search results
+    state.process_async_search_results();
+
+    // Process enhanced file monitoring
+    let _monitoring_results = state.process_enhanced_monitoring();
+
+    // Calculate available space considering right sidebar
     let available_rect = ui.available_rect_before_wrap();
-    let content_height = available_rect.height() - 20.0; // Reserve space for status bar and padding
+
+    // Debug: log layout information
+    log::debug!("iSearch layout - available_rect: {:?}, right_sidebar_open: {}, right_sidebar_width: {:?}",
+               available_rect, right_sidebar_open, right_sidebar_width);
+
+    // Calculate width: when right sidebar is open, use the actual available width
+    let content_width = if right_sidebar_open {
+        // Use the actual available width - the UI framework already accounts for the sidebar
+        let calculated_width = available_rect.width();
+        log::debug!("iSearch layout - available_width: {}, right_sidebar_open: {}, calculated_width: {}",
+                   available_rect.width(), right_sidebar_open, calculated_width);
+        calculated_width
+    } else {
+        available_rect.width()
+    };
+
+    // Calculate height: use full available height minus small padding
+    let content_height = available_rect.height() - 5.0; // Minimal padding to reach status bar
 
     ui.allocate_ui_with_layout(
-        egui::Vec2::new(available_rect.width(), content_height),
+        egui::Vec2::new(content_width, content_height),
         egui::Layout::top_down(egui::Align::LEFT),
         |ui| {
         // Search bar
@@ -83,18 +112,24 @@ fn render_isearch_with_sidebar_info_internal<F>(
                 ui.label("🔍");
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut state.search_query)
-                        .hint_text("搜索文件... (支持 filetype:pdf, filename:name, +必须, \"精确短语\")")
+                        .hint_text("搜索文件... (支持高级语法: filetype:pdf, size:>1MB, date:today, +必须, \"精确短语\", AND/OR/NOT)")
                         .desired_width(ui.available_width() - 100.0)
                         .id(search_id)
                 );
 
                 // Trigger search based on user settings
                 let should_search = ui.button("搜索").clicked() ||
-                   (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) ||
-                   (state.search_on_typing && response.changed() && !state.search_query.trim().is_empty());
+                   (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+
+                let should_instant_search = state.search_on_typing && response.changed() && !state.search_query.trim().is_empty();
 
                 if should_search {
+                    state.record_activity(); // Record user activity
                     state.search();
+                } else if should_instant_search {
+                    state.record_activity(); // Record user activity
+                    // Trigger instant search if enabled and conditions are met
+                    state.trigger_instant_search_if_ready();
                 }
 
                 // File type filter button (only show if enabled)
@@ -109,6 +144,13 @@ fn render_isearch_with_sidebar_info_internal<F>(
                 if help_button.clicked() {
                     ui.memory_mut(|mem| mem.toggle_popup(ui.make_persistent_id("search_syntax_help")));
                 }
+
+                // Export button (only show if there are search results)
+                if !state.search_results.is_empty() {
+                    if ui.button("📤").on_hover_text("导出搜索结果").clicked() {
+                        state.open_export_dialog();
+                    }
+                }
             });
 
             // Show popup with search syntax help
@@ -116,16 +158,60 @@ fn render_isearch_with_sidebar_info_internal<F>(
             if ui.memory(|mem| mem.is_popup_open(popup_id)) {
                 egui::Window::new("高级搜索语法")
                     .id(popup_id)
-                    .fixed_size([400.0, 200.0])
+                    .fixed_size([500.0, 400.0])
                     .show(ui.ctx(), |ui| {
                         ui.heading("高级搜索语法");
                         ui.separator();
-                        ui.label("支持以下高级搜索语法：");
-                        ui.label("• filetype:pdf - 按文件类型筛选");
-                        ui.label("• filename:report - 按文件名筛选");
-                        ui.label("• +关键词 - 必须包含该关键词");
-                        ui.label("• \"精确短语\" - 精确匹配短语");
-                        ui.label("示例：project +important filetype:pdf \"quarterly report\"");
+
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.label("🔍 基本搜索：");
+                            ui.label("• 关键词 - 基本搜索");
+                            ui.label("• \"精确短语\" - 精确匹配短语");
+                            ui.label("• +必须词 - 必须包含该关键词");
+                            ui.label("• -排除词 - 排除包含该关键词的结果");
+
+                            ui.add_space(10.0);
+                            ui.label("🔧 逻辑操作符：");
+                            ui.label("• AND 或 && - 逻辑与");
+                            ui.label("• OR 或 || - 逻辑或");
+                            ui.label("• NOT 或 ! - 逻辑非");
+                            ui.label("• ( ) - 分组");
+
+                            ui.add_space(10.0);
+                            ui.label("📁 文件筛选：");
+                            ui.label("• filetype:pdf - 按文件类型筛选");
+                            ui.label("• filename:report - 按文件名筛选");
+                            ui.label("• ext:pdf;doc;txt - 按扩展名筛选");
+                            ui.label("• path:/home/user - 按路径筛选");
+
+                            ui.add_space(10.0);
+                            ui.label("📏 大小筛选：");
+                            ui.label("• size:>1MB - 大于1MB的文件");
+                            ui.label("• size:<=500KB - 小于等于500KB的文件");
+                            ui.label("• size:1GB..2GB - 1GB到2GB之间的文件");
+
+                            ui.add_space(10.0);
+                            ui.label("📅 日期筛选：");
+                            ui.label("• date:today - 今天修改的文件");
+                            ui.label("• date:yesterday - 昨天修改的文件");
+                            ui.label("• date:>2023-01-01 - 2023年1月1日后修改的文件");
+                            ui.label("• date:2023 - 2023年修改的文件");
+
+                            ui.add_space(10.0);
+                            ui.label("🎯 修饰符：");
+                            ui.label("• case:关键词 - 区分大小写");
+                            ui.label("• exact:关键词 - 精确匹配");
+                            ui.label("• file:关键词 - 仅搜索文件");
+                            ui.label("• folder:关键词 - 仅搜索文件夹");
+                            ui.label("• regex:\"模式\" - 正则表达式搜索");
+
+                            ui.add_space(10.0);
+                            ui.label("💡 示例：");
+                            ui.label("• project +important filetype:pdf");
+                            ui.label("• \"quarterly report\" AND size:>1MB");
+                            ui.label("• (document OR report) ext:pdf;doc date:>2023-01-01");
+                            ui.label("• case:exact:\"Project Name\" -draft");
+                        });
                     });
             }
         });
@@ -276,11 +362,24 @@ fn render_isearch_with_sidebar_info_internal<F>(
                 });
         }
 
-        
-        // 正常情况下使用完整的中央面板
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            render_search_results_content_with_callback(ui, state, &open_in_editor_callback);
-        });
+
+        // 使用受限的布局空间，避免覆盖右侧边栏
+        if right_sidebar_open {
+            // 当右侧边栏打开时，使用受限的空间，但让表格使用剩余的全部高度
+            let remaining_height = ui.available_height();
+            ui.allocate_ui_with_layout(
+                egui::Vec2::new(content_width, remaining_height),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    render_search_results_content_with_callback(ui, state, &open_in_editor_callback);
+                }
+            );
+        } else {
+            // 右侧边栏关闭时，使用完整的中央面板
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                render_search_results_content_with_callback(ui, state, &open_in_editor_callback);
+            });
+        }
        
         }
     );
@@ -303,12 +402,8 @@ fn render_search_results_content_internal<F>(
     state: &mut ISearchState,
     open_in_editor_callback: &Option<F>
 ) where F: Fn(String) {
-    // Add a scroll area for the entire central panel content to prevent overflow
+    // Use the full available height without outer scroll area for better table display
     let central_height = ui.available_height();
-    egui::ScrollArea::vertical()
-        .max_height(central_height)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
             // Dynamic heading with search statistics
             if !state.search_results.is_empty() && !state.is_searching {
                 // Show results count and time in the heading
@@ -506,26 +601,18 @@ fn render_search_results_content_internal<F>(
                 ui.add_space(5.0);
                 ui.separator();
 
-                // Search results with proper height constraint
-                // Since we now have an outer scroll area, we can be more generous with the inner scroll area
-                // but still need to reserve space for bottom statistics
-                let remaining_height = ui.available_height(); // Reserve space for statistics
-                egui::ScrollArea::vertical()
-                    .max_height(remaining_height.max(200.0)) // Ensure minimum height of 200px
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        // Calculate available width for table layout
-                        let table_width = ui.available_width() - 20.0;
+                // Search results - use full available height for better table display
+                let remaining_height = ui.available_height();
 
-                        // Render results based on view mode
-                        match state.view_mode {
-                            ViewMode::Detailed => render_detailed_view_with_callback(ui, state, open_in_editor_callback),
-                            ViewMode::List => render_list_view_with_callback(ui, state, table_width, open_in_editor_callback),
-                        }
-                    });
-                        // Results will be rendered by the appropriate view function
+                // Calculate available width for table layout - use full available width
+                let table_width = ui.available_width(); // No margin, use full width
+
+                // Render results based on view mode - no inner scroll area, let table handle scrolling
+                match state.view_mode {
+                    ViewMode::Detailed => render_detailed_view_with_callback(ui, state, open_in_editor_callback),
+                    ViewMode::List => render_list_view_with_callback(ui, state, table_width, open_in_editor_callback),
+                }
             }
-                });
 
     // Show file properties dialog if requested
     if state.show_properties_dialog {
@@ -980,48 +1067,57 @@ fn render_list_view_internal<F>(
     use egui_extras::{TableBuilder, Column};
 
     // Calculate dynamic column widths based on available space
-    let total_available = available_width - 20.0; // Reserve space for margins
+    let total_available = available_width; // Use full available width
 
-    // Define column width strategy based on available space
-    let (filename_width, path_width, size_width, time_width, actions_width) = if total_available < 600.0 {
+    // Debug: log column width calculation
+    log::info!("iSearch table - available_width: {}, total_available: {}", available_width, total_available);
+
+    // Define column width strategy - use fixed widths for some columns, remainder for path
+    let (filename_width, size_width, time_width, actions_width) = if total_available < 600.0 {
         // Compact layout for narrow screens
         let filename_w = (total_available * 0.30).max(120.0).min(180.0);
-        let path_w = (total_available * 0.40).max(150.0);
-        let size_w = (total_available * 0.12).max(60.0).min(80.0);
-        let time_w = (total_available * 0.12).max(80.0).min(100.0);
-        let actions_w = total_available - filename_w - path_w - size_w - time_w;
-        (filename_w, path_w, size_w, time_w, actions_w.max(80.0))
+        let size_w = 70.0;
+        let time_w = 90.0;
+        let actions_w = 100.0;
+        (filename_w, size_w, time_w, actions_w)
     } else if total_available < 900.0 {
         // Medium layout for normal screens
         let filename_w = (total_available * 0.25).max(150.0).min(220.0);
-        let path_w = (total_available * 0.45).max(200.0);
         let size_w = 80.0;
         let time_w = 100.0;
-        let actions_w = total_available - filename_w - path_w - size_w - time_w;
-        (filename_w, path_w, size_w, time_w, actions_w.max(120.0))
+        let actions_w = 120.0;
+        (filename_w, size_w, time_w, actions_w)
     } else {
         // Wide layout for large screens
         let filename_w = (total_available * 0.22).max(180.0).min(280.0);
-        let path_w = (total_available * 0.50).max(250.0);
         let size_w = 90.0;
         let time_w = 120.0;
-        let actions_w = total_available - filename_w - path_w - size_w - time_w;
-        (filename_w, path_w, size_w, time_w, actions_w.max(140.0))
+        let actions_w = 140.0;
+        (filename_w, size_w, time_w, actions_w)
     };
 
-    // Calculate max scroll height before creating TableBuilder
-    let max_scroll_height = ui.available_height() - 10.0;
+    // Debug: log final column widths
+    log::info!("iSearch table - column widths: filename={}, size={}, time={}, actions={}, path=remainder",
+               filename_width, size_width, time_width, actions_width);
+
+    // Use most available height for the table, reserve space for statistics and spacing
+    let available_height = ui.available_height();
+    let reserved_space = 60.0; // Reserve space for: add_space(10.0) + statistics(~40px) + add_space(10.0)
+    let max_scroll_height = (available_height - reserved_space).max(400.0); // Ensure minimum 400px
+
+    log::debug!("iSearch table height - available: {}, reserved: {}, max_scroll: {}",
+               available_height, reserved_space, max_scroll_height);
 
     TableBuilder::new(ui)
         .striped(true)
         .resizable(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .max_scroll_height(max_scroll_height) // Reserve space for statistics
-        .column(Column::exact(filename_width)) // 文件名列 - 动态宽度
-        .column(Column::exact(path_width)) // 路径列 - 动态宽度
-        .column(Column::exact(size_width)) // 大小列 - 动态宽度
-        .column(Column::exact(time_width)) // 修改时间列 - 动态宽度
-        .column(Column::exact(actions_width)) // 操作列 - 动态宽度
+        .max_scroll_height(max_scroll_height) // Use almost all available height
+        .column(Column::exact(filename_width)) // 文件名列 - 固定宽度
+        .column(Column::remainder()) // 路径列 - 使用剩余空间
+        .column(Column::exact(size_width)) // 大小列 - 固定宽度
+        .column(Column::exact(time_width)) // 修改时间列 - 固定宽度
+        .column(Column::exact(actions_width)) // 操作列 - 固定宽度
         .header(20.0, |mut header| {
             // File name header - clickable for sorting
             header.col(|ui| {
@@ -1159,9 +1255,12 @@ fn render_list_view_internal<F>(
                         });
                     });
 
-                    // File path column - dynamic truncation based on column width
+                    // File path column - uses remainder space, dynamic truncation
                     row.col(|ui| {
-                        let max_path_chars = ((path_width - 20.0) / 7.0) as usize; // Estimate chars based on width
+                        // Estimate available width for path column (remainder after other columns)
+                        let other_columns_width = filename_width + size_width + time_width + actions_width;
+                        let estimated_path_width = (total_available - other_columns_width).max(200.0);
+                        let max_path_chars = ((estimated_path_width - 20.0) / 7.0) as usize; // Estimate chars based on width
                         let truncated_path = utils::truncate_with_ellipsis(&result.path, max_path_chars.max(15));
                         ui.label(truncated_path).on_hover_text(&result.path);
                     });
@@ -1251,7 +1350,7 @@ fn render_list_view_internal<F>(
 }
 
 /// Render search statistics at the bottom
-fn render_search_statistics(ui: &mut egui::Ui, state: &ISearchState) {
+fn render_search_statistics(ui: &mut egui::Ui, state: &mut ISearchState) {
     // Add some spacing before bottom statistics
     ui.add_space(10.0);
 
@@ -1270,4 +1369,106 @@ fn render_search_statistics(ui: &mut egui::Ui, state: &ISearchState) {
             )).small().weak());
         }
     });
+
+    // Export dialog
+    if state.show_export_dialog {
+        egui::Window::new("导出搜索结果")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(500.0)
+            .show(ui.ctx(), |ui| {
+                ui.vertical(|ui| {
+                    ui.label(format!("准备导出 {} 个搜索结果", state.search_results.len()));
+                    ui.add_space(10.0);
+
+                    // Export format selection
+                    ui.horizontal(|ui| {
+                        ui.label("导出格式:");
+                        egui::ComboBox::from_label("")
+                            .selected_text(state.export_format.display_name())
+                            .show_ui(ui, |ui| {
+                                for format in ISearchState::get_export_formats() {
+                                    let selected = ui.selectable_value(&mut state.export_format, format.clone(), format.display_name());
+                                    if selected.clicked() {
+                                        state.set_export_format(format);
+                                    }
+                                }
+                            });
+                    });
+
+                    ui.add_space(10.0);
+
+                    // File path input
+                    ui.horizontal(|ui| {
+                        ui.label("保存路径:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut state.export_file_path)
+                                .desired_width(ui.available_width() - 80.0)
+                        );
+                        if ui.button("📁").on_hover_text("选择文件夹").clicked() {
+                            // TODO: Open file dialog
+                            log::info!("File dialog not implemented yet");
+                        }
+                    });
+
+                    ui.add_space(10.0);
+
+                    // Export options
+                    ui.group(|ui| {
+                        ui.label("导出选项:");
+                        ui.checkbox(&mut state.export_config.include_stats, "包含搜索统计");
+                        ui.checkbox(&mut state.export_config.include_content_preview, "包含内容预览");
+                        ui.checkbox(&mut state.export_config.include_metadata, "包含元数据");
+
+                        if state.export_config.include_content_preview {
+                            ui.horizontal(|ui| {
+                                ui.label("预览长度:");
+                                let mut preview_length = state.export_config.max_preview_length as f32;
+                                if ui.add(egui::Slider::new(&mut preview_length, 50.0..=1000.0)
+                                    .suffix(" 字符"))
+                                    .changed() {
+                                    state.export_config.max_preview_length = preview_length as usize;
+                                }
+                            });
+                        }
+                    });
+
+                    ui.add_space(15.0);
+
+                    // Buttons
+                    ui.horizontal(|ui| {
+                        if ui.button("导出").clicked() {
+                            match state.export_search_results() {
+                                Ok(()) => {
+                                    log::info!("Export successful");
+                                    state.close_export_dialog();
+                                }
+                                Err(e) => {
+                                    log::error!("Export failed: {}", e);
+                                    // TODO: Show error message to user
+                                }
+                            }
+                        }
+
+                        if ui.button("取消").clicked() {
+                            state.close_export_dialog();
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("预览").on_hover_text("预览导出内容").clicked() {
+                                match state.export_search_results_to_string() {
+                                    Ok(content) => {
+                                        log::info!("Export preview generated: {} characters", content.len());
+                                        // TODO: Show preview in a separate window
+                                    }
+                                    Err(e) => {
+                                        log::error!("Export preview failed: {}", e);
+                                    }
+                                }
+                            }
+                        });
+                    });
+                });
+            });
+    }
 }

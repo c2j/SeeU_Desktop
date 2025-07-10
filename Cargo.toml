@@ -99,4 +99,11 @@ strip = true
 lto = true
 codegen-units = 1
 
+# Patch for cross-compilation issues
+[patch.crates-io]
+# Fix crunchy crate cross-compilation issue with path separators
+# Use a fork that fixes the path separator issue for cross-compilation
+#crunchy = { path = "crates/crunchy" }
+#{ git = "https://github.com/est31/crunchy", branch = "fix_cross_compilation" }
+
 

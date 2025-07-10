@@ -50,6 +50,13 @@ impl Pty {
     pub fn child_watcher(&self) -> &ChildExitWatcher {
         &self.child_watcher
     }
+
+    /// Get the process ID of the child process.
+    ///
+    /// This provides compatibility with the Unix version's `child().id()` method.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child_watcher.pid().map(|pid| pid.get())
+    }
 }
 
 fn with_key(mut event: Event, key: usize) -> Event {
