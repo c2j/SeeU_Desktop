@@ -46,15 +46,15 @@ pub fn render_tabs_with_toolbar(ui: &mut egui::Ui, state: &mut IFileEditorState)
 /// 渲染基本文件操作按钮（没有文件打开时）
 fn render_basic_file_operations(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     // 只显示打开和新建按钮
-    if ui.button("📁 打开").clicked() {
+    if ui.button("📁 打开").on_hover_text("打开文件").clicked() {
         state.open_file_dialog();
     }
 
-    if ui.button("📂 文件夹").clicked() {
+    if ui.button("📂 文件夹").on_hover_text("选择工作目录").clicked() {
         state.open_folder_dialog();
     }
 
-    if ui.button("📄 新建").clicked() {
+    if ui.button("📄 新建").on_hover_text("新建文件").clicked() {
         create_new_file(state);
     }
 }
@@ -141,6 +141,24 @@ fn render_edit_operation_buttons(ui: &mut egui::Ui, state: &mut IFileEditorState
 
 /// 渲染视图操作按钮
 fn render_view_operation_buttons(ui: &mut egui::Ui, state: &mut IFileEditorState) {
+    // 检查是否有活动文件
+    let has_active_file = state.editor.get_active_buffer().is_some();
+
+    // 文本折行切换按钮（仅在有活动文件时显示）
+    if has_active_file {
+        let wrap_icon = if state.ui_state.word_wrap { "📏" } else { "📐" };
+        let wrap_tooltip = if state.ui_state.word_wrap { "关闭自动折行" } else { "开启自动折行" };
+
+        if ui.small_button(wrap_icon).on_hover_text(wrap_tooltip).clicked() {
+            let old_state = state.ui_state.word_wrap;
+            state.ui_state.word_wrap = !state.ui_state.word_wrap;
+            log::info!("WORD_WRAP_TOGGLE: {} -> {} (from tab toolbar)", old_state, state.ui_state.word_wrap);
+        }
+    } else {
+        // 诊断日志：没有活动文件时
+        log::debug!("WORD_WRAP_DIAGNOSIS: No active file, wrap button not shown");
+    }
+
     // 视图切换按钮
     let tree_button_text = if state.ui_state.show_file_tree {
         "🗂️ 隐藏树"
@@ -148,18 +166,24 @@ fn render_view_operation_buttons(ui: &mut egui::Ui, state: &mut IFileEditorState
         "🗂️ 显示树"
     };
 
-    if ui.button(tree_button_text).clicked() {
+    let tree_tooltip = if state.ui_state.show_file_tree {
+        "隐藏文件树面板"
+    } else {
+        "显示文件树面板"
+    };
+
+    if ui.button(tree_button_text).on_hover_text(tree_tooltip).clicked() {
         state.ui_state.show_file_tree = !state.ui_state.show_file_tree;
         log::info!("File tree visibility toggled: {}", state.ui_state.show_file_tree);
     }
 
     // 标签页操作按钮
     if !state.editor.tabs.is_empty() {
-        if ui.small_button("×").on_hover_text("关闭所有").clicked() {
+        if ui.small_button("×").on_hover_text("关闭所有标签页").clicked() {
             close_all_tabs(state);
         }
 
-        if ui.small_button("⊗").on_hover_text("关闭其他").clicked() {
+        if ui.small_button("⊗").on_hover_text("关闭其他标签页").clicked() {
             close_other_tabs(state);
         }
     }
@@ -202,6 +226,15 @@ fn render_tab_buttons(ui: &mut egui::Ui, state: &mut IFileEditorState) {
                             .min_size(egui::vec2(50.0, 18.0));
 
                         let tab_response = ui.add(tab_button);
+
+                        // 添加悬停提示显示完整文件路径
+                        let full_path = tab_path.to_string_lossy();
+                        let hover_text = if is_modified {
+                            format!("{}\n● 文件已修改", full_path)
+                        } else {
+                            full_path.to_string()
+                        };
+                        let tab_response = tab_response.on_hover_text(hover_text);
 
                         // 处理标签页点击
                         if tab_response.clicked() {
@@ -270,7 +303,7 @@ fn create_new_file(state: &mut IFileEditorState) {
             state.last_error = Some(crate::FileEditorError::IoError(e));
         } else {
             // 打开新创建的文件
-            if let Err(e) = state.editor.open_file(path.clone(), &state.settings) {
+            if let Err(e) = state.editor.open_file(path.clone(), &state.settings, state.async_load_sender.clone()) {
                 log::error!("Failed to open new file: {}", e);
                 state.last_error = Some(e);
             } else {

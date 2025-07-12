@@ -46,9 +46,17 @@ pub struct EditorSettings {
     pub syntax_highlighting: bool,
     pub max_file_size_mb: usize,
     pub virtual_scrolling: bool,
+    pub virtual_scroll_threshold: usize,  // 启用虚拟滚动的行数阈值
+    pub max_rendered_lines: usize,        // 最大同时渲染行数
+    pub large_file_optimization: bool,    // 大文件优化模式
+    pub chunk_loading: bool,              // 分块加载
 
     // 工作区设置
     pub last_opened_directory: Option<String>,
+
+    // 文件树设置
+    pub show_hidden_files: bool,
+    pub lazy_loading: bool,
 
     // 历史记录设置
     pub recent_directories: Vec<RecentDirectory>,
@@ -77,7 +85,13 @@ impl Default for EditorSettings {
             syntax_highlighting: true,
             max_file_size_mb: 10,
             virtual_scrolling: true,
+            virtual_scroll_threshold: 2000,    // 超过2000行启用虚拟滚动（约1MB文本）
+            max_rendered_lines: 1000,          // 最多同时渲染1000行
+            large_file_optimization: true,     // 启用大文件优化
+            chunk_loading: true,               // 启用分块加载
             last_opened_directory: None,
+            show_hidden_files: false,  // 默认不显示隐藏文件
+            lazy_loading: true,        // 默认启用懒加载
             recent_directories: Vec::new(),
             recent_files: Vec::new(),
             max_recent_directories: 5,
@@ -243,7 +257,20 @@ impl FileEditorSettingsModule {
                 changed = true;
             }
         });
-        
+
+        // 文件树设置
+        ui.collapsing("🌳 文件树设置", |ui| {
+            if ui.checkbox(&mut self.temp_settings.show_hidden_files, "显示隐藏文件").changed() {
+                changed = true;
+            }
+            ui.label("💡 提示：即使显示隐藏文件，也会跳过 .git、node_modules 等大型目录");
+
+            if ui.checkbox(&mut self.temp_settings.lazy_loading, "懒加载").changed() {
+                changed = true;
+            }
+            ui.label("💡 提示：懒加载可以提高大目录的打开速度");
+        });
+
         // 性能设置
         ui.collapsing("🚀 性能设置", |ui| {
             if ui.checkbox(&mut self.temp_settings.syntax_highlighting, "语法高亮").changed() {

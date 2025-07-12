@@ -1,0 +1,12 @@
+这是一行很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长的文本，用来测试折行功能是否正常工作。
+
+这是第二行，也是一行很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长的文本。
+
+这是第三行，包含一些代码示例：
+fn main() {
+    println!("Hello, world! This is a very long line that should wrap when word wrap is enabled but should not wrap when word wrap is disabled.");
+    let very_long_variable_name_that_exceeds_normal_line_length = "This is a very long string that demonstrates horizontal scrolling";
+    println!("{}", very_long_variable_name_that_exceeds_normal_line_length);
+}
+
+这是最后一行，用来测试折行功能在不同模式下的表现。

@@ -1911,6 +1911,28 @@ impl eframe::App for SeeUApp {
         let can_insert_to_note = self.active_module == Module::Note && self.inote_state.current_note.is_some();
         aiAssist::update_can_insert_to_note(&mut self.ai_assist_state, can_insert_to_note);
 
+        // 更新 AI 助手的文件上下文 - 当处于文件编辑器模块时
+        if self.active_module == Module::FileEditor {
+            let file_context = self.ifile_editor_state.get_current_file_context();
+            // 转换文件上下文类型
+            let ai_file_context = file_context.map(|ctx| aiAssist::state::FileContext {
+                file_path: ctx.file_path.clone(),
+                file_name: ctx.file_name.clone(),
+                language: ctx.language.clone(),
+                content: ctx.content.clone(),
+                selected_text: ctx.selected_text.clone(),
+                cursor_line: ctx.cursor_line,
+                cursor_column: ctx.cursor_column,
+                total_lines: ctx.total_lines,
+                is_modified: ctx.is_modified,
+                is_read_only: ctx.is_read_only,
+            });
+            aiAssist::set_file_context(&mut self.ai_assist_state, ai_file_context);
+        } else {
+            // 清除文件上下文
+            aiAssist::set_file_context(&mut self.ai_assist_state, None);
+        }
+
         // 处理待执行的工具调用
         self.process_pending_tool_execution();
 

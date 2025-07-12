@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use crate::api::{ApiService, ToolCall, ChatResponse};
 use crate::mcp_tools::{McpToolCallInfo, McpToolCallResult, McpServerCapabilities};
 use once_cell::sync::Lazy;
@@ -136,6 +137,9 @@ pub struct AIAssistState {
     // 存储最近的搜索查询和结果，用于 @search 引用
     pub last_search_query: Option<String>,
     pub last_search_results: Option<String>,
+
+    // 文件编辑器上下文信息
+    pub current_file_context: Option<FileContext>,
 }
 
 impl Default for AIAssistState {
@@ -196,6 +200,7 @@ impl Default for AIAssistState {
             force_layout_update: false,
             last_search_query: None,
             last_search_results: None,
+            current_file_context: None,
             show_api_key_masked: true, // 默认启用掩码显示
         }
     }
@@ -713,10 +718,17 @@ impl AIAssistState {
     fn prepare_messages_for_api(&self) -> Vec<(MessageRole, String)> {
         // Get all messages from the current session
         let session = &self.chat_sessions[self.active_session_idx];
+        let mut messages = Vec::new();
+
+        // 如果有文件上下文，添加系统消息
+        if let Some(file_context) = &self.current_file_context {
+            let context_message = self.format_file_context_message(file_context);
+            messages.push((MessageRole::System, context_message));
+        }
 
         // Convert to the format expected by the API, processing @search references
         // 过滤掉Slash指令消息，因为它们不应该发送给LLM
-        session.messages.iter()
+        let session_messages: Vec<(MessageRole, String)> = session.messages.iter()
             .filter(|msg| msg.role != MessageRole::SlashCommand)
             .map(|msg| {
                 let content = if msg.role == MessageRole::User {
@@ -728,7 +740,10 @@ impl AIAssistState {
 
                 (msg.role.clone(), content)
             })
-            .collect()
+            .collect();
+
+        messages.extend(session_messages);
+        messages
     }
 
     /// 处理消息中的 @search 引用
@@ -1023,6 +1038,61 @@ impl AIAssistState {
     /// 更新是否可以插入到笔记的状态
     pub fn update_can_insert_to_note(&mut self, can_insert: bool) {
         self.can_insert_to_note = can_insert;
+    }
+
+    /// Set current file context for AI assistant
+    pub fn set_file_context(&mut self, context: Option<FileContext>) {
+        self.current_file_context = context;
+    }
+
+    /// Get current file context
+    pub fn get_file_context(&self) -> Option<&FileContext> {
+        self.current_file_context.as_ref()
+    }
+
+    /// Format file context as system message
+    fn format_file_context_message(&self, context: &FileContext) -> String {
+        let mut message = format!(
+            "当前文件上下文:\n文件: {} ({})\n",
+            context.file_name,
+            context.file_path.display()
+        );
+
+        if let Some(language) = &context.language {
+            message.push_str(&format!("语言: {}\n", language));
+        }
+
+        message.push_str(&format!(
+            "位置: 第{}行第{}列 (共{}行)\n",
+            context.cursor_line,
+            context.cursor_column,
+            context.total_lines
+        ));
+
+        if context.is_modified {
+            message.push_str("状态: 已修改\n");
+        }
+
+        if context.is_read_only {
+            message.push_str("权限: 只读\n");
+        }
+
+        // 如果有选中文本，添加选中内容
+        if let Some(selected_text) = &context.selected_text {
+            if !selected_text.trim().is_empty() {
+                message.push_str(&format!("\n选中文本:\n```\n{}\n```\n", selected_text));
+            }
+        }
+
+        // 添加文件内容（截取前1000个字符以避免过长）
+        let content_preview = if context.content.len() > 1000 {
+            format!("{}...\n[文件内容已截取，共{}字符]", &context.content[..1000], context.content.len())
+        } else {
+            context.content.clone()
+        };
+
+        message.push_str(&format!("\n文件内容:\n```\n{}\n```", content_preview));
+        message
     }
 
     /// Save current chat sessions to persistent storage
@@ -1930,6 +2000,21 @@ pub enum SlashCommand {
     Clear,
     New,
     Help,
+}
+
+/// 文件上下文信息（用于AI助手）
+#[derive(Debug, Clone)]
+pub struct FileContext {
+    pub file_path: PathBuf,
+    pub file_name: String,
+    pub language: Option<String>,
+    pub content: String,
+    pub selected_text: Option<String>,
+    pub cursor_line: usize,
+    pub cursor_column: usize,
+    pub total_lines: usize,
+    pub is_modified: bool,
+    pub is_read_only: bool,
 }
 
 // 移除ProviderType，统一使用OpenAI compatible格式

@@ -9,6 +9,9 @@ pub fn render_file_editor(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     // 确保已初始化
     state.ensure_initialized();
 
+    // 处理异步加载消息（每帧调用）
+    state.process_async_messages();
+
     // 获取可用的完整高度
     let available_height = ui.available_height();
 
@@ -98,13 +101,36 @@ fn render_editor_area(ui: &mut egui::Ui, state: &mut IFileEditorState) {
         let toolbar_height = 40.0; // 合并工具栏大概高度
         let content_height = available_height - toolbar_height;
 
+        // 显示错误信息（如果有）
+        let mut should_clear_error = false;
+        if let Some(error) = &state.last_error {
+            ui.horizontal(|ui| {
+                ui.colored_label(egui::Color32::RED, "❌");
+                ui.colored_label(egui::Color32::RED, format!("错误: {}", error));
+                if ui.small_button("✕").on_hover_text("关闭错误提示").clicked() {
+                    should_clear_error = true;
+                }
+            });
+            ui.separator();
+        }
+        if should_clear_error {
+            state.last_error = None;
+        }
+
         // 编辑器内容区域，确保撑满剩余高度
+        let error_height = if state.last_error.is_some() { 30.0 } else { 0.0 };
+        let adjusted_content_height = content_height - error_height;
+
         ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), content_height.max(100.0)),
+            egui::vec2(ui.available_width(), adjusted_content_height.max(100.0)),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
-                ui.set_min_height(content_height.max(100.0));
-                if state.editor.get_active_buffer().is_some() {
+                ui.set_min_height(adjusted_content_height.max(100.0));
+                let has_active_buffer = state.editor.get_active_buffer().is_some();
+                log::debug!("WORD_WRAP_DIAGNOSIS: has_active_buffer={}, buffer_count={}",
+                           has_active_buffer, state.editor.buffers.len());
+
+                if has_active_buffer {
                     crate::ui::code_editor::render_code_editor(ui, state);
                 } else {
                     render_welcome_screen(ui, state);
@@ -267,7 +293,7 @@ fn render_welcome_screen(ui: &mut egui::Ui, state: &mut IFileEditorState) {
                     }
 
                     if ui.button("刷新文件树").clicked() {
-                        if let Err(e) = state.file_tree.refresh() {
+                        if let Err(e) = state.file_tree.refresh(&state.settings) {
                             log::error!("Failed to refresh file tree: {}", e);
                         }
                     }
@@ -321,7 +347,7 @@ fn create_new_file(state: &mut IFileEditorState) {
             state.last_error = Some(crate::FileEditorError::IoError(e));
         } else {
             // 打开新创建的文件
-            if let Err(e) = state.editor.open_file(path.clone(), &state.settings) {
+            if let Err(e) = state.editor.open_file(path.clone(), &state.settings, state.async_load_sender.clone()) {
                 log::error!("Failed to open new file: {}", e);
                 state.last_error = Some(e);
             } else {
@@ -708,12 +734,12 @@ fn create_new_file_in_directory(state: &mut IFileEditorState) {
             log::info!("Created new file: {:?}", file_path);
 
             // 刷新文件树
-            if let Err(e) = state.file_tree.refresh() {
+            if let Err(e) = state.file_tree.refresh(&state.settings) {
                 log::error!("Failed to refresh file tree: {}", e);
             }
 
             // 打开新创建的文件
-            if let Err(e) = state.editor.open_file(file_path, &state.settings) {
+            if let Err(e) = state.editor.open_file(file_path, &state.settings, state.async_load_sender.clone()) {
                 log::error!("Failed to open new file: {}", e);
             }
         }
@@ -751,7 +777,7 @@ fn create_new_folder_in_directory(state: &mut IFileEditorState) {
             log::info!("Created new folder: {:?}", folder_path);
 
             // 刷新文件树
-            if let Err(e) = state.file_tree.refresh() {
+            if let Err(e) = state.file_tree.refresh(&state.settings) {
                 log::error!("Failed to refresh file tree: {}", e);
             }
         }
@@ -806,7 +832,7 @@ fn rename_file_or_folder(state: &mut IFileEditorState) {
                 }
 
                 // 刷新文件树
-                if let Err(e) = state.file_tree.refresh() {
+                if let Err(e) = state.file_tree.refresh(&state.settings) {
                     log::error!("Failed to refresh file tree: {}", e);
                 }
             }
@@ -854,7 +880,7 @@ fn render_context_menu_dialog(ctx: &egui::Context, state: &mut IFileEditorState)
                     } else {
                         // 文件上下文菜单
                         if ui.button("📝 打开").clicked() {
-                            if let Err(e) = state.editor.open_file(path.clone(), &state.settings) {
+                            if let Err(e) = state.editor.open_file(path.clone(), &state.settings, state.async_load_sender.clone()) {
                                 log::error!("Failed to open file: {}", e);
                                 state.last_error = Some(e);
                             }
@@ -934,7 +960,7 @@ fn delete_file_or_folder(state: &mut IFileEditorState) {
                 }
 
                 // 刷新文件树
-                if let Err(e) = state.file_tree.refresh() {
+                if let Err(e) = state.file_tree.refresh(&state.settings) {
                     log::error!("Failed to refresh file tree: {}", e);
                 }
             }

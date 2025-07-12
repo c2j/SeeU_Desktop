@@ -3,6 +3,49 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
+
+use std::sync::mpsc::{self, Receiver, Sender};
+
+/// 文件加载状态
+#[derive(Debug, Clone)]
+pub enum FileLoadingState {
+    /// 未加载
+    NotLoading,
+    /// 正在加载
+    Loading {
+        path: PathBuf,
+        progress: f32,
+    },
+    /// 加载完成
+    Completed,
+    /// 加载失败
+    Failed(String),
+}
+
+/// 异步加载消息
+#[derive(Debug)]
+pub enum AsyncLoadMessage {
+    /// 加载进度更新
+    Progress {
+        path: PathBuf,
+        progress: f32,
+        bytes_loaded: u64,
+        total_bytes: u64,
+    },
+    /// 加载完成
+    Completed {
+        path: PathBuf,
+        content: String,
+        elapsed: std::time::Duration,
+    },
+    /// 加载失败
+    Failed {
+        path: PathBuf,
+        error: String,
+    },
+}
+
+
 use std::ops::Range;
 use crop::Rope;
 use egui_ltreeview::TreeViewState;
@@ -48,6 +91,14 @@ pub struct IFileEditorState {
     /// 上一帧的展开状态，用于检测展开状态变化
     pub previous_expanded_dirs: std::collections::HashSet<PathBuf>,
 
+    /// 上次刷新时间（用于防抖）
+    pub last_refresh_time: Option<std::time::Instant>,
+
+    /// 异步加载消息接收器
+    pub async_load_receiver: Option<Receiver<AsyncLoadMessage>>,
+    /// 异步加载消息发送器
+    pub async_load_sender: Option<Sender<AsyncLoadMessage>>,
+
     /// 编辑器状态
     pub editor: EditorState,
 
@@ -76,11 +127,17 @@ impl IFileEditorState {
         settings_manager.load_settings();
         let settings = settings_manager.get_settings().clone();
 
+        // 创建异步加载通道
+        let (sender, receiver) = mpsc::channel();
+
         Self {
             initialized: false,
             workspace_root: None,
             file_tree: FileTreeState::new(),
             previous_expanded_dirs: std::collections::HashSet::new(),
+            last_refresh_time: None,
+            async_load_receiver: Some(receiver),
+            async_load_sender: Some(sender),
             editor: EditorState::new(),
             ui_state: EditorUIState::new(),
             settings,
@@ -106,7 +163,7 @@ impl IFileEditorState {
         if let Some(last_dir) = self.settings_manager.get_last_opened_directory() {
             self.workspace_root = Some(last_dir.clone());
             // 设置根路径并立即加载文件树
-            if let Err(e) = self.file_tree.set_root(last_dir.clone()) {
+            if let Err(e) = self.file_tree.set_root(last_dir.clone(), &self.settings) {
                 log::error!("Failed to load last opened directory: {}", e);
                 // 如果加载失败，清除设置
                 self.workspace_root = None;
@@ -175,7 +232,7 @@ impl IFileEditorState {
 
     /// 设置文件树根目录并保存到设置
     pub fn set_file_tree_root(&mut self, path: PathBuf) -> FileEditorResult<()> {
-        self.file_tree.set_root(path.clone())?;
+        self.file_tree.set_root(path.clone(), &self.settings)?;
         self.workspace_root = Some(path.clone());
         self.settings_manager.update_last_opened_directory(&path);
         // 添加到最近目录历史记录
@@ -192,13 +249,13 @@ impl IFileEditorState {
         if path.is_file() {
             // 设置文件树根目录为文件的父目录
             if let Some(parent) = path.parent() {
-                self.file_tree.set_root(parent.to_path_buf())?;
+                self.file_tree.set_root(parent.to_path_buf(), &self.settings)?;
                 // 选择文件
                 self.file_tree.tree_view_state.set_one_selected(FileNodeId(path.clone()));
             }
             
             // 打开文件到编辑器
-            self.editor.open_file(path.clone(), &self.settings)?;
+            self.editor.open_file(path.clone(), &self.settings, self.async_load_sender.clone())?;
             // 添加到最近文件历史记录
             self.settings_manager.add_recent_file(&path);
         } else {
@@ -213,6 +270,56 @@ impl IFileEditorState {
     /// 获取最后的错误并清除
     pub fn take_error(&mut self) -> Option<FileEditorError> {
         self.last_error.take()
+    }
+
+    /// 处理异步加载消息（每帧调用）
+    pub fn process_async_messages(&mut self) {
+        if let Some(receiver) = &self.async_load_receiver {
+            // 处理所有待处理的消息
+            while let Ok(message) = receiver.try_recv() {
+                match message {
+                    AsyncLoadMessage::Progress { path, progress, bytes_loaded, total_bytes } => {
+                        // 更新加载状态
+                        self.editor.loading_state = FileLoadingState::Loading {
+                            path: path.clone(),
+                            progress,
+                        };
+
+                        log::debug!("Loading progress for {:?}: {:.1}% ({} / {} bytes)",
+                                   path, progress * 100.0, bytes_loaded, total_bytes);
+                    }
+                    AsyncLoadMessage::Completed { path, content, elapsed } => {
+                        log::info!("Async loading completed for {:?} in {:?}", path, elapsed);
+
+                        // 创建真正的文本缓冲区
+                        let buffer = TextBuffer {
+                            file_path: path.clone(),
+                            rope: Rope::from(content),
+                            encoding: "UTF-8".to_string(),
+                            line_ending: LineEnding::Unix,
+                            modified: false,
+                            last_saved: SystemTime::now(),
+                            read_only: false, // 加载完成后可编辑
+                            cursor: Cursor::default(),
+                            selection: None,
+                            language: None, // TODO: 实现语言检测
+                            scroll_offset: 0.0,
+                            visible_lines: 0..0,
+                        };
+
+                        // 替换占位符缓冲区
+                        self.editor.buffers.insert(path.clone(), buffer);
+                        self.editor.loading_state = FileLoadingState::NotLoading;
+
+                        log::info!("File buffer updated successfully: {:?}", path);
+                    }
+                    AsyncLoadMessage::Failed { path, error } => {
+                        log::error!("Async loading failed for {:?}: {}", path, error);
+                        self.editor.loading_state = FileLoadingState::Failed(error);
+                    }
+                }
+            }
+        }
     }
     
     /// 更新设置
@@ -244,7 +351,7 @@ impl IFileEditorState {
             log::info!("User selected file: {:?}", path);
 
             // 打开选中的文件
-            if let Err(e) = self.editor.open_file(path.clone(), &self.settings) {
+            if let Err(e) = self.editor.open_file(path.clone(), &self.settings, self.async_load_sender.clone()) {
                 log::error!("Failed to open file: {}", e);
                 self.last_error = Some(e);
             } else {
@@ -303,7 +410,7 @@ impl IFileEditorState {
         }
 
         self.workspace_root = Some(path.clone());
-        self.file_tree.set_root(path.clone())?;
+        self.file_tree.set_root(path.clone(), &self.settings)?;
         // 保存设置到文件
         self.settings_manager.update_last_opened_directory(&path);
         // 添加到最近目录历史记录
@@ -320,7 +427,7 @@ impl IFileEditorState {
                     self.open_file_from_search(request.path)?;
                 }
                 OpenRequestType::Directory => {
-                    self.file_tree.open_from_search(request.path, true)?;
+                    self.file_tree.open_from_search(request.path, true, &self.settings)?;
                 }
             }
         }
@@ -361,6 +468,83 @@ impl IFileEditorState {
             None
         }
     }
+
+    /// 防抖刷新文件树（避免频繁刷新）
+    pub fn refresh_file_tree_debounced(&mut self, min_interval_ms: u64) -> FileEditorResult<bool> {
+        let now = std::time::Instant::now();
+
+        // 检查是否需要防抖
+        if let Some(last_refresh) = self.last_refresh_time {
+            if now.duration_since(last_refresh).as_millis() < min_interval_ms as u128 {
+                return Ok(false); // 跳过刷新
+            }
+        }
+
+        self.file_tree.refresh(&self.settings)?;
+        self.last_refresh_time = Some(now);
+        Ok(true) // 执行了刷新
+    }
+
+    /// 获取当前文件信息（用于AI助手上下文）
+    pub fn get_current_file_context(&self) -> Option<FileContext> {
+        if let Some(buffer) = self.editor.get_active_buffer() {
+            let selected_text = if let Some(selection) = &buffer.selection {
+                // 获取选中的文本
+                let start_byte = self.cursor_to_byte_offset(&selection.start, buffer);
+                let end_byte = self.cursor_to_byte_offset(&selection.end, buffer);
+                if start_byte < end_byte {
+                    Some(buffer.rope.byte_slice(start_byte..end_byte).to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            Some(FileContext {
+                file_path: buffer.file_path.clone(),
+                file_name: buffer.file_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("未知文件")
+                    .to_string(),
+                language: buffer.language.clone(),
+                content: buffer.rope.to_string(),
+                selected_text,
+                cursor_line: buffer.cursor.line + 1,
+                cursor_column: buffer.cursor.column + 1,
+                total_lines: buffer.line_count(),
+                is_modified: buffer.modified,
+                is_read_only: buffer.read_only,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// 将光标位置转换为字节偏移量
+    fn cursor_to_byte_offset(&self, cursor: &Cursor, buffer: &TextBuffer) -> usize {
+        // 简化实现：使用行和列计算字节偏移
+        let mut byte_offset = 0;
+        let content = buffer.rope.to_string();
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 添加前面行的字节数
+        for (line_idx, line) in lines.iter().enumerate() {
+            if line_idx >= cursor.line {
+                break;
+            }
+            byte_offset += line.len() + 1; // +1 for newline
+        }
+
+        // 添加当前行的列偏移
+        if cursor.line < lines.len() {
+            let line = lines[cursor.line];
+            let char_offset = cursor.column.min(line.chars().count());
+            byte_offset += line.chars().take(char_offset).map(|c| c.len_utf8()).sum::<usize>();
+        }
+
+        byte_offset.min(buffer.rope.byte_len())
+    }
 }
 
 impl Default for IFileEditorState {
@@ -370,13 +554,7 @@ impl Default for IFileEditorState {
 }
 
 /// 文件加载状态
-#[derive(Debug, Clone)]
-pub enum FileLoadingState {
-    NotLoading,
-    Loading { path: PathBuf, progress: f32 },
-    Loaded,
-    Failed(String),
-}
+
 
 /// 编辑器状态
 #[derive(Debug)]
@@ -406,11 +584,8 @@ impl EditorState {
         }
     }
     
-    /// 打开文件（优化性能）
-    pub fn open_file(&mut self, path: PathBuf, settings: &EditorSettings) -> FileEditorResult<()> {
-        // 立即重置加载状态，避免UI延迟
-        self.loading_state = FileLoadingState::NotLoading;
-
+    /// 打开文件（异步加载优化）
+    pub fn open_file(&mut self, path: PathBuf, settings: &EditorSettings, async_sender: Option<Sender<AsyncLoadMessage>>) -> FileEditorResult<()> {
         // 检查文件是否已经打开
         if self.buffers.contains_key(&path) {
             // 切换到已打开的文件（快速切换）
@@ -421,43 +596,54 @@ impl EditorState {
             return Ok(());
         }
 
-        // 检查文件大小，只对真正的大文件显示加载状态
+        // 检查文件大小，决定加载策略
         let metadata = std::fs::metadata(&path)?;
-        let size_mb = metadata.len() / (1024 * 1024);
+        let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
 
-        // 只对超过5MB的文件显示加载状态，避免小文件的UI闪烁
-        if size_mb > 5 {
+        if size_mb > 1.0 {
+            // 大文件：异步加载
+            log::info!("Starting async loading for large file ({:.1} MB): {:?}", size_mb, path);
+
+            // 立即创建占位符缓冲区
+            let placeholder_buffer = self.create_placeholder_buffer(&path, size_mb);
+            self.buffers.insert(path.clone(), placeholder_buffer);
+            self.tabs.push(path.clone());
+            self.active_tab = Some(self.tabs.len() - 1);
+            self.undo_stack.insert(path.clone(), UndoStack::new());
+
+            // 设置加载状态
             self.loading_state = FileLoadingState::Loading {
                 path: path.clone(),
-                progress: 0.0
+                progress: 0.0,
             };
-            log::info!("Loading large file ({} MB): {:?}", size_mb, path);
-        }
 
-        // 创建新的文本缓冲区
-        match TextBuffer::from_file(&path, settings) {
-            Ok(buffer) => {
-                // 添加到缓冲区和标签页
-                self.buffers.insert(path.clone(), buffer);
-                self.tabs.push(path.clone());
-                self.active_tab = Some(self.tabs.len() - 1);
-
-                // 初始化撤销栈
-                self.undo_stack.insert(path.clone(), UndoStack::new());
-
-                // 立即重置加载状态
-                self.loading_state = FileLoadingState::NotLoading;
-                log::info!("File loaded successfully: {:?}", path);
-
-                Ok(())
+            // 启动异步加载
+            if let Some(sender) = async_sender {
+                self.start_async_loading(path, settings.clone(), sender);
             }
-            Err(e) => {
-                self.loading_state = FileLoadingState::Failed(e.to_string());
-                Err(e)
+
+            Ok(())
+        } else {
+            // 小文件：直接同步加载
+            match TextBuffer::from_file(&path, settings) {
+                Ok(buffer) => {
+                    self.buffers.insert(path.clone(), buffer);
+                    self.tabs.push(path.clone());
+                    self.active_tab = Some(self.tabs.len() - 1);
+                    self.undo_stack.insert(path.clone(), UndoStack::new());
+                    log::info!("Small file loaded successfully ({:.1} MB): {:?}", size_mb, path);
+                    Ok(())
+                }
+                Err(e) => {
+                    self.loading_state = FileLoadingState::Failed(e.to_string());
+                    Err(e)
+                }
             }
         }
     }
-    
+
+
+
     /// 应用设置
     pub fn apply_settings(&mut self, settings: &EditorSettings) {
         // 更新所有缓冲区的设置
@@ -580,6 +766,120 @@ impl EditorState {
         log::info!("File closed: {:?}", path);
         Ok(())
     }
+
+    /// 创建占位符缓冲区
+    fn create_placeholder_buffer(&self, path: &PathBuf, size_mb: f64) -> TextBuffer {
+        let placeholder_content = format!(
+            "📄 正在加载大文件...\n\n\
+            文件路径: {}\n\
+            文件大小: {:.1} MB\n\n\
+            ⏳ 正在后台加载中，请稍候...\n\
+            💡 提示：大文件加载完成后将自动刷新显示\n\n\
+            🚀 使用异步加载技术，界面不会阻塞",
+            path.display(),
+            size_mb
+        );
+
+        TextBuffer {
+            file_path: path.clone(),
+            rope: Rope::from(placeholder_content),
+            encoding: "UTF-8".to_string(),
+            line_ending: LineEnding::Unix,
+            modified: false,
+            last_saved: SystemTime::now(),
+            read_only: true, // 占位符期间只读
+            cursor: Cursor::default(),
+            selection: None,
+            language: None,
+            scroll_offset: 0.0,
+            visible_lines: 0..0,
+        }
+    }
+
+    /// 启动异步加载
+    fn start_async_loading(&self, path: PathBuf, settings: EditorSettings, sender: Sender<AsyncLoadMessage>) {
+        let path_clone = path.clone();
+
+        // 在新线程中执行文件加载
+        std::thread::spawn(move || {
+            let start_time = std::time::Instant::now();
+
+            match Self::load_file_async(&path_clone, &settings, &sender) {
+                Ok(content) => {
+                    let elapsed = start_time.elapsed();
+                    log::info!("Async file loading completed in {:?}: {:?}", elapsed, path_clone);
+
+                    // 发送完成消息
+                    if let Err(e) = sender.send(AsyncLoadMessage::Completed {
+                        path: path_clone,
+                        content,
+                        elapsed,
+                    }) {
+                        log::error!("Failed to send completion message: {}", e);
+                    }
+                }
+                Err(e) => {
+                    log::error!("Async file loading failed: {:?} - {}", path_clone, e);
+
+                    // 发送失败消息
+                    if let Err(send_err) = sender.send(AsyncLoadMessage::Failed {
+                        path: path_clone,
+                        error: e.to_string(),
+                    }) {
+                        log::error!("Failed to send error message: {}", send_err);
+                    }
+                }
+            }
+        });
+    }
+
+    /// 异步加载文件内容
+    fn load_file_async(path: &PathBuf, _settings: &EditorSettings, sender: &Sender<AsyncLoadMessage>) -> FileEditorResult<String> {
+        use std::io::{BufReader, Read};
+        use std::fs::File;
+
+        let file = File::open(path)?;
+        let metadata = file.metadata()?;
+        let total_size = metadata.len();
+        let mut reader = BufReader::new(file);
+        let mut content = String::new();
+
+        // 分块读取，定期发送进度更新
+        const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
+        let mut buffer = vec![0; CHUNK_SIZE];
+        let mut bytes_loaded = 0u64;
+
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break, // EOF
+                Ok(bytes_read) => {
+                    // 转换为字符串
+                    let chunk = String::from_utf8_lossy(&buffer[..bytes_read]);
+                    content.push_str(&chunk);
+                    bytes_loaded += bytes_read as u64;
+
+                    // 发送进度更新
+                    let progress = bytes_loaded as f32 / total_size as f32;
+                    if let Err(e) = sender.send(AsyncLoadMessage::Progress {
+                        path: path.clone(),
+                        progress,
+                        bytes_loaded,
+                        total_bytes: total_size,
+                    }) {
+                        log::warn!("Failed to send progress update: {}", e);
+                    }
+
+                    // 每读取1MB就让出一点时间
+                    if bytes_loaded % (1024 * 1024) == 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+                Err(e) => return Err(FileEditorError::IoError(e)),
+            }
+        }
+
+        Ok(content)
+    }
 }
 
 /// 文本缓冲区
@@ -624,15 +924,39 @@ impl TextBuffer {
             });
         }
 
-        // 对于大文件（>5MB），使用分块读取避免阻塞
-        // 小文件直接读取，提高响应速度
-        let content = if size_mb > 5 {
-            Self::read_file_chunked(path)?
-        } else {
+        // 检查文件权限
+        if let Err(e) = std::fs::File::open(path) {
+            return Err(FileEditorError::PermissionDenied {
+                path: format!("{}: {}", path.display(), e),
+            });
+        }
+
+        // 文件大小分类：
+        // 小文件：≤64KB - 直接读取，最快响应
+        // 中等文件：64KB-1MB - 带进度读取，平衡性能和体验
+        // 大文件：>1MB - 分块读取，避免阻塞UI
+        let size_kb = metadata.len() as f64 / 1024.0;
+
+        let content = if size_kb <= 64.0 {
+            // 小文件（≤64KB）：直接读取，最快响应
+            log::debug!("Reading small file ({:.1} KB) directly: {:?}", size_kb, path);
             std::fs::read_to_string(path)
-                .map_err(|_| FileEditorError::EncodingError {
-                    encoding: "UTF-8".to_string(),
+                .map_err(|e| {
+                    log::error!("Failed to read file {:?}: {}", path, e);
+                    FileEditorError::EncodingError {
+                        encoding: format!("UTF-8 (IO Error: {})", e),
+                    }
                 })?
+        } else if size_kb <= 1024.0 {
+            // 中等文件（64KB-1MB）：带进度读取
+            log::info!("Reading medium file ({:.1} KB) with progress: {:?}", size_kb, path);
+            Self::read_file_with_progress(path, |progress| {
+                log::debug!("File loading progress: {:.1}%", progress * 100.0);
+            })?
+        } else {
+            // 大文件（>1MB）：分块读取避免阻塞
+            log::info!("Reading large file ({:.1} KB) with chunked loading: {:?}", size_kb, path);
+            Self::read_file_chunked(path)?
         };
 
         // 创建 ROPE（ROPE 本身就是高效的，支持大文件）
@@ -672,6 +996,7 @@ impl TextBuffer {
         // 分块读取，每次读取64KB
         const CHUNK_SIZE: usize = 64 * 1024;
         let mut buffer = vec![0; CHUNK_SIZE];
+        let mut total_read = 0;
 
         loop {
             match reader.read(&mut buffer) {
@@ -680,9 +1005,65 @@ impl TextBuffer {
                     // 将字节转换为字符串
                     let chunk = String::from_utf8_lossy(&buffer[..n]);
                     content.push_str(&chunk);
+                    total_read += n;
 
-                    // 对于非常大的文件，可以在这里添加进度回调
-                    // 或者使用 yield 让出控制权给UI线程
+                    // 性能优化：每读取1MB数据就让出控制权
+                    if total_read % (1024 * 1024) == 0 {
+                        // 在实际应用中，这里可以使用 tokio::task::yield_now()
+                        // 或者其他方式让出控制权给UI线程
+                        std::thread::yield_now();
+                        log::debug!("Read {} MB from file: {:?}", total_read / (1024 * 1024), path);
+                    }
+                }
+                Err(e) => return Err(FileEditorError::IoError(e)),
+            }
+        }
+
+        log::info!("Completed reading {} bytes from file: {:?}", total_read, path);
+        Ok(content)
+    }
+
+    /// 优化的大文件读取（带进度回调）
+    fn read_file_with_progress<F>(path: &PathBuf, progress_callback: F) -> FileEditorResult<String>
+    where
+        F: Fn(f32) // 进度回调，0.0 到 1.0
+    {
+        use std::io::{BufReader, Read, Seek, SeekFrom};
+        use std::fs::File;
+
+        let mut file = File::open(path)?;
+        let file_size = file.seek(SeekFrom::End(0))? as usize;
+        file.seek(SeekFrom::Start(0))?;
+
+        let mut reader = BufReader::new(file);
+        let mut content = String::with_capacity(file_size.min(10 * 1024 * 1024)); // 预分配内存，最多10MB
+
+        // 分块读取，每次读取64KB
+        const CHUNK_SIZE: usize = 64 * 1024;
+        let mut buffer = vec![0; CHUNK_SIZE];
+        let mut total_read = 0;
+
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    // 将字节转换为字符串
+                    let chunk = String::from_utf8_lossy(&buffer[..n]);
+                    content.push_str(&chunk);
+                    total_read += n;
+
+                    // 更新进度
+                    let progress = if file_size > 0 {
+                        (total_read as f32) / (file_size as f32)
+                    } else {
+                        1.0
+                    };
+                    progress_callback(progress);
+
+                    // 每读取256KB就让出控制权
+                    if total_read % (256 * 1024) == 0 {
+                        std::thread::yield_now();
+                    }
                 }
                 Err(e) => return Err(FileEditorError::IoError(e)),
             }
@@ -690,7 +1071,7 @@ impl TextBuffer {
 
         Ok(content)
     }
-    
+
     /// 应用设置
     pub fn apply_settings(&mut self, _settings: &EditorSettings) {
         // 应用编辑器设置到缓冲区
@@ -928,47 +1309,69 @@ impl FileTreeState {
     }
 
     /// 设置根目录
-    pub fn set_root(&mut self, path: PathBuf) -> FileEditorResult<()> {
+    pub fn set_root(&mut self, path: PathBuf, settings: &EditorSettings) -> FileEditorResult<()> {
         self.root_path = Some(path.clone());
-        self.refresh()?;
+        self.refresh(settings)?;
         Ok(())
     }
 
     /// 刷新文件树
-    pub fn refresh(&mut self) -> FileEditorResult<()> {
+    pub fn refresh(&mut self, settings: &EditorSettings) -> FileEditorResult<()> {
         if let Some(root) = self.root_path.clone() {
-            self.scan_directory_recursive(&root)?;
+            self.scan_directory_recursive(&root, settings)?;
         }
         Ok(())
     }
 
+
+
     /// 扫描目录并构建文件条目映射（非递归，懒加载）
-    fn scan_directory_recursive(&mut self, path: &PathBuf) -> FileEditorResult<()> {
+    fn scan_directory_recursive(&mut self, path: &PathBuf, settings: &EditorSettings) -> FileEditorResult<()> {
         self.file_entries.clear();
         self.directory_children.clear();
 
         // 只扫描根目录，不递归扫描子目录
-        self.scan_single_directory(path)?;
+        self.scan_single_directory(path, settings)?;
         Ok(())
     }
 
     /// 扫描单个目录（非递归）
-    fn scan_single_directory(&mut self, path: &PathBuf) -> FileEditorResult<()> {
+    fn scan_single_directory(&mut self, path: &PathBuf, settings: &EditorSettings) -> FileEditorResult<()> {
         if !path.exists() {
             return Ok(());
         }
 
+        // 性能优化：如果不启用懒加载，限制扫描深度
+        if !settings.lazy_loading {
+            log::warn!("Lazy loading is disabled, this may impact performance for large directories");
+        }
+
+        let start_time = std::time::Instant::now();
         let entries = std::fs::read_dir(path)?;
         let mut children = Vec::new();
+        let mut processed_count = 0;
 
         for entry in entries {
             let entry = entry?;
             let entry_path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
 
-            // 跳过隐藏文件
-            if name.starts_with('.') {
+            // 根据设置决定是否跳过隐藏文件
+            if name.starts_with('.') && !settings.show_hidden_files {
                 continue;
+            }
+
+            // 跳过特定的隐藏目录（即使设置显示隐藏文件也跳过这些）
+            if self.should_skip_directory(&name) {
+                continue;
+            }
+
+            processed_count += 1;
+
+            // 性能优化：对于大目录，限制一次性加载的文件数量
+            if processed_count > 1000 {
+                log::warn!("Directory {} contains more than 1000 items, truncating for performance", path.display());
+                break;
             }
 
             let is_dir = entry_path.is_dir();
@@ -1008,23 +1411,53 @@ impl FileTreeState {
         });
 
         self.directory_children.insert(path.clone(), children);
+
+        let elapsed = start_time.elapsed();
+        if elapsed.as_millis() > 100 {
+            log::warn!("Directory scan took {}ms for {} items in {:?}",
+                      elapsed.as_millis(), processed_count, path);
+        } else {
+            log::debug!("Directory scan completed in {}ms for {} items in {:?}",
+                       elapsed.as_millis(), processed_count, path);
+        }
+
         Ok(())
     }
 
     /// 按需加载目录的子项（懒加载）
-    pub fn load_directory_children(&mut self, path: &PathBuf) -> FileEditorResult<()> {
+    pub fn load_directory_children(&mut self, path: &PathBuf, settings: &EditorSettings) -> FileEditorResult<()> {
         // 如果已经加载过，直接返回
         if self.directory_children.contains_key(path) {
             return Ok(());
         }
 
-        self.scan_single_directory(path)?;
+        self.scan_single_directory(path, settings)?;
         Ok(())
     }
 
     /// 获取目录的子项
     pub fn get_children(&self, path: &PathBuf) -> Vec<PathBuf> {
         self.directory_children.get(path).cloned().unwrap_or_default()
+    }
+
+    /// 判断是否应该跳过特定目录（即使显示隐藏文件也跳过）
+    fn should_skip_directory(&self, name: &str) -> bool {
+        // 这些目录通常很大且不需要编辑，即使用户选择显示隐藏文件也跳过
+        matches!(name,
+            ".git" |
+            "node_modules" |
+            ".vscode" |
+            ".idea" |
+            "__pycache__" |
+            ".pytest_cache" |
+            "target" |      // Rust build directory
+            "build" |       // Common build directory
+            "dist" |        // Distribution directory
+            ".next" |       // Next.js build directory
+            ".nuxt" |       // Nuxt.js build directory
+            "coverage" |    // Test coverage directory
+            ".nyc_output"   // NYC coverage directory
+        )
     }
 
     /// 获取文件条目
@@ -1084,14 +1517,14 @@ impl FileTreeState {
     }
 
     /// 从搜索结果打开文件或目录
-    pub fn open_from_search(&mut self, path: PathBuf, is_directory: bool) -> FileEditorResult<()> {
+    pub fn open_from_search(&mut self, path: PathBuf, is_directory: bool, settings: &EditorSettings) -> FileEditorResult<()> {
         if is_directory {
             // 打开目录：设置为根目录
-            self.set_root(path)?;
+            self.set_root(path, settings)?;
         } else {
             // 打开文件：导航到文件所在目录并选中文件
             if let Some(parent) = path.parent() {
-                self.set_root(parent.to_path_buf())?;
+                self.set_root(parent.to_path_buf(), settings)?;
 
                 // 选中文件
                 self.tree_view_state.set_one_selected(FileNodeId(path.clone()));
@@ -1147,6 +1580,21 @@ pub struct FileStatusInfo {
     pub read_only: bool,
     pub cursor_line: usize,
     pub cursor_column: usize,
+}
+
+/// 文件上下文信息（用于AI助手）
+#[derive(Debug, Clone)]
+pub struct FileContext {
+    pub file_path: PathBuf,
+    pub file_name: String,
+    pub language: Option<String>,
+    pub content: String,
+    pub selected_text: Option<String>,
+    pub cursor_line: usize,
+    pub cursor_column: usize,
+    pub total_lines: usize,
+    pub is_modified: bool,
+    pub is_read_only: bool,
 }
 
 /// 撤销操作类型
@@ -1216,7 +1664,7 @@ pub struct EditorUIState {
 
 impl EditorUIState {
     pub fn new() -> Self {
-        Self {
+        let state = Self {
             show_file_tree: true,
             file_tree_width: 250.0,
             editor_font_size: 14.0,
@@ -1244,7 +1692,10 @@ impl EditorUIState {
             show_context_menu: false,
             context_menu_path: None,
             context_menu_is_dir: false,
-        }
+        };
+
+        log::debug!("WORD_WRAP_DIAGNOSIS: EditorUIState initialized with word_wrap={}", state.word_wrap);
+        state
     }
 }
 

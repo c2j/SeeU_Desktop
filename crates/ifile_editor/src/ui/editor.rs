@@ -566,8 +566,9 @@ fn render_editor_toolbar(ui: &mut egui::Ui, state: &mut IFileEditorState) {
         // 视图选项按钮（可切换状态）
         let wrap_text = if state.ui_state.word_wrap { "📏 折行 ✓" } else { "📏 折行" };
         if ui.small_button(wrap_text).clicked() {
+            let old_state = state.ui_state.word_wrap;
             state.ui_state.word_wrap = !state.ui_state.word_wrap;
-            log::info!("Word wrap toggled: {}", state.ui_state.word_wrap);
+            log::info!("WORD_WRAP_TOGGLE: {} -> {} (from toolbar)", old_state, state.ui_state.word_wrap);
         }
 
         let line_numbers_text = if state.ui_state.show_line_numbers { "🔢 行号 ✓" } else { "🔢 行号" };
@@ -622,7 +623,9 @@ fn render_editor_toolbar_compact(ui: &mut egui::Ui, state: &mut IFileEditorState
         // 视图切换
         let wrap_icon = if state.ui_state.word_wrap { "📏✓" } else { "📏" };
         if ui.small_button(wrap_icon).clicked() {
+            let old_state = state.ui_state.word_wrap;
             state.ui_state.word_wrap = !state.ui_state.word_wrap;
+            log::info!("WORD_WRAP_TOGGLE: {} -> {} (from compact toolbar)", old_state, state.ui_state.word_wrap);
         }
 
         let line_icon = if state.ui_state.show_line_numbers { "🔢✓" } else { "🔢" };
@@ -778,7 +781,7 @@ fn render_text_edit_widget_simple(ui: &mut egui::Ui, text: &mut String, word_wra
 
 /// 直接渲染文本编辑器（精确矩形分配，同步滚动）
 fn render_text_editor_direct(ui: &mut egui::Ui, state: &mut IFileEditorState, editor_rect: egui::Rect) {
-    if let Some(buffer) = state.editor.get_active_buffer() {
+    if let Some(buffer) = state.editor.get_active_buffer_mut() {
         let mut text = buffer.rope.to_string();
         let word_wrap = state.ui_state.word_wrap;
         let show_line_numbers = state.ui_state.show_line_numbers;
@@ -847,6 +850,14 @@ fn render_text_editor_direct(ui: &mut egui::Ui, state: &mut IFileEditorState, ed
             ui.allocate_ui_at_rect(editor_rect, |ui| {
                 render_text_edit_at_rect(ui, &mut text, word_wrap, editor_rect, font_size);
             });
+        }
+
+        // 保存文本变化回缓冲区
+        if buffer.rope.to_string() != text {
+            let text_len = text.len();
+            buffer.rope = crop::Rope::from(text);
+            buffer.modified = true;
+            log::debug!("Text buffer updated, length: {}", text_len);
         }
     }
 }

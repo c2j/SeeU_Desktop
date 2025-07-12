@@ -75,6 +75,11 @@ pub fn update_can_insert_to_note(state: &mut AIAssistState, can_insert: bool) {
     state.update_can_insert_to_note(can_insert);
 }
 
+/// Set current file context for AI assistant
+pub fn set_file_context(state: &mut AIAssistState, context: Option<state::FileContext>) {
+    state.set_file_context(context);
+}
+
 /// Save AI assistant settings
 pub fn save_settings(state: &AIAssistState) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;

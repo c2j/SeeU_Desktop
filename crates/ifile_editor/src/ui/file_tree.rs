@@ -48,7 +48,7 @@ fn render_file_tree_header(ui: &mut egui::Ui, state: &mut IFileEditorState) {
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("🔄").on_hover_text("刷新").clicked() {
-                if let Err(e) = state.file_tree.refresh() {
+                if let Err(e) = state.file_tree.refresh(&state.settings) {
                     log::error!("Failed to refresh file tree: {}", e);
                 }
             }
@@ -143,11 +143,28 @@ fn check_and_load_expanded_directories(state: &mut IFileEditorState) {
         if let Some(entry) = state.file_tree.get_file_entry(&path) {
             if entry.is_dir && !state.file_tree.directory_children.contains_key(&path) {
                 log::info!("Loading children for newly expanded directory: {:?}", path);
-                if let Err(e) = state.file_tree.load_directory_children(&path) {
-                    log::error!("Failed to load directory children: {}", e);
-                    state.last_error = Some(e);
+
+                // 性能优化：对于懒加载，限制同时加载的目录数量
+                if state.settings.lazy_loading {
+                    let loading_start = std::time::Instant::now();
+                    if let Err(e) = state.file_tree.load_directory_children(&path, &state.settings) {
+                        log::error!("Failed to load directory children: {}", e);
+                        state.last_error = Some(e);
+                    } else {
+                        let elapsed = loading_start.elapsed();
+                        if elapsed.as_millis() > 50 {
+                            log::warn!("Slow directory loading: {}ms for {:?}", elapsed.as_millis(), path);
+                        }
+                        log::info!("Successfully loaded children for expanded directory: {:?}", path);
+                    }
                 } else {
-                    log::info!("Successfully loaded children for expanded directory: {:?}", path);
+                    // 非懒加载模式：立即加载
+                    if let Err(e) = state.file_tree.load_directory_children(&path, &state.settings) {
+                        log::error!("Failed to load directory children: {}", e);
+                        state.last_error = Some(e);
+                    } else {
+                        log::info!("Successfully loaded children for expanded directory: {:?}", path);
+                    }
                 }
             }
         }
@@ -179,7 +196,7 @@ fn ensure_root_loaded(state: &mut IFileEditorState) {
     if let Some(root) = state.file_tree.root_path.clone() {
         // 如果根目录还没有加载，则加载它
         if !state.file_tree.directory_children.contains_key(&root) {
-            if let Err(e) = state.file_tree.load_directory_children(&root) {
+            if let Err(e) = state.file_tree.load_directory_children(&root, &state.settings) {
                 log::error!("Failed to load root directory: {}", e);
             }
         }
@@ -233,6 +250,30 @@ fn build_tree_nodes_simple(
     directory_children: &HashMap<PathBuf, Vec<PathBuf>>,
     path: &PathBuf
 ) {
+    let mut node_count = 0;
+    build_tree_nodes_simple_with_limit(builder, file_entries, directory_children, path, 0, 500, &mut node_count)
+}
+
+/// 构建树节点（带节点数量限制的懒加载模式）
+fn build_tree_nodes_simple_with_limit(
+    builder: &mut TreeViewBuilder<FileNodeId>,
+    file_entries: &HashMap<PathBuf, crate::state::FileEntry>,
+    directory_children: &HashMap<PathBuf, Vec<PathBuf>>,
+    path: &PathBuf,
+    current_depth: usize,
+    max_nodes: usize,
+    node_count: &mut usize
+) {
+    // 性能优化：限制树的深度和节点数量
+    if current_depth > 10 {
+        log::warn!("File tree depth limit reached at {}, stopping recursion", current_depth);
+        return;
+    }
+
+    if *node_count > max_nodes {
+        log::warn!("File tree node limit reached at {}, stopping expansion", *node_count);
+        return;
+    }
     let children = directory_children.get(path).cloned().unwrap_or_default();
 
     for child_path in children {
@@ -251,17 +292,36 @@ fn build_tree_nodes_simple(
                     // 只有在目录已经加载了子项时才递归构建子节点
                     // 这实现了真正的懒加载：只有用户展开目录时才加载和显示子项
                     if directory_children.contains_key(&child_path) {
-                        build_tree_nodes_simple(builder, file_entries, directory_children, &child_path);
+                        *node_count += 1;
+                        build_tree_nodes_simple_with_limit(
+                            builder,
+                            file_entries,
+                            directory_children,
+                            &child_path,
+                            current_depth + 1,
+                            max_nodes,
+                            node_count
+                        );
                     }
                     // 如果目录还没有加载子项，就不显示任何子节点
                     // 用户点击箭头时会触发SetSelected事件，我们在那里加载内容
                 }
                 builder.close_dir();
             } else {
-                // 文件节点 - 默认已经是可激活的
+                // 文件节点 - 明确设置为可激活和可选择
                 let truncated_name = truncate_filename(&entry.name, 25); // 限制文件名长度
+
+                // 检查文件是否可编辑，添加视觉提示
+                let is_editable = crate::state::is_editable_file(&child_path);
+                let label_text = if is_editable {
+                    format!("{} {}", entry.icon, truncated_name)
+                } else {
+                    format!("{} {} 🔒", entry.icon, truncated_name) // 添加锁图标表示不可编辑
+                };
+
                 let node_builder = NodeBuilder::leaf(node_id)
-                    .label(format!("{} {}", entry.icon, truncated_name));
+                    .activatable(true)  // 明确设置文件可激活（双击）
+                    .label(label_text);
 
                 builder.node(node_builder);
             }
@@ -280,8 +340,23 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
                     if let Some(entry) = state.file_tree.get_file_entry(&path) {
                         if !entry.is_dir {
                             // 文件：打开文件
-                            log::info!("Opening file: {:?}", path);
-                            match state.editor.open_file(path.clone(), &state.settings) {
+                            log::info!("Opening file (double-click): {:?}", path);
+
+                            // 检查文件是否存在和可读
+                            if !path.exists() {
+                                log::error!("File does not exist: {:?}", path);
+                                state.last_error = Some(crate::FileEditorError::FileNotFound {
+                                    path: path.to_string_lossy().to_string(),
+                                });
+                                return;
+                            }
+
+                            if !path.is_file() {
+                                log::error!("Path is not a file: {:?}", path);
+                                return;
+                            }
+
+                            match state.editor.open_file(path.clone(), &state.settings, state.async_load_sender.clone()) {
                                 Ok(()) => {
                                     // 添加到最近文件历史记录
                                     state.settings_manager.add_recent_file(&path);
@@ -291,7 +366,7 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
                                     }
                                 }
                                 Err(e) => {
-                                    log::error!("Failed to open file: {}", e);
+                                    log::error!("Failed to open file {:?}: {}", path, e);
                                     state.last_error = Some(e);
                                 }
                             }
@@ -313,8 +388,23 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
                     if let Some(entry) = state.file_tree.get_file_entry(path) {
                         if !entry.is_dir {
                             // 文件：立即打开
-                            log::info!("Opening selected file: {:?}", path);
-                            match state.editor.open_file(path.clone(), &state.settings) {
+                            log::info!("Opening selected file (single-click): {:?}", path);
+
+                            // 检查文件是否存在和可读
+                            if !path.exists() {
+                                log::error!("Selected file does not exist: {:?}", path);
+                                state.last_error = Some(crate::FileEditorError::FileNotFound {
+                                    path: path.to_string_lossy().to_string(),
+                                });
+                                return;
+                            }
+
+                            if !path.is_file() {
+                                log::error!("Selected path is not a file: {:?}", path);
+                                return;
+                            }
+
+                            match state.editor.open_file(path.clone(), &state.settings, state.async_load_sender.clone()) {
                                 Ok(()) => {
                                     // 添加到最近文件历史记录
                                     state.settings_manager.add_recent_file(&path);
@@ -324,7 +414,7 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
                                     }
                                 }
                                 Err(e) => {
-                                    log::error!("Failed to open selected file: {}", e);
+                                    log::error!("Failed to open selected file {:?}: {}", path, e);
                                     state.last_error = Some(e);
                                 }
                             }
@@ -335,7 +425,7 @@ fn handle_tree_actions(actions: Vec<Action<FileNodeId>>, state: &mut IFileEditor
 
                             // 确保目录内容已加载（懒加载）
                             if !state.file_tree.directory_children.contains_key(path) {
-                                if let Err(e) = state.file_tree.load_directory_children(path) {
+                                if let Err(e) = state.file_tree.load_directory_children(path, &state.settings) {
                                     log::error!("Failed to load directory children: {}", e);
                                     state.last_error = Some(e);
                                 } else {
@@ -479,7 +569,7 @@ fn render_directory_picker(ui: &mut egui::Ui, state: &mut IFileEditorState) {
 fn render_file_context_menu_direct(ui: &mut egui::Ui, path: &PathBuf, state: &mut IFileEditorState) {
     if ui.button("📝 打开").clicked() {
         log::info!("Opening file from context menu: {:?}", path);
-        match state.editor.open_file(path.clone(), &state.settings) {
+        match state.editor.open_file(path.clone(), &state.settings, state.async_load_sender.clone()) {
             Ok(()) => {
                 // 添加到最近文件历史记录
                 state.settings_manager.add_recent_file(&path);

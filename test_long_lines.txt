@@ -1,0 +1,11 @@
+这是一行非常长的文本，用来测试文本编辑器的自动折行功能。这行文本包含了很多中文字符，应该会超出编辑器的显示宽度，从而触发自动折行的功能。当用户点击折行按钮时，这行文本应该会根据编辑器的宽度自动换行显示，而不是水平滚动。
+
+This is a very long line of text in English to test the word wrap functionality of the text editor. This line contains many English characters and should exceed the display width of the editor, thus triggering the automatic word wrap feature. When the user clicks the word wrap button, this line should automatically wrap according to the editor's width instead of horizontal scrolling.
+
+第三行也是一个很长的测试行，包含了混合的中英文内容。This line mixes Chinese and English content to test how the word wrap handles different character types. 这样可以更好地验证折行功能在处理不同语言文本时的表现。The goal is to ensure that line numbers remain consistent regardless of whether word wrap is enabled or disabled.
+
+短行
+Another short line
+再一个短行
+
+最后一行超长文本：Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. 这是中文部分的超长文本，用来测试混合语言的折行效果。
