@@ -444,6 +444,15 @@ impl DbINoteState {
         }
 
         if let Some(note) = self.notes.get(note_id).cloned() {
+            // 首先找到包含这个笔记的笔记本并选择它
+            for (notebook_idx, notebook) in self.notebooks.iter().enumerate() {
+                if notebook.note_ids.contains(&note_id.to_string()) {
+                    self.current_notebook = Some(notebook_idx);
+                    log::info!("Auto-selected notebook: {} for note: {}", notebook.name, note.title);
+                    break;
+                }
+            }
+
             self.current_note = Some(note_id.to_string());
 
             // 检查是否是大文件
@@ -457,6 +466,10 @@ impl DbINoteState {
             }
 
             log::info!("Selected note: {}", note.title);
+        } else {
+            log::warn!("Note not found in memory: {}. Attempting to load from database.", note_id);
+            // 如果笔记不在内存中，尝试从数据库加载
+            self.load_note_from_database(note_id);
         }
     }
 
@@ -474,6 +487,56 @@ impl DbINoteState {
 
         // Add to recent notes
         self.add_to_recent_notes(note_id, title);
+    }
+
+    /// Load a note from database when it's not in memory
+    fn load_note_from_database(&mut self, note_id: &str) {
+        // 首先从数据库加载笔记
+        let note_result = {
+            if let Ok(storage) = self.storage.lock() {
+                storage.load_note(note_id)
+            } else {
+                log::error!("Failed to acquire storage lock");
+                return;
+            }
+        };
+
+        match note_result {
+            Ok(note) => {
+                log::info!("Loaded note from database: {}", note.title);
+
+                // 找到包含这个笔记的笔记本
+                for (notebook_idx, notebook) in self.notebooks.iter_mut().enumerate() {
+                    if notebook.note_ids.contains(&note_id.to_string()) {
+                        self.current_notebook = Some(notebook_idx);
+
+                        // 确保笔记本已展开
+                        notebook.expanded = true;
+
+                        log::info!("Auto-selected and expanded notebook: {} for note: {}", notebook.name, note.title);
+                        break;
+                    }
+                }
+
+                // 将笔记添加到内存中
+                self.notes.insert(note.id.clone(), note.clone());
+
+                // 选择这个笔记
+                self.current_note = Some(note.id.clone());
+
+                // 加载内容
+                let content_size = note.content.len();
+                if content_size > self.large_note_threshold {
+                    log::info!("Loading large note from database: {} ({} bytes)", note.id, content_size);
+                    self.load_large_note_async(&note.id, &note.title, &note.content);
+                } else {
+                    self.load_note_content_immediate(&note.id, &note.content, &note.title);
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to load note from database: {}", e);
+            }
+        }
     }
 
     /// Load large note asynchronously

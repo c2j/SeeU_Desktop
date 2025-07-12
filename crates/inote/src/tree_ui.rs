@@ -22,14 +22,13 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
     ui.separator();
 
-    // 笔记本和笔记的树状视图
-    egui::ScrollArea::vertical().id_source("notebooks_tree_scroll").show(ui, |ui| {
-        let notebooks = state.notebooks.clone();
+    // 笔记本和笔记的树状视图 - 移除内部滚动区域，使用外层统一滚动
+    let notebooks = state.notebooks.clone();
 
-        if notebooks.is_empty() {
-            ui.label("没有笔记本");
-            return;
-        }
+    if notebooks.is_empty() {
+        ui.label("没有笔记本");
+        return;
+    }
 
         for (notebook_idx, notebook) in notebooks.iter().enumerate() {
             let is_notebook_selected = state.current_notebook == Some(notebook_idx);
@@ -215,7 +214,6 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 });
             }
         }
-    });
 }
 
 /// 渲染标签列表
@@ -236,9 +234,8 @@ pub fn render_tag_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
 
     ui.separator();
 
-    // 标签列表
-    egui::ScrollArea::vertical().id_source("tags_list_scroll").show(ui, |ui| {
-        let tags = state.tags.clone();
+    // 标签列表 - 移除内部滚动区域，使用外层统一滚动
+    let tags = state.tags.clone();
 
         for tag in &tags {
             ui.horizontal(|ui| {
@@ -299,5 +296,4 @@ pub fn render_tag_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
         if tags.is_empty() {
             ui.label("没有标签");
         }
-    });
 }

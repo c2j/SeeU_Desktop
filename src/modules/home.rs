@@ -260,8 +260,9 @@ fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
                             app.inote_state.select_note(&note.note_id);
                         }
 
-                        // 显示访问时间
-                        let time_str = note.accessed_at.format("%m-%d %H:%M").to_string();
+                        // 显示访问时间 - 转换为本地时间
+                        let local_time = note.accessed_at.with_timezone(&chrono::Local);
+                        let time_str = local_time.format("%m-%d %H:%M").to_string();
                         ui.label(egui::RichText::new(format!("({})", time_str)).size(10.0).weak());
                     });
                 }
@@ -587,8 +588,9 @@ fn render_file_editor_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
                             }
                         }
 
-                        // 显示访问时间
-                        let time_str = dir.accessed_at.format("%m-%d %H:%M").to_string();
+                        // 显示访问时间 - 转换为本地时间
+                        let local_time = dir.accessed_at.with_timezone(&chrono::Local);
+                        let time_str = local_time.format("%m-%d %H:%M").to_string();
                         ui.label(egui::RichText::new(format!("({})", time_str)).size(10.0).weak());
                     });
                 }
@@ -612,8 +614,9 @@ fn render_file_editor_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
                             }
                         }
 
-                        // 显示访问时间
-                        let time_str = file.accessed_at.format("%m-%d %H:%M").to_string();
+                        // 显示访问时间 - 转换为本地时间
+                        let local_time = file.accessed_at.with_timezone(&chrono::Local);
+                        let time_str = local_time.format("%m-%d %H:%M").to_string();
                         ui.label(egui::RichText::new(format!("({})", time_str)).size(10.0).weak());
                     });
                 }
@@ -671,7 +674,8 @@ fn render_terminal_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
             if let Some(session) = active_session {
                 // For now, we'll show the session title and creation time
                 // Working directory information is not directly available from EguiTerminalSession
-                let time_str = session.created_at.format("%H:%M").to_string();
+                let local_time = session.created_at.with_timezone(&chrono::Local);
+                let time_str = local_time.format("%H:%M").to_string();
                 ui.small(format!("📂 会话创建于 {}", time_str));
             } else {
                 ui.small("准备就绪，等待启动");

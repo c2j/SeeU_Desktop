@@ -535,9 +535,17 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                 }
             });
 
-            // 内容区域 - 为状态栏预留空间
-            // 计算可用高度，为状态栏预留60px空间
-            let content_height = ui.available_height().max(200.0) - 60.0;
+            // 内容区域 - 为状态栏和标签区域预留空间
+            // 根据操作系统调整预留空间大小
+            let reserved_space = if cfg!(target_os = "linux") {
+                // Linux下需要预留更多空间，因为UI组件间距可能不同
+                120.0  // 为状态栏、标签区域和提示文本预留120px空间
+            } else {
+                // macOS和其他系统使用原来的设置
+                60.0   // 为状态栏预留60px空间
+            };
+
+            let content_height = ui.available_height().max(200.0) - reserved_space;
 
             ui.allocate_ui_with_layout(
                 egui::Vec2::new(ui.available_width(), content_height),
@@ -672,6 +680,10 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
         // 底部区域 - 标签和帮助信息
         ui.separator();
 
+        // 在Linux下添加额外的间距，确保标签区域有足够空间
+        #[cfg(target_os = "linux")]
+        ui.add_space(5.0);
+
         // Tags for this note
         ui.horizontal(|ui| {
             ui.label("标签:");
@@ -727,6 +739,10 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                     }
                 });
         });
+
+        // 在Linux下为帮助信息添加额外间距
+        #[cfg(target_os = "linux")]
+        ui.add_space(5.0);
 
         // Markdown help
         ui.horizontal(|ui| {

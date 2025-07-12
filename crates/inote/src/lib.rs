@@ -605,12 +605,18 @@ pub fn render_db_inote_with_sidebar_info(ui: &mut egui::Ui, state: &mut DbINoteS
                             // 在侧边栏显示搜索结果
                             crate::db_ui::render_search_results(ui, state);
                         } else {
-                            // 树状视图，整合笔记本和笔记
-                            crate::tree_ui::render_tree_view(ui, state);
+                            // 为整个侧边栏内容添加统一的滚动区域
+                            egui::ScrollArea::vertical()
+                                .id_source("sidebar_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    // 树状视图，整合笔记本和笔记
+                                    crate::tree_ui::render_tree_view(ui, state);
 
-                            // Tags section
-                            ui.add_space(10.0);
-                            crate::tree_ui::render_tag_list(ui, state);
+                                    // Tags section
+                                    ui.add_space(10.0);
+                                    crate::tree_ui::render_tag_list(ui, state);
+                                });
                         }
                     });
             }

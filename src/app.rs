@@ -1565,7 +1565,7 @@ impl SeeUApp {
     }
 
     /// Update fonts based on current settings
-    fn update_fonts(&self, ctx: &egui::Context) {
+    pub fn update_fonts(&self, ctx: &egui::Context) {
         let mut fonts = egui::FontDefinitions::default();
 
         // 添加嵌入式中文字体 - 文泉驿微米黑

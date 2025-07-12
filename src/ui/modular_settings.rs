@@ -87,8 +87,17 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
             let mut settings_changed = false;
 
             match app.modular_settings_state.selected_category.as_str() {
-                "app" | "appearance" | "advanced" => {
-                    // Use registry for base modules
+                "app" => {
+                    // Render app settings with access to app state
+                    settings_changed = render_app_settings(ui, app);
+                }
+                "appearance" => {
+                    // Render appearance settings with access to app state
+                    let ctx = ui.ctx().clone();
+                    settings_changed = render_appearance_settings(ui, app, &ctx);
+                }
+                "advanced" => {
+                    // Use registry for advanced settings
                     if let Some(registry) = &mut app.modular_settings_state.settings_registry {
                         registry.set_current_category(app.modular_settings_state.selected_category.clone());
                         settings_changed = registry.render_current_settings(ui);
@@ -139,13 +148,15 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                     let mut save_success = true;
                     let mut error_count = 0;
 
-                    // Save base module settings
-                    if let Some(registry) = &app.modular_settings_state.settings_registry {
-                        if let Err(errors) = registry.save_all_settings() {
-                            save_success = false;
-                            error_count += errors.len();
-                            for error in errors {
-                                log::error!("Base settings save error: {}", error);
+                    // Save base module settings (only advanced settings use registry now)
+                    if app.modular_settings_state.selected_category == "advanced" {
+                        if let Some(registry) = &app.modular_settings_state.settings_registry {
+                            if let Err(errors) = registry.save_all_settings() {
+                                save_success = false;
+                                error_count += errors.len();
+                                for error in errors {
+                                    log::error!("Advanced settings save error: {}", error);
+                                }
                             }
                         }
                     }
@@ -376,4 +387,34 @@ impl SettingsModule for FileEditorSettingsAdapter {
             settings.theme
         )
     }
+}
+
+/// Render app settings with direct access to app state
+fn render_app_settings(ui: &mut egui::Ui, app: &mut SeeUApp) -> bool {
+    let mut module = AppSettingsModule::new();
+    module.init_from_app_settings(&app.app_settings);
+
+    let settings_changed = module.render_settings(ui);
+
+    if settings_changed {
+        module.apply_to_app_settings(&mut app.app_settings);
+        app.modular_settings_state.has_unsaved_changes = true;
+    }
+
+    settings_changed
+}
+
+/// Render appearance settings with direct access to app state
+fn render_appearance_settings(ui: &mut egui::Ui, app: &mut SeeUApp, ctx: &egui::Context) -> bool {
+    let mut module = AppearanceSettingsModule::new();
+    module.init_from_app(app.theme, &app.app_settings);
+
+    let settings_changed = module.render_settings(ui);
+
+    if settings_changed {
+        module.apply_to_app(app, ctx);
+        app.modular_settings_state.has_unsaved_changes = true;
+    }
+
+    settings_changed
 }

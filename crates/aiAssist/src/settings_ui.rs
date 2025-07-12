@@ -78,6 +78,45 @@ impl<'a> AIAssistSettingsModule<'a> {
             ),
         }
     }
+
+    /// Test API connection
+    fn test_api_connection(&mut self) {
+        let base_url = &self.state.ai_settings.base_url;
+        let api_key = &self.state.ai_settings.api_key;
+        let model = &self.state.ai_settings.model;
+
+        if base_url.is_empty() {
+            log::warn!("Base URL is empty, cannot test connection");
+            return;
+        }
+
+        log::info!("Testing connection to: {} with model: {}", base_url, model);
+
+        // Simple connection test - try to reach the endpoint
+        // In a real implementation, you might want to make an actual API call
+        match std::process::Command::new("curl")
+            .arg("-s")
+            .arg("-o")
+            .arg("/dev/null")
+            .arg("-w")
+            .arg("%{http_code}")
+            .arg("--connect-timeout")
+            .arg("5")
+            .arg(base_url)
+            .output() {
+            Ok(output) => {
+                let status_code = String::from_utf8_lossy(&output.stdout);
+                if status_code.trim() == "200" || status_code.trim() == "404" {
+                    log::info!("✅ Connection test successful (HTTP {})", status_code.trim());
+                } else {
+                    log::warn!("⚠️ Connection test returned HTTP {}", status_code.trim());
+                }
+            }
+            Err(err) => {
+                log::error!("❌ Connection test failed: {}", err);
+            }
+        }
+    }
 }
 
 impl<'a> SettingsModule for AIAssistSettingsModule<'a> {
@@ -234,9 +273,9 @@ impl<'a> SettingsModule for AIAssistSettingsModule<'a> {
 
                 ui.add_space(5.0);
 
-                if ui.button("测试连接").clicked() {
+                if ui.button("🔗 测试连接").clicked() {
                     log::info!("Testing AI API connection");
-                    // TODO: Implement connection test
+                    self.test_api_connection();
                 }
             });
         });
