@@ -253,8 +253,9 @@ fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
 
                 for note in recent_notes {
                     ui.horizontal(|ui| {
-                        // 笔记标题按钮
-                        if ui.small_button(&note.note_title).clicked() {
+                        // 笔记标题按钮 - 使用截断函数确保标题长度不会撑大豆腐块
+                        let truncated_title = inote::truncate_note_title(&note.note_title);
+                        if ui.small_button(&truncated_title).clicked() {
                             app.active_module = Module::Note;
                             // 直接选择并编辑笔记
                             app.inote_state.select_note(&note.note_id);

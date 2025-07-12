@@ -41,6 +41,18 @@ arboard = "3.2.0"
 # Error handling
 thiserror = "1.0.50"
 
+# 远程服务器管理相关依赖
+# 加密库用于敏感信息保护
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.21"
+# 系统密钥环支持
+keyring = "2.0"
+
+[dev-dependencies]
+env_logger = "0.10"
+eframe = "0.28.1"
+
 [[example]]
 name = "export_demo"
 path = "examples/export_demo.rs"
@@ -56,3 +68,15 @@ path = "examples/session_history_demo.rs"
 [[example]]
 name = "help_system_demo"
 path = "examples/help_system_demo.rs"
+
+[[example]]
+name = "remote_server_demo"
+path = "examples/remote_server_demo.rs"
+
+[[example]]
+name = "ui_demo"
+path = "examples/ui_demo.rs"
+
+[[example]]
+name = "lazy_init_demo"
+path = "examples/lazy_init_demo.rs"

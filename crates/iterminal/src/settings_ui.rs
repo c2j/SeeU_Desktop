@@ -225,6 +225,72 @@ impl<'a> SettingsModule for ITerminalSettingsModule<'a> {
 
         ui.add_space(15.0);
 
+        // Remote servers settings
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("远程服务器管理").strong());
+                ui.add_space(5.0);
+
+                // 远程服务器管理按钮
+                ui.horizontal(|ui| {
+                    if ui.button("🖥️ 管理远程服务器").clicked() {
+                        if self.state.ensure_remote_server_ui() {
+                            self.state.show_remote_servers = true;
+                        } else {
+                            log::error!("Failed to initialize remote server UI");
+                        }
+                    }
+
+                    if ui.button("➕ 添加服务器").clicked() {
+                        if let Some(remote_ui) = self.state.get_remote_server_ui_mut_lazy() {
+                            remote_ui.show_add_dialog();
+                        }
+                    }
+                });
+
+                // 显示统计信息（如果已初始化）
+                if self.state.has_remote_servers() {
+                    // 收集数据以避免借用问题
+                    let (server_count, stats) = if let Some(remote_ui) = self.state.get_remote_server_ui() {
+                        let count = remote_ui.manager.list_servers().len();
+                        let stats = remote_ui.manager.get_statistics();
+                        (count, stats)
+                    } else {
+                        (0, std::collections::HashMap::new())
+                    };
+
+                    ui.horizontal(|ui| {
+                        ui.label(format!("已配置 {} 台服务器", server_count));
+
+                        if ui.button("💾 保存配置").clicked() {
+                            if let Some(remote_ui) = self.state.get_remote_server_ui_mut() {
+                                if let Err(e) = remote_ui.manager.save_to_file() {
+                                    log::error!("保存远程服务器配置失败: {}", e);
+                                }
+                            }
+                        }
+                    });
+
+                    // 显示详细统计信息
+                    ui.horizontal(|ui| {
+                        if let Some(total) = stats.get("total_servers") {
+                            ui.small(format!("总计: {}", total));
+                        }
+                        if let Some(enabled) = stats.get("enabled_servers") {
+                            ui.small(format!("已启用: {}", enabled));
+                        }
+                        if let Some(connections) = stats.get("total_connections") {
+                            ui.small(format!("总连接数: {}", connections));
+                        }
+                    });
+                } else {
+                    ui.small("点击上方按钮初始化远程服务器功能");
+                }
+            });
+        });
+
+        ui.add_space(15.0);
+
         // Action buttons
         ui.horizontal(|ui| {
             if ui.button("💾 保存设置").clicked() || settings_changed {

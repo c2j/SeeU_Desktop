@@ -4,6 +4,9 @@ use crate::export_ui::ExportDialog;
 use crate::session_history::SessionHistoryManager;
 use crate::session_history_ui::SessionHistoryUI;
 use crate::help_ui::TerminalHelpUI;
+use crate::remote_server_ui::{RemoteServerUI, RemoteServerAction};
+use crate::ssh_connection::SshConnectionBuilder;
+use egui_term::BackendSettings;
 use eframe::egui;
 use uuid::Uuid;
 
@@ -22,6 +25,12 @@ pub struct ITerminalState {
     pub session_history_ui: SessionHistoryUI,
     /// Terminal help UI state
     pub help_ui: TerminalHelpUI,
+    /// Remote server UI state
+    pub remote_server_ui: Option<RemoteServerUI>,
+    /// Whether to show remote servers panel
+    pub show_remote_servers: bool,
+    /// Whether to show compact remote servers panel (vs full management)
+    pub show_compact_remote_panel: bool,
     /// Whether to show command history
     pub show_history: bool,
     /// Search query for history
@@ -58,6 +67,9 @@ impl ITerminalState {
             }
         };
 
+        // 延迟初始化远程服务器UI，避免启动时访问密钥环
+        let remote_server_ui = None;
+
         Self {
             egui_terminal_manager,
             config,
@@ -65,6 +77,9 @@ impl ITerminalState {
             session_history_manager,
             session_history_ui: SessionHistoryUI::default(),
             help_ui: TerminalHelpUI::default(),
+            remote_server_ui,
+            show_remote_servers: false,
+            show_compact_remote_panel: true,
             show_history: false,
             history_search: String::new(),
             has_focus: false,
@@ -117,6 +132,165 @@ impl ITerminalState {
     /// Toggle history dialog
     pub fn toggle_history(&mut self) {
         self.show_history = !self.show_history;
+    }
+
+    /// Toggle remote servers panel
+    pub fn toggle_remote_servers(&mut self) {
+        self.show_remote_servers = !self.show_remote_servers;
+    }
+
+    /// Create SSH session from remote server
+    pub fn create_ssh_session(&mut self, server_id: Uuid, ctx: &egui::Context) -> Result<Uuid, String> {
+        // First, get the server info and build the command
+        let (shell, args, title) = if let Some(ref remote_ui) = self.remote_server_ui {
+            if let Some(server) = remote_ui.manager.get_server(server_id) {
+                let (shell, args) = SshConnectionBuilder::build_ssh_command(server)?;
+                let title = format!("SSH: {}", server.get_display_name());
+                (shell, args, title)
+            } else {
+                return Err("服务器配置不存在".to_string());
+            }
+        } else {
+            return Err("远程服务器管理器未初始化".to_string());
+        };
+
+        // Create the session
+        let backend_settings = BackendSettings {
+            shell,
+            args,
+            working_directory: None,
+            ssh_config: None, // SSH config is embedded in the command
+            env_vars: std::collections::HashMap::new(),
+        };
+
+        let session_id = self.create_session_with_settings(Some(title), ctx, backend_settings)?;
+
+        // Update connection statistics
+        if let Some(ref mut remote_ui) = self.remote_server_ui {
+            if let Err(e) = remote_ui.manager.update_connection_stats(server_id) {
+                log::warn!("Failed to update connection stats: {}", e);
+            }
+        }
+
+        Ok(session_id)
+    }
+
+    /// Create session with custom backend settings
+    pub fn create_session_with_settings(
+        &mut self,
+        title: Option<String>,
+        ctx: &egui::Context,
+        _settings: BackendSettings
+    ) -> Result<Uuid, String> {
+        // This method would need to be implemented to support custom backend settings
+        // For now, we'll use the existing create_session method
+        self.create_session(title, Some(ctx))
+    }
+
+    /// Handle remote server actions
+    pub fn handle_remote_server_action(&mut self, action: RemoteServerAction, ctx: &egui::Context) -> Result<(), String> {
+        match action {
+            RemoteServerAction::Connect(server_id) => {
+                match self.create_ssh_session(server_id, ctx) {
+                    Ok(session_id) => {
+                        self.set_active_session(session_id);
+                        log::info!("SSH session created: {}", session_id);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create SSH session: {}", e);
+                        Err(e)
+                    }
+                }
+            }
+            RemoteServerAction::Edit(server_id) => {
+                if let Some(ref mut remote_ui) = self.remote_server_ui {
+                    remote_ui.show_edit_dialog(server_id);
+                }
+                Ok(())
+            }
+            RemoteServerAction::Delete(server_id) => {
+                if let Some(ref mut remote_ui) = self.remote_server_ui {
+                    remote_ui.delete_server(server_id)?;
+                }
+                Ok(())
+            }
+            RemoteServerAction::TestConnection(server_id) => {
+                if let Some(ref mut remote_ui) = self.remote_server_ui {
+                    remote_ui.start_connection_test(server_id);
+                }
+                Ok(())
+            }
+            RemoteServerAction::ToggleEnabled(server_id) => {
+                if let Some(ref mut remote_ui) = self.remote_server_ui {
+                    remote_ui.toggle_server_enabled(server_id)?;
+                }
+                Ok(())
+            }
+            RemoteServerAction::Import => {
+                // TODO: Implement import functionality
+                log::info!("Import action triggered");
+                Ok(())
+            }
+            RemoteServerAction::Export => {
+                // TODO: Implement export functionality
+                log::info!("Export action triggered");
+                Ok(())
+            }
+        }
+    }
+
+    /// Get remote server UI reference
+    pub fn get_remote_server_ui(&self) -> Option<&RemoteServerUI> {
+        self.remote_server_ui.as_ref()
+    }
+
+    /// Get mutable remote server UI reference
+    pub fn get_remote_server_ui_mut(&mut self) -> Option<&mut RemoteServerUI> {
+        self.remote_server_ui.as_mut()
+    }
+
+    /// Check if remote servers are available
+    pub fn has_remote_servers(&self) -> bool {
+        self.remote_server_ui.is_some()
+    }
+
+    /// 按需初始化远程服务器UI（延迟初始化）
+    pub fn ensure_remote_server_ui(&mut self) -> bool {
+        if self.remote_server_ui.is_none() {
+            log::info!("Initializing remote server UI on demand");
+            match RemoteServerUI::new() {
+                Ok(ui) => {
+                    log::info!("Remote server UI initialized successfully");
+                    self.remote_server_ui = Some(ui);
+                    true
+                }
+                Err(e) => {
+                    log::error!("Failed to initialize remote server UI: {}", e);
+                    false
+                }
+            }
+        } else {
+            true
+        }
+    }
+
+    /// 获取远程服务器UI，如果未初始化则尝试初始化
+    pub fn get_remote_server_ui_lazy(&mut self) -> Option<&RemoteServerUI> {
+        if self.ensure_remote_server_ui() {
+            self.remote_server_ui.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// 获取可变远程服务器UI，如果未初始化则尝试初始化
+    pub fn get_remote_server_ui_mut_lazy(&mut self) -> Option<&mut RemoteServerUI> {
+        if self.ensure_remote_server_ui() {
+            self.remote_server_ui.as_mut()
+        } else {
+            None
+        }
     }
 
     /// Save current configuration

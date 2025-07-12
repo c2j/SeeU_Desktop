@@ -10,6 +10,12 @@ pub mod session_history;
 pub mod session_history_ui;
 pub mod help_content;
 pub mod help_ui;
+// 远程服务器管理相关模块
+pub mod remote_server;
+pub mod remote_server_manager;
+pub mod ssh_connection;
+pub mod encryption;
+pub mod remote_server_ui;
 
 pub use state::ITerminalState;
 use export_ui::{ExportDialog};
@@ -100,6 +106,86 @@ pub fn render_egui_terminal(ui: &mut eframe::egui::Ui, state: &mut ITerminalStat
 
             ui.separator();
 
+            // Remote server management buttons
+            // 远程服务器按钮 - 点击时才初始化
+            if ui.button("🌐 远程服务器").clicked() {
+                if state.ensure_remote_server_ui() {
+                    state.show_remote_servers = !state.show_remote_servers;
+                    state.show_compact_remote_panel = true; // 默认显示紧凑面板
+                } else {
+                    log::error!("Failed to initialize remote server UI");
+                }
+            }
+
+            // 只有在已初始化的情况下才显示快速连接功能
+            if state.has_remote_servers() {
+                // Quick connect button for recent servers
+                let has_servers = if let Some(remote_ui) = state.get_remote_server_ui() {
+                    !remote_ui.manager.list_servers().is_empty()
+                } else {
+                    false
+                };
+
+                if has_servers {
+                    // 收集服务器数据以避免借用问题
+                    let server_data: Vec<_> = if let Some(remote_ui) = state.get_remote_server_ui() {
+                        remote_ui.manager.list_servers().iter()
+                            .take(5)
+                            .filter(|s| s.enabled)
+                            .map(|s| (s.id, s.name.clone(), s.get_connection_string()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    let mut selected_server_id = None;
+                    let mut show_add_dialog = false;
+                    let mut show_manage = false;
+
+                    eframe::egui::ComboBox::from_label("快速连接")
+                        .selected_text("选择服务器")
+                        .show_ui(ui, |ui| {
+                            for (server_id, name, connection_string) in server_data {
+                                let display_text = format!("{} ({})", name, connection_string);
+                                if ui.selectable_label(false, display_text).clicked() {
+                                    selected_server_id = Some(server_id);
+                                }
+                            }
+
+                            ui.separator();
+                            if ui.button("➕ 添加新服务器").clicked() {
+                                show_add_dialog = true;
+                            }
+
+                            if ui.button("⚙️ 管理服务器").clicked() {
+                                show_manage = true;
+                            }
+                        });
+
+                    // 处理选择的操作
+                    if let Some(server_id) = selected_server_id {
+                        if let Err(e) = state.handle_remote_server_action(
+                            crate::remote_server_ui::RemoteServerAction::Connect(server_id),
+                            ui.ctx()
+                        ) {
+                            log::error!("Failed to connect to server: {}", e);
+                        }
+                    }
+
+                    if show_add_dialog {
+                        if let Some(remote_ui) = state.get_remote_server_ui_mut() {
+                            remote_ui.show_add_dialog();
+                        }
+                    }
+
+                    if show_manage {
+                        state.show_remote_servers = true;
+                    }
+                }
+            }
+
+            ui.separator();
+
             // Session history buttons
             if ui.button("💾 保存会话").clicked() {
                 // Open save session dialog
@@ -133,6 +219,71 @@ pub fn render_egui_terminal(ui: &mut eframe::egui::Ui, state: &mut ITerminalStat
         });
 
         ui.separator();
+
+        // Remote server management panel (if shown)
+        if state.show_remote_servers {
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    if state.show_compact_remote_panel {
+                        // 紧凑面板标题栏
+                        ui.horizontal(|ui| {
+                            ui.label(eframe::egui::RichText::new("🌐 远程服务器").strong());
+                            ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                                if ui.small_button("✖").on_hover_text("关闭").clicked() {
+                                    state.show_remote_servers = false;
+                                }
+                                if ui.small_button("⚙️").on_hover_text("完整管理").clicked() {
+                                    state.show_compact_remote_panel = false;
+                                }
+                            });
+                        });
+
+                        ui.separator();
+
+                        // 渲染紧凑面板
+                        let ctx = ui.ctx().clone();
+                        if let Some(remote_ui) = state.get_remote_server_ui_mut_lazy() {
+                            if let Some(action) = remote_ui.render_compact_panel(ui, &ctx) {
+                                if let Err(e) = state.handle_remote_server_action(action, &ctx) {
+                                    log::error!("Failed to handle remote server action: {}", e);
+                                }
+                            }
+                        } else {
+                            ui.label("远程服务器功能初始化失败");
+                        }
+                    } else {
+                        // 完整管理界面标题栏
+                        ui.horizontal(|ui| {
+                            ui.heading("远程服务器管理");
+                            ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                                if ui.button("✖ 关闭").clicked() {
+                                    state.show_remote_servers = false;
+                                }
+                                if ui.button("📱 紧凑视图").clicked() {
+                                    state.show_compact_remote_panel = true;
+                                }
+                            });
+                        });
+
+                        ui.separator();
+
+                        // 渲染完整管理界面
+                        let ctx = ui.ctx().clone();
+                        if let Some(remote_ui) = state.get_remote_server_ui_mut_lazy() {
+                            if let Some(action) = remote_ui.render(ui, &ctx) {
+                                if let Err(e) = state.handle_remote_server_action(action, &ctx) {
+                                    log::error!("Failed to handle remote server action: {}", e);
+                                }
+                            }
+                        } else {
+                            ui.label("远程服务器功能初始化失败");
+                        }
+                    }
+                });
+            });
+
+            ui.separator();
+        }
 
         // Session tabs (if multiple sessions)
         state.get_egui_terminal_manager_mut().render_session_tabs(ui);
