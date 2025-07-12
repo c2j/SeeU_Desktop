@@ -3,4 +3,5 @@
 
 cd ../target
 rustup target add x86_64-pc-windows-msvc
+cargo clean
 cargo build --release --target x86_64-pc-windows-msvc

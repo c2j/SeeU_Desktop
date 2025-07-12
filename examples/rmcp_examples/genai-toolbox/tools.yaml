@@ -1,0 +1,25 @@
+sources:
+  my-pg-source:
+    kind: postgres
+    host: 172.21.252.81
+    port: 5432
+    database: toolbox_db
+    user: toolbox_user
+    password: my-password
+
+tools:
+  search-hotels-by-name:
+    kind: postgres-sql
+    source: my-pg-source
+    description: Search for hotels based on name.
+    parameters:
+      - name: name
+        type: string
+        description: The name of the hotel.
+    statement: SELECT * FROM hotels WHERE name ILIKE '%' || $1 || '%';
+
+toolsets:
+    my_first_toolset:
+        - search-hotels-by-name
+    my_second_toolset:
+        - search-hotels-by-name

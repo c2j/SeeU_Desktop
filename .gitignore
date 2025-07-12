@@ -121,3 +121,4 @@ crates/zhushoude_duckdb/models
 /crates/zhushoude_duckdb/semantic_search.db.wal
 /crates/zhushoude_duckdb/zhushoude.db
 /crates/zhushoude_duckdb/zhushoude.db.wal
+/.vscode/*
