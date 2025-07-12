@@ -241,6 +241,11 @@ fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
             // 最近打开的笔记（TOP5）
             let recent_notes = app.inote_state.get_recent_notes(5);
 
+            // 总是显示这个区块，即使没有最近笔记也显示提示信息
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("最近笔记").size(12.0).weak());
+            ui.add_space(4.0);
+
             if !recent_notes.is_empty() {
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new("最近笔记").size(12.0).weak());
@@ -260,6 +265,9 @@ fn render_notes_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
                         ui.label(egui::RichText::new(format!("({})", time_str)).size(10.0).weak());
                     });
                 }
+            } else {
+                ui.label(egui::RichText::new("暂无最近打开的笔记").size(10.0).weak());
+                ui.label(egui::RichText::new("打开一些笔记后，它们会显示在这里").size(9.0).weak());
             }
         });
     });

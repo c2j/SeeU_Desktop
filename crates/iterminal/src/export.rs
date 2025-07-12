@@ -199,8 +199,11 @@ impl TerminalExporter {
         if options.include_metadata {
             writeln!(content, "Terminal Session: {}", session.title).unwrap();
             writeln!(content, "Session ID: {}", session.id).unwrap();
-            writeln!(content, "Created: {}", session.created_at.format("%Y-%m-%d %H:%M:%S UTC")).unwrap();
-            writeln!(content, "Exported: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC")).unwrap();
+            // 转换为本地时间显示
+            let local_created = session.created_at.with_timezone(&chrono::Local);
+            let local_exported = Utc::now().with_timezone(&chrono::Local);
+            writeln!(content, "Created: {}", local_created.format("%Y-%m-%d %H:%M:%S")).unwrap();
+            writeln!(content, "Exported: {}", local_exported.format("%Y-%m-%d %H:%M:%S")).unwrap();
             writeln!(content, "Lines: {}", lines.len()).unwrap();
             writeln!(content, "{}", "=".repeat(50)).unwrap();
             writeln!(content).unwrap();
@@ -232,8 +235,11 @@ impl TerminalExporter {
             writeln!(content).unwrap();
             writeln!(content, "- **Session Title**: {}", session.title).unwrap();
             writeln!(content, "- **Session ID**: `{}`", session.id).unwrap();
-            writeln!(content, "- **Created**: {}", session.created_at.format("%Y-%m-%d %H:%M:%S UTC")).unwrap();
-            writeln!(content, "- **Exported**: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC")).unwrap();
+            // 转换为本地时间显示
+            let local_created = session.created_at.with_timezone(&chrono::Local);
+            let local_exported = Utc::now().with_timezone(&chrono::Local);
+            writeln!(content, "- **Created**: {}", local_created.format("%Y-%m-%d %H:%M:%S")).unwrap();
+            writeln!(content, "- **Exported**: {}", local_exported.format("%Y-%m-%d %H:%M:%S")).unwrap();
             writeln!(content, "- **Total Lines**: {}", lines.len()).unwrap();
             writeln!(content).unwrap();
             writeln!(content, "## Terminal Output").unwrap();
@@ -277,8 +283,11 @@ impl TerminalExporter {
             writeln!(content, "        <h2>Terminal Session Export</h2>").unwrap();
             writeln!(content, "        <p><strong>Session Title:</strong> {}</p>", session.title).unwrap();
             writeln!(content, "        <p><strong>Session ID:</strong> {}</p>", session.id).unwrap();
-            writeln!(content, "        <p><strong>Created:</strong> {}</p>", session.created_at.format("%Y-%m-%d %H:%M:%S UTC")).unwrap();
-            writeln!(content, "        <p><strong>Exported:</strong> {}</p>", Utc::now().format("%Y-%m-%d %H:%M:%S UTC")).unwrap();
+            // 转换为本地时间显示
+            let local_created = session.created_at.with_timezone(&chrono::Local);
+            let local_exported = Utc::now().with_timezone(&chrono::Local);
+            writeln!(content, "        <p><strong>Created:</strong> {}</p>", local_created.format("%Y-%m-%d %H:%M:%S")).unwrap();
+            writeln!(content, "        <p><strong>Exported:</strong> {}</p>", local_exported.format("%Y-%m-%d %H:%M:%S")).unwrap();
             writeln!(content, "        <p><strong>Total Lines:</strong> {}</p>", lines.len()).unwrap();
             writeln!(content, "    </div>").unwrap();
         }

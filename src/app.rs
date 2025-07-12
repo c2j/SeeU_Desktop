@@ -1236,13 +1236,15 @@ impl SeeUApp {
         // 尝试获取更完整的文件内容
         let detailed_content = self.get_detailed_file_content(&first_result.path, &first_result.file_type);
 
+        // 转换为本地时间显示
+        let local_modified = first_result.modified.with_timezone(&chrono::Local);
         let formatted = format!(
             "搜索结果（第1条，共{}条）：\n\n文件名: {}\n路径: {}\n文件类型: {}\n修改时间: {}\n文件大小: {} bytes\n\n内容:\n{}",
             self.isearch_state.search_stats.total_results,
             first_result.filename,
             first_result.path,
             first_result.file_type,
-            first_result.modified.format("%Y-%m-%d %H:%M:%S"),
+            local_modified.format("%Y-%m-%d %H:%M:%S"),
             first_result.size_bytes,
             detailed_content
         );

@@ -362,6 +362,22 @@ impl DbINoteState {
             // Apply notebook collapse setting
             self.apply_notebook_collapse_setting();
 
+            // Load recent notes
+            if let Ok(storage) = self.storage.lock() {
+                match storage.load_recent_notes(20) {
+                    Ok(recent_notes) => {
+                        self.recent_notes.clear();
+                        for note in recent_notes {
+                            self.recent_notes.push_back(note);
+                        }
+                        log::info!("Loaded {} recent notes from database", self.recent_notes.len());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load recent notes from database: {}", e);
+                    }
+                }
+            }
+
             log::info!("Data loaded on demand: {} notebooks", self.notebooks.len());
         }
     }
@@ -491,10 +507,11 @@ impl DbINoteState {
 
     /// Add note to recent notes list
     fn add_to_recent_notes(&mut self, note_id: &str, note_title: &str) {
+        let accessed_at = Utc::now();
         let access = RecentNoteAccess {
             note_id: note_id.to_string(),
             note_title: note_title.to_string(),
-            accessed_at: Utc::now(),
+            accessed_at,
         };
 
         // Remove existing entry if present
@@ -506,6 +523,13 @@ impl DbINoteState {
         // Keep only last 20 items
         while self.recent_notes.len() > 20 {
             self.recent_notes.pop_back();
+        }
+
+        // Save to database
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(e) = storage.save_recent_note(note_id, note_title, &accessed_at) {
+                log::error!("Failed to save recent note to database: {}", e);
+            }
         }
     }
 
@@ -712,6 +736,12 @@ impl DbINoteState {
 
     /// Create notebook
     pub fn create_notebook(&mut self, name: String, description: String) -> Option<String> {
+        // Calculate the next sort_order (highest current sort_order + 1)
+        let next_sort_order = self.notebooks.iter()
+            .map(|nb| nb.sort_order)
+            .max()
+            .unwrap_or(0) + 1;
+
         // Create a new notebook
         let notebook = crate::notebook::Notebook {
             id: uuid::Uuid::new_v4().to_string(),
@@ -721,6 +751,7 @@ impl DbINoteState {
             updated_at: chrono::Utc::now(),
             note_ids: Vec::new(),
             expanded: true,
+            sort_order: next_sort_order,
         };
 
         if let Ok(storage) = self.storage.lock() {
@@ -737,6 +768,86 @@ impl DbINoteState {
             }
         }
         None
+    }
+
+    /// Move notebook up in the list
+    pub fn move_notebook_up(&mut self, notebook_idx: usize) -> bool {
+        if notebook_idx == 0 || notebook_idx >= self.notebooks.len() {
+            return false; // Can't move up if it's already at the top or invalid index
+        }
+
+        // Swap sort_order values with the previous notebook
+        let current_sort_order = self.notebooks[notebook_idx].sort_order;
+        let prev_sort_order = self.notebooks[notebook_idx - 1].sort_order;
+
+        self.notebooks[notebook_idx].sort_order = prev_sort_order;
+        self.notebooks[notebook_idx - 1].sort_order = current_sort_order;
+
+        // Update both notebooks in the database
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(e) = storage.save_notebook(&self.notebooks[notebook_idx]) {
+                log::error!("Failed to save notebook after moving up: {}", e);
+                return false;
+            }
+            if let Err(e) = storage.save_notebook(&self.notebooks[notebook_idx - 1]) {
+                log::error!("Failed to save notebook after moving up: {}", e);
+                return false;
+            }
+        }
+
+        // Swap the notebooks in the vector
+        self.notebooks.swap(notebook_idx, notebook_idx - 1);
+
+        // Update current_notebook index if needed
+        if let Some(current) = self.current_notebook {
+            if current == notebook_idx {
+                self.current_notebook = Some(notebook_idx - 1);
+            } else if current == notebook_idx - 1 {
+                self.current_notebook = Some(notebook_idx);
+            }
+        }
+
+        true
+    }
+
+    /// Move notebook down in the list
+    pub fn move_notebook_down(&mut self, notebook_idx: usize) -> bool {
+        if notebook_idx >= self.notebooks.len() - 1 {
+            return false; // Can't move down if it's already at the bottom or invalid index
+        }
+
+        // Swap sort_order values with the next notebook
+        let current_sort_order = self.notebooks[notebook_idx].sort_order;
+        let next_sort_order = self.notebooks[notebook_idx + 1].sort_order;
+
+        self.notebooks[notebook_idx].sort_order = next_sort_order;
+        self.notebooks[notebook_idx + 1].sort_order = current_sort_order;
+
+        // Update both notebooks in the database
+        if let Ok(storage) = self.storage.lock() {
+            if let Err(e) = storage.save_notebook(&self.notebooks[notebook_idx]) {
+                log::error!("Failed to save notebook after moving down: {}", e);
+                return false;
+            }
+            if let Err(e) = storage.save_notebook(&self.notebooks[notebook_idx + 1]) {
+                log::error!("Failed to save notebook after moving down: {}", e);
+                return false;
+            }
+        }
+
+        // Swap the notebooks in the vector
+        self.notebooks.swap(notebook_idx, notebook_idx + 1);
+
+        // Update current_notebook index if needed
+        if let Some(current) = self.current_notebook {
+            if current == notebook_idx {
+                self.current_notebook = Some(notebook_idx + 1);
+            } else if current == notebook_idx + 1 {
+                self.current_notebook = Some(notebook_idx);
+            }
+        }
+
+        true
     }
 
     /// Create tag
@@ -1052,7 +1163,7 @@ impl DbINoteState {
             // 找到对应的笔记本并更新其note_ids
             if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == selected_notebook_id) {
                 if !notebook.note_ids.contains(note_id) {
-                    notebook.add_note(note_id.clone());
+                    notebook.append_note(note_id.clone()); // 使用 append_note 保持导入顺序
                     log::debug!("已将笔记 {} 添加到笔记本 {} 的note_ids中", note_id, selected_notebook_id);
 
                     // 保存更新后的笔记本到数据库

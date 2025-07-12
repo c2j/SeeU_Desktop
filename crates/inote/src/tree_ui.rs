@@ -65,21 +65,40 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
                     }
                 }
 
-                // 删除按钮
-                if ui.button("🗑").clicked() {
-                    state.delete_notebook(notebook_idx);
-                    return;
-                }
-
-                // 添加笔记按钮
-                if ui.button("+ 笔记").clicked() {
-                    // 先选择笔记本，然后创建笔记
-                    state.select_notebook(notebook_idx);
-                    let note_id = state.create_note("新笔记".to_string(), "".to_string());
-                    if let Some(id) = note_id {
-                        state.select_note(&id);
+                // 排序按钮
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 删除按钮
+                    if ui.button("🗑").clicked() {
+                        state.delete_notebook(notebook_idx);
+                        return;
                     }
-                }
+
+                    // 添加笔记按钮
+                    if ui.button("+ 笔记").clicked() {
+                        // 先选择笔记本，然后创建笔记
+                        state.select_notebook(notebook_idx);
+                        let note_id = state.create_note("新笔记".to_string(), "".to_string());
+                        if let Some(id) = note_id {
+                            state.select_note(&id);
+                        }
+                    }
+
+                    // 下移按钮
+                    if ui.add_enabled(notebook_idx < notebooks.len() - 1,
+                                     egui::Button::new("↓").small())
+                        .on_hover_text("向下移动笔记本")
+                        .clicked() {
+                        state.move_notebook_down(notebook_idx);
+                    }
+
+                    // 上移按钮
+                    if ui.add_enabled(notebook_idx > 0,
+                                     egui::Button::new("↑").small())
+                        .on_hover_text("向上移动笔记本")
+                        .clicked() {
+                        state.move_notebook_up(notebook_idx);
+                    }
+                });
             });
 
             // 如果笔记本展开，显示其中的笔记

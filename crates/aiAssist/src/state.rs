@@ -1908,7 +1908,7 @@ impl ChatMessage {
         use chrono::Local;
 
         // 转换为本地时间
-        let local_time = self.timestamp.with_timezone(&Local::now().timezone());
+        let local_time = self.timestamp.with_timezone(&Local);
         let now = Local::now();
 
         // 计算时间差

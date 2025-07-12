@@ -1555,7 +1555,7 @@ pub fn format_tool_result_timestamp(timestamp: &chrono::DateTime<chrono::Utc>) -
     use chrono::Local;
 
     // 转换为本地时间
-    let local_time = timestamp.with_timezone(&Local::now().timezone());
+    let local_time = timestamp.with_timezone(&Local);
     let now = Local::now();
 
     // 计算时间差
@@ -1578,7 +1578,7 @@ pub fn format_precise_timestamp(timestamp: &chrono::DateTime<chrono::Utc>) -> St
     use chrono::Local;
 
     // 转换为本地时间
-    let local_time = timestamp.with_timezone(&Local::now().timezone());
+    let local_time = timestamp.with_timezone(&Local);
 
     // 格式化为 yyyy-mm-dd HH:MM:SS
     local_time.format("%Y-%m-%d %H:%M:%S").to_string()

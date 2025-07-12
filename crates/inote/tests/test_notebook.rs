@@ -18,25 +18,31 @@ fn test_notebook_creation() {
 fn test_notebook_note_management() {
     let mut notebook = Notebook::new("测试笔记本".to_string(), "描述".to_string());
     let initial_updated_at = notebook.updated_at;
-    
+
     // 添加笔记
     std::thread::sleep(std::time::Duration::from_millis(1)); // 确保时间戳不同
     notebook.add_note("note1".to_string());
     assert_eq!(notebook.note_ids.len(), 1);
     assert!(notebook.note_ids.contains(&"note1".to_string()));
+    assert_eq!(notebook.note_ids[0], "note1"); // 第一个笔记在位置0
     assert!(notebook.updated_at > initial_updated_at);
-    
-    // 添加更多笔记
+
+    // 添加更多笔记 (新笔记会插入到开头)
     notebook.add_note("note2".to_string());
     notebook.add_note("note3".to_string());
     assert_eq!(notebook.note_ids.len(), 3);
-    
+    assert_eq!(notebook.note_ids[0], "note3"); // 最新的笔记在开头
+    assert_eq!(notebook.note_ids[1], "note2");
+    assert_eq!(notebook.note_ids[2], "note1");
+
     // 移除笔记
     notebook.remove_note("note2");
     assert_eq!(notebook.note_ids.len(), 2);
     assert!(!notebook.note_ids.contains(&"note2".to_string()));
     assert!(notebook.note_ids.contains(&"note1".to_string()));
     assert!(notebook.note_ids.contains(&"note3".to_string()));
+    assert_eq!(notebook.note_ids[0], "note3"); // note3 仍然在开头
+    assert_eq!(notebook.note_ids[1], "note1"); // note1 现在在第二位
 }
 
 #[test]
@@ -53,13 +59,32 @@ fn test_notebook_toggle_expanded() {
 }
 
 #[test]
+fn test_notebook_add_vs_append_note() {
+    let mut notebook = Notebook::new("测试笔记本".to_string(), "描述".to_string());
+
+    // 使用 add_note (插入到开头)
+    notebook.add_note("note1".to_string());
+    notebook.add_note("note2".to_string());
+    assert_eq!(notebook.note_ids[0], "note2"); // 最新的在开头
+    assert_eq!(notebook.note_ids[1], "note1");
+
+    // 使用 append_note (添加到末尾)
+    notebook.append_note("note3".to_string());
+    notebook.append_note("note4".to_string());
+    assert_eq!(notebook.note_ids[0], "note2"); // 开头不变
+    assert_eq!(notebook.note_ids[1], "note1");
+    assert_eq!(notebook.note_ids[2], "note3"); // 按顺序添加到末尾
+    assert_eq!(notebook.note_ids[3], "note4");
+}
+
+#[test]
 fn test_notebook_duplicate_note_handling() {
     let mut notebook = Notebook::new("测试笔记本".to_string(), "描述".to_string());
-    
+
     // 添加笔记
     notebook.add_note("note1".to_string());
     assert_eq!(notebook.note_ids.len(), 1);
-    
+
     // 尝试添加重复笔记（如果实现了去重）
     notebook.add_note("note1".to_string());
     // 根据实际实现，这里可能是1（去重）或2（允许重复）

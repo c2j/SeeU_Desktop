@@ -1,6 +1,6 @@
 [package]
 name = "seeu_desktop"
-version = "0.2.627"
+version = "0.3.712"
 edition = "2021"
 authors = ["SeeU Team C&L"]
 description = "A modern desktop application built with Rust, egui and eframe"
@@ -86,7 +86,7 @@ members = [
     "crates/egui_ltreeview",
     "crates/egui_code_editor",
     "crates/egui_term",
-    "crates/alacritty_terminal",
+    "crates/alacritty_terminal", "timezone_test",
 ]
 exclude = [
     "crates/egui_term/examples/*",

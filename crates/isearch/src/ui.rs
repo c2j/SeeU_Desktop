@@ -880,7 +880,9 @@ fn render_detailed_view_internal<F>(
 
                         // File size, date, and score
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(format!("{}", result.modified.format("%Y-%m-%d %H:%M")));
+                            // 转换为本地时间显示
+                            let local_time = result.modified.with_timezone(&chrono::Local);
+                            ui.label(format!("{}", local_time.format("%Y-%m-%d %H:%M")));
                             ui.label(format!("{:.1} KB", result.size_bytes as f64 / 1024.0));
                             // Uncomment the following line to display the score (for debugging)
                             // ui.label(format!("得分: {:.2}", result.score));
@@ -1277,7 +1279,9 @@ fn render_list_view_internal<F>(
 
                     // Modified time column
                     row.col(|ui| {
-                        ui.label(result.modified.format("%m-%d %H:%M").to_string());
+                        // 转换为本地时间显示
+                        let local_time = result.modified.with_timezone(&chrono::Local);
+                        ui.label(local_time.format("%m-%d %H:%M").to_string());
                     });
 
                     // Action buttons column
@@ -1363,9 +1367,11 @@ fn render_search_statistics(ui: &mut egui::Ui, state: &mut ISearchState) {
             });
         } else {
             // Show query time when not showing "more results" message
+            // 转换为本地时间显示
+            let local_query_time = state.search_stats.query_time.with_timezone(&chrono::Local);
             ui.label(egui::RichText::new(format!(
                 "查询时间: {}",
-                state.search_stats.query_time.format("%Y-%m-%d %H:%M:%S")
+                local_query_time.format("%Y-%m-%d %H:%M:%S")
             )).small().weak());
         }
     });

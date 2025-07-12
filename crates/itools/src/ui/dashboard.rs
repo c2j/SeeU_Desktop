@@ -179,7 +179,9 @@ fn render_system_status(ui: &mut egui::Ui, state: &IToolsState) {
         // Show last few audit entries
         for (_i, entry) in state.security_context.audit_log.iter().rev().take(3).enumerate() {
             ui.horizontal(|ui| {
-                let time_str = entry.timestamp.format("%H:%M:%S").to_string();
+                // 转换为本地时间显示
+                let local_time = entry.timestamp.with_timezone(&chrono::Local);
+                let time_str = local_time.format("%H:%M:%S").to_string();
                 ui.label(format!("[{}]", time_str));
                 ui.label(&entry.action);
 

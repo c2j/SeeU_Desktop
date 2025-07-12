@@ -535,9 +535,12 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                 }
             });
 
-            // 内容区域 - 自动填充剩余空间
+            // 内容区域 - 为状态栏预留空间
+            // 计算可用高度，为状态栏预留60px空间
+            let content_height = ui.available_height().max(200.0) - 60.0;
+
             ui.allocate_ui_with_layout(
-                egui::Vec2::new(ui.available_width(), ui.available_height()),
+                egui::Vec2::new(ui.available_width(), content_height),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
                     // Note content - either editor or preview
@@ -549,7 +552,7 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             .id_source("markdown_preview_scroll")
                             .auto_shrink([false, false])  // 不自动收缩，占满可用空间
                             .max_height(available_height)  // 设置最大高度为可用高度
-                            .min_scrolled_height(available_height)  // 设置最小高度，确保填充可用空间
+                            .min_scrolled_height(available_height.max(150.0))  // 设置最小高度，确保填充可用空间
                             .show(ui, |ui| {
                                 ui.add_space(10.0);
                                 crate::markdown::render_markdown_with_highlight(ui, &state.note_content, &search_terms, font_family);
@@ -562,7 +565,7 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             .id_source("editor_scroll")
                             .auto_shrink([false, false])  // 不自动收缩，占满可用空间
                             .max_height(available_height)  // 设置最大高度为可用高度
-                            .min_scrolled_height(available_height)  // 设置最小高度，确保填充可用空间
+                            .min_scrolled_height(available_height.max(150.0))  // 设置最小高度，确保填充可用空间
                             .show(ui, |ui| {
                     // 获取搜索关键字（在创建 layouter 之前）
                     let search_terms = state.get_search_terms();
@@ -611,12 +614,13 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
 
                     text_edit = text_edit.layouter(&mut layouter);
 
-                    // 使用allocate_ui强制TextEdit占用全部可用高度
+                    // 使用allocate_ui强制TextEdit占用可用高度，但不超出预留空间
+                    let editor_height = available_height.max(100.0);  // 确保最小高度
                     let response = ui.allocate_ui_with_layout(
-                        egui::Vec2::new(ui.available_width(), available_height),
+                        egui::Vec2::new(ui.available_width(), editor_height),
                         egui::Layout::top_down(egui::Align::LEFT),
                         |ui| {
-                            ui.add_sized([ui.available_width(), ui.available_height()], text_edit)
+                            ui.add_sized([ui.available_width(), editor_height], text_edit)
                         }
                     ).inner;
 

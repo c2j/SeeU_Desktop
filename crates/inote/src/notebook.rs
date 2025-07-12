@@ -13,6 +13,8 @@ pub struct Notebook {
     pub note_ids: Vec<String>,
     #[serde(default)]
     pub expanded: bool,
+    #[serde(default)]
+    pub sort_order: i32,
 }
 
 impl Notebook {
@@ -27,6 +29,7 @@ impl Notebook {
             updated_at: now,
             note_ids: Vec::new(),
             expanded: false, // 默认折叠，节省加载时间
+            sort_order: 0, // 默认排序值，创建时会被设置为合适的值
         }
     }
 
@@ -35,8 +38,14 @@ impl Notebook {
         self.expanded = !self.expanded;
     }
 
-    /// Add a note to the notebook
+    /// Add a note to the notebook (inserts at the beginning)
     pub fn add_note(&mut self, note_id: String) {
+        self.note_ids.insert(0, note_id);
+        self.updated_at = Utc::now();
+    }
+
+    /// Add a note to the end of the notebook (for backward compatibility)
+    pub fn append_note(&mut self, note_id: String) {
         self.note_ids.push(note_id);
         self.updated_at = Utc::now();
     }

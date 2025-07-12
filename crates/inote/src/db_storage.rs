@@ -10,9 +10,10 @@ use crate::notebook::Notebook;
 use crate::note::Note;
 use crate::tag::Tag;
 use crate::mcp_server::McpServerRecord;
+use crate::db_state::RecentNoteAccess;
 
 /// Database schema version
-const DB_VERSION: i32 = 1;
+const DB_VERSION: i32 = 2;
 
 /// SQLite storage manager for iNote
 #[derive(Clone)]
@@ -122,11 +123,12 @@ impl DbStorageManager {
 
         // 使用更安全的INSERT方式，避免"Execute returned results"错误
         let update_result = conn.execute(
-            "UPDATE notebooks SET name = ?, description = ?, updated_at = ? WHERE id = ?",
+            "UPDATE notebooks SET name = ?, description = ?, updated_at = ?, sort_order = ? WHERE id = ?",
             params![
                 notebook.name,
                 notebook.description,
                 notebook.updated_at.to_rfc3339(),
+                notebook.sort_order,
                 notebook.id
             ],
         );
@@ -135,13 +137,14 @@ impl DbStorageManager {
             Ok(0) => {
                 // 没有更新任何行，说明笔记本不存在，需要插入
                 conn.execute(
-                    "INSERT INTO notebooks (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO notebooks (id, name, description, created_at, updated_at, sort_order) VALUES (?, ?, ?, ?, ?, ?)",
                     params![
                         notebook.id,
                         notebook.name,
                         notebook.description,
                         notebook.created_at.to_rfc3339(),
-                        notebook.updated_at.to_rfc3339()
+                        notebook.updated_at.to_rfc3339(),
+                        notebook.sort_order
                     ],
                 )?;
             }
@@ -161,7 +164,7 @@ impl DbStorageManager {
         let conn = self.get_connection()?;
 
         let notebook = conn.query_row(
-            "SELECT id, name, description, created_at, updated_at FROM notebooks WHERE id = ?",
+            "SELECT id, name, description, created_at, updated_at, sort_order FROM notebooks WHERE id = ?",
             params![id],
             |row| {
                 let id: String = row.get(0)?;
@@ -169,6 +172,7 @@ impl DbStorageManager {
                 let description: String = row.get(2)?;
                 let created_at_str: String = row.get(3)?;
                 let updated_at_str: String = row.get(4)?;
+                let sort_order: i32 = row.get(5).unwrap_or(0);
 
                 let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                     .map_err(|e| SqlError::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?
@@ -186,17 +190,18 @@ impl DbStorageManager {
                     updated_at,
                     note_ids: Vec::new(),
                     expanded: true,
+                    sort_order,
                 };
 
-                // Load note IDs for this notebook
-                let mut stmt = conn.prepare("SELECT id FROM notes WHERE notebook_id = ?")?;
+                // Load note IDs for this notebook (ordered by created_at DESC for newest first)
+                let mut stmt = conn.prepare("SELECT id FROM notes WHERE notebook_id = ? ORDER BY created_at DESC")?;
                 let note_ids_iter = stmt.query_map(params![notebook.id], |row| {
                     let id: String = row.get(0)?;
                     Ok(id)
                 })?;
 
                 for note_id in note_ids_iter {
-                    notebook.note_ids.push(note_id?);
+                    notebook.note_ids.push(note_id?); // 直接 push，因为查询已经按 created_at DESC 排序
                 }
 
                 Ok(notebook)
@@ -217,7 +222,7 @@ impl DbStorageManager {
         let mut notebooks = Vec::new();
 
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, created_at, updated_at FROM notebooks ORDER BY name"
+            "SELECT id, name, description, created_at, updated_at, sort_order FROM notebooks ORDER BY sort_order, created_at"
         )?;
 
         let notebook_iter = stmt.query_map([], |row| {
@@ -226,6 +231,7 @@ impl DbStorageManager {
             let description: String = row.get(2)?;
             let created_at_str: String = row.get(3)?;
             let updated_at_str: String = row.get(4)?;
+            let sort_order: i32 = row.get(5).unwrap_or(0);
 
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                 .map_err(|e| SqlError::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?
@@ -235,11 +241,11 @@ impl DbStorageManager {
                 .map_err(|e| SqlError::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?
                 .with_timezone(&Utc);
 
-            Ok((id, name, description, created_at, updated_at))
+            Ok((id, name, description, created_at, updated_at, sort_order))
         })?;
 
         for notebook_result in notebook_iter {
-            let (id, name, description, created_at, updated_at) = notebook_result?;
+            let (id, name, description, created_at, updated_at, sort_order) = notebook_result?;
 
             let mut notebook = Notebook {
                 id,
@@ -249,10 +255,11 @@ impl DbStorageManager {
                 updated_at,
                 note_ids: Vec::new(),
                 expanded: true,
+                sort_order,
             };
 
             // Load note IDs for this notebook
-            let mut stmt = conn.prepare("SELECT id FROM notes WHERE notebook_id = ? ORDER BY updated_at DESC")?;
+            let mut stmt = conn.prepare("SELECT id FROM notes WHERE notebook_id = ? ORDER BY created_at DESC")?;
             let note_ids_iter = stmt.query_map(params![notebook.id], |row| {
                 let id: String = row.get(0)?;
                 Ok(id)
@@ -260,7 +267,7 @@ impl DbStorageManager {
 
             let mut note_count = 0;
             for note_id in note_ids_iter {
-                notebook.note_ids.push(note_id?);
+                notebook.note_ids.push(note_id?); // 直接 push，因为查询已经按 created_at DESC 排序
                 note_count += 1;
             }
 
@@ -816,7 +823,7 @@ impl DbStorageManager {
             "SELECT id, title, content, created_at, updated_at
              FROM notes
              WHERE notebook_id = ?
-             ORDER BY updated_at DESC"
+             ORDER BY created_at DESC"
         )?;
 
         let note_iter = stmt.query_map(params![notebook_id], |row| {
@@ -1034,7 +1041,8 @@ impl DbStorageManager {
                 name TEXT NOT NULL,
                 description TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                sort_order INTEGER DEFAULT 0
             )",
             [],
         )?;
@@ -1120,6 +1128,18 @@ impl DbStorageManager {
             [],
         )?;
 
+        // Create recent_notes table for storing recently accessed notes
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS recent_notes (
+                note_id TEXT NOT NULL,
+                note_title TEXT NOT NULL,
+                accessed_at TEXT NOT NULL,
+                PRIMARY KEY (note_id),
+                FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
         // Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON", [])?;
 
@@ -1168,11 +1188,30 @@ impl DbStorageManager {
     }
 
     /// Upgrade database to the latest version
-    fn upgrade_database(&self, _conn: &Connection, current_version: i32) -> Result<(), Box<dyn std::error::Error>> {
+    fn upgrade_database(&self, conn: &Connection, current_version: i32) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Upgrading database from version {} to {}", current_version, DB_VERSION);
 
-        // Implement database migrations here when needed
-        // For now, we don't need any migrations
+        // Migrate from version 1 to 2: Add sort_order to notebooks
+        if current_version < 2 {
+            log::info!("Adding sort_order column to notebooks table");
+
+            // Add sort_order column to notebooks table
+            conn.execute(
+                "ALTER TABLE notebooks ADD COLUMN sort_order INTEGER DEFAULT 0",
+                [],
+            )?;
+
+            // Set sort_order based on created_at for existing notebooks
+            conn.execute(
+                "UPDATE notebooks SET sort_order = (
+                    SELECT COUNT(*) FROM notebooks n2
+                    WHERE n2.created_at <= notebooks.created_at
+                )",
+                [],
+            )?;
+
+            log::info!("Successfully added sort_order column and initialized values");
+        }
 
         Ok(())
     }
@@ -1472,5 +1511,58 @@ impl DbStorageManager {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(Box::new(e)),
         }
+    }
+
+    /// Save a recent note access record
+    pub fn save_recent_note(&self, note_id: &str, note_title: &str, accessed_at: &DateTime<Utc>) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+
+        // Insert or replace the recent note record
+        conn.execute(
+            "INSERT OR REPLACE INTO recent_notes (note_id, note_title, accessed_at) VALUES (?, ?, ?)",
+            params![note_id, note_title, accessed_at.to_rfc3339()],
+        )?;
+
+        // Keep only the most recent 20 records
+        conn.execute(
+            "DELETE FROM recent_notes WHERE note_id NOT IN (
+                SELECT note_id FROM recent_notes ORDER BY accessed_at DESC LIMIT 20
+            )",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    /// Load recent notes from database
+    pub fn load_recent_notes(&self, limit: usize) -> Result<Vec<RecentNoteAccess>, Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+        let mut recent_notes = Vec::new();
+
+        let mut stmt = conn.prepare(
+            "SELECT note_id, note_title, accessed_at FROM recent_notes ORDER BY accessed_at DESC LIMIT ?"
+        )?;
+
+        let recent_iter = stmt.query_map(params![limit], |row| {
+            let note_id: String = row.get(0)?;
+            let note_title: String = row.get(1)?;
+            let accessed_at_str: String = row.get(2)?;
+
+            let accessed_at = DateTime::parse_from_rfc3339(&accessed_at_str)
+                .map_err(|e| SqlError::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?
+                .with_timezone(&Utc);
+
+            Ok(RecentNoteAccess {
+                note_id,
+                note_title,
+                accessed_at,
+            })
+        })?;
+
+        for recent_result in recent_iter {
+            recent_notes.push(recent_result?);
+        }
+
+        Ok(recent_notes)
     }
 }

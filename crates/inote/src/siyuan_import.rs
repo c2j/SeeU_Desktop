@@ -351,7 +351,7 @@ impl SiyuanImporter {
 
         // 同时更新笔记本的note_ids字段
         if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == notebook_id) {
-            notebook.add_note(note_id);
+            notebook.append_note(note_id); // 使用 append_note 保持导入顺序
             log::debug!("Added note to notebook '{}', total notes: {}", notebook.name, notebook.note_ids.len());
         } else {
             log::warn!("Could not find notebook '{}' to add note", notebook_id);

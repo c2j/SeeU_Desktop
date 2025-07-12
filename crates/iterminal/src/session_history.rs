@@ -96,7 +96,9 @@ impl SavedSession {
         } else if !self.command_history.is_empty() {
             format!("Last command: {}", self.command_history.last().unwrap())
         } else {
-            format!("Session from {}", self.created_at.format("%Y-%m-%d %H:%M"))
+            // 转换为本地时间显示
+            let local_time = self.created_at.with_timezone(&chrono::Local);
+            format!("Session from {}", local_time.format("%Y-%m-%d %H:%M"))
         }
     }
 }
