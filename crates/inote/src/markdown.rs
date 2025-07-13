@@ -1,6 +1,8 @@
 use pulldown_cmark::{Parser, Options, html, Alignment};
-use eframe::egui::{self, TextFormat, Color32, Ui, FontFamily};
+use eframe::egui::{self, TextFormat, Color32, Ui, FontFamily, TextureHandle};
 use eframe::egui::text::LayoutJob;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// 表格自适应颜色配置
 #[derive(Debug, Clone)]
@@ -130,6 +132,8 @@ struct MarkdownRenderer<'a> {
     mermaid_renderer: crate::mermaid::MermaidRenderer,
     svg_test_renderer: crate::mermaid::SvgTestRenderer,
     font_family: Option<String>,
+    image_cache: HashMap<String, Arc<TextureHandle>>,
+    image_storage: crate::image_storage::ImageStorageManager,
 }
 
 impl<'a> MarkdownRenderer<'a> {
@@ -157,6 +161,8 @@ impl<'a> MarkdownRenderer<'a> {
             mermaid_renderer: crate::mermaid::MermaidRenderer::new(),
             svg_test_renderer: crate::mermaid::SvgTestRenderer::new(),
             font_family: font_family.map(|s| s.to_string()),
+            image_cache: HashMap::new(),
+            image_storage: crate::image_storage::ImageStorageManager::default(),
         }
     }
 
@@ -214,6 +220,12 @@ impl<'a> MarkdownRenderer<'a> {
                         self.ui.add(egui::Label::new("\n"));
                     }
                 },
+                Html(html) => {
+                    // Handle HTML content (for now, just add as text)
+                    if !self.in_table {
+                        self.current_text.push_str(&html);
+                    }
+                },
                 _ => {}
             }
         }
@@ -250,6 +262,10 @@ impl<'a> MarkdownRenderer<'a> {
             Link(_, url, _) => {
                 self.is_link = true;
                 self.link_url = url.to_string();
+            },
+            Image(_, url, title) => {
+                self.flush_text();
+                self.render_image(&url, &title);
             },
             Table(alignments) => {
                 self.in_table = true;
@@ -706,6 +722,109 @@ impl<'a> MarkdownRenderer<'a> {
                 });
             },
         }
+    }
+
+    /// Render an image from markdown
+    fn render_image(&mut self, url: &str, title: &str) {
+        // Check if it's a local image path
+        if url.starts_with("images/") || url.starts_with("./images/") || !url.contains("://") {
+            // Local image - try to load from storage
+            self.render_local_image(url, title);
+        } else {
+            // Remote image - show placeholder for now
+            self.render_image_placeholder(url, title);
+        }
+    }
+
+    /// Render a local image from storage
+    fn render_local_image(&mut self, path: &str, title: &str) {
+        // Normalize the path
+        let normalized_path = if path.starts_with("./") {
+            &path[2..]
+        } else {
+            path
+        };
+
+        // Check if image is already cached
+        if let Some(texture) = self.image_cache.get(normalized_path) {
+            self.ui.add(egui::Image::from_texture(texture.as_ref()).max_width(400.0));
+            if !title.is_empty() {
+                self.ui.label(egui::RichText::new(title).italics().small());
+            }
+            return;
+        }
+
+        // Try to load image from storage
+        match self.image_storage.load_image(normalized_path) {
+            Ok(image_bytes) => {
+                // Try to load the image and create texture
+                match self.load_image_texture(&image_bytes, normalized_path) {
+                    Ok(texture) => {
+                        self.image_cache.insert(normalized_path.to_string(), texture.clone());
+                        self.ui.add(egui::Image::from_texture(texture.as_ref()).max_width(400.0));
+                        if !title.is_empty() {
+                            self.ui.label(egui::RichText::new(title).italics().small());
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create texture for image {}: {}", normalized_path, e);
+                        self.render_image_error(normalized_path, &format!("Failed to load image: {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to load image {}: {}", normalized_path, e);
+                self.render_image_error(normalized_path, &format!("Image not found: {}", e));
+            }
+        }
+    }
+
+    /// Load image bytes and create texture
+    fn load_image_texture(&self, image_bytes: &[u8], path: &str) -> Result<Arc<TextureHandle>, String> {
+        // Try to decode the image
+        let image = image::load_from_memory(image_bytes)
+            .map_err(|e| format!("Failed to decode image: {}", e))?;
+
+        let rgba_image = image.to_rgba8();
+        let size = [rgba_image.width() as usize, rgba_image.height() as usize];
+        let pixels = rgba_image.as_flat_samples();
+
+        // Create color image
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
+
+        // Create texture
+        let texture = self.ui.ctx().load_texture(
+            format!("image_{}", path),
+            color_image,
+            egui::TextureOptions::default()
+        );
+
+        Ok(Arc::new(texture))
+    }
+
+    /// Render image placeholder for remote images
+    fn render_image_placeholder(&mut self, url: &str, title: &str) {
+        self.ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label("🖼️ 图片");
+                ui.label(egui::RichText::new(format!("URL: {}", url)).small().monospace());
+                if !title.is_empty() {
+                    ui.label(egui::RichText::new(title).italics().small());
+                }
+                ui.label(egui::RichText::new("(远程图片暂不支持显示)").small().weak());
+            });
+        });
+    }
+
+    /// Render image error message
+    fn render_image_error(&mut self, path: &str, error: &str) {
+        self.ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label("❌ 图片加载失败");
+                ui.label(egui::RichText::new(format!("路径: {}", path)).small().monospace());
+                ui.label(egui::RichText::new(error).small().color(egui::Color32::RED));
+            });
+        });
     }
 }
 

@@ -153,10 +153,23 @@ impl PasswordEncryption {
 
         // 尝试保存到系统密钥环
         let key_str = general_purpose::STANDARD.encode(&key_bytes);
-        if let Err(e) = entry.set_password(&key_str) {
-            log::warn!("无法将密钥保存到系统密钥环: {}，密钥将仅在内存中使用", e);
-        } else {
-            log::info!("新加密密钥已保存到系统密钥环");
+        match entry.set_password(&key_str) {
+            Ok(_) => {
+                log::info!("新加密密钥已保存到系统密钥环");
+            }
+            Err(keyring::Error::PlatformFailure(ref platform_error)) => {
+                let error_msg = format!("{:?}", platform_error);
+                if error_msg.contains("already exists") {
+                    // 密钥已存在，尝试更新
+                    log::info!("密钥已存在于系统密钥环中");
+                    // 对于已存在的情况，我们可以继续使用现有密钥
+                } else {
+                    log::warn!("平台密钥环错误: {}，密钥将仅在内存中使用", error_msg);
+                }
+            }
+            Err(e) => {
+                log::warn!("无法将密钥保存到系统密钥环: {}，密钥将仅在内存中使用", e);
+            }
         }
 
         Ok(*key)

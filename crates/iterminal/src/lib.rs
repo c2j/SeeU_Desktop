@@ -14,6 +14,8 @@ pub mod help_ui;
 pub mod remote_server;
 pub mod remote_server_manager;
 pub mod ssh_connection;
+pub mod native_ssh;
+pub mod webssh;
 pub mod encryption;
 pub mod remote_server_ui;
 

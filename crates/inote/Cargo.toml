@@ -25,6 +25,10 @@ tokio = { version = "1.32.0", features = ["full"] }
 # For clipboard support
 arboard = "3.2.1"
 
+# For image processing
+png = "0.17.10"
+image = "0.24.7"
+
 # For HTML to Markdown conversion
 html2md = "0.2.14"
 

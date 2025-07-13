@@ -3,6 +3,7 @@ pub mod note;
 pub mod tag;
 pub mod storage;
 pub mod clipboard;
+pub mod image_storage;
 pub mod db_storage;
 pub mod migration;
 pub mod db_state;

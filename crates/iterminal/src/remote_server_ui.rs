@@ -33,6 +33,10 @@ pub struct RemoteServerUI {
     sort_by: SortBy,
     /// 是否显示已禁用的服务器
     show_disabled: bool,
+    /// 是否显示SSH状态对话框
+    show_ssh_status_dialog: bool,
+    /// 是否显示替代方案对话框
+    show_alternatives_dialog: bool,
 }
 
 /// 连接测试状态
@@ -83,6 +87,8 @@ impl RemoteServerUI {
             tag_filter: String::new(),
             sort_by: SortBy::Name,
             show_disabled: true,
+            show_ssh_status_dialog: false,
+            show_alternatives_dialog: false,
         })
     }
 
@@ -107,6 +113,16 @@ impl RemoteServerUI {
                     self.show_import_export_dialog = true;
                 }
                 
+                // SSH状态信息按钮
+                if ui.button("🔧 SSH状态").clicked() {
+                    self.show_ssh_status_dialog = true;
+                }
+
+                // SSH替代方案按钮
+                if ui.button("🔄 连接方案").clicked() {
+                    self.show_alternatives_dialog = true;
+                }
+
                 // 保存按钮
                 if self.manager.has_unsaved_changes() {
                     if ui.button("💾 保存").clicked() {
@@ -160,6 +176,16 @@ impl RemoteServerUI {
 
         if self.show_import_export_dialog {
             self.render_import_export_dialog(ctx);
+        }
+
+        // 渲染SSH状态对话框
+        if self.show_ssh_status_dialog {
+            self.render_ssh_status_dialog(ctx);
+        }
+
+        // 渲染替代方案对话框
+        if self.show_alternatives_dialog {
+            self.render_alternatives_dialog(ctx);
         }
 
         action
@@ -266,7 +292,8 @@ impl RemoteServerUI {
                     ui.small(RichText::new("✓ 连接正常").color(Color32::GREEN));
                 }
                 Some(ConnectionTestStatus::Failed(msg)) => {
-                    ui.small(RichText::new(format!("✗ {}", msg)).color(Color32::RED));
+                    ui.small(RichText::new("✗ 连接失败").color(Color32::RED))
+                        .on_hover_text(msg);
                 }
                 _ => {
                     ui.small("未测试");
@@ -287,8 +314,24 @@ impl RemoteServerUI {
                 }
 
                 // 测试连接按钮
-                if ui.button("🔍 测试").clicked() {
+                let (test_button_text, test_enabled) = match self.test_connection_status.get(&server.id) {
+                    Some(ConnectionTestStatus::Testing) => ("⏳ 测试中", false),
+                    Some(ConnectionTestStatus::Success) => ("✅ 成功", true),
+                    Some(ConnectionTestStatus::Failed(_)) => ("❌ 失败", true),
+                    _ => ("🔍 测试", true),
+                };
+
+                if ui.add_enabled(test_enabled, egui::Button::new(test_button_text)).clicked() {
+                    log::info!("用户点击测试连接按钮，服务器: {} ({})", server.name, server.id);
                     action = Some(RemoteServerAction::TestConnection(server.id));
+                }
+
+                // 如果正在测试中，添加一个取消按钮
+                if matches!(self.test_connection_status.get(&server.id), Some(ConnectionTestStatus::Testing)) {
+                    if ui.small_button("✖").on_hover_text("取消测试").clicked() {
+                        log::info!("用户取消连接测试，服务器: {}", server.name);
+                        self.test_connection_status.remove(&server.id);
+                    }
                 }
 
                 // 编辑按钮
@@ -354,18 +397,35 @@ impl RemoteServerUI {
 
     /// 开始连接测试
     pub fn start_connection_test(&mut self, server_id: Uuid) {
+        log::info!("收到连接测试请求，服务器ID: {}", server_id);
+
+        // 如果已经在测试中，先清除状态
+        if matches!(self.test_connection_status.get(&server_id), Some(ConnectionTestStatus::Testing)) {
+            log::info!("服务器 {} 已在测试中，清除状态后重新测试", server_id);
+        }
+
         self.test_connection_status.insert(server_id, ConnectionTestStatus::Testing);
-        
+
         if let Some(server) = self.manager.get_server(server_id) {
             let server_clone = server.clone();
-            
-            // 在后台线程中执行连接测试
-            std::thread::spawn(move || {
-                let result = SshConnectionBuilder::test_connection(&server_clone);
-                // 注意：这里需要通过某种方式将结果传回UI线程
-                // 在实际实现中，可能需要使用消息传递或其他机制
-                log::info!("连接测试结果: {:?}", result);
-            });
+            let server_name = server.name.clone();
+
+            log::info!("开始测试连接到服务器: {} ({})", server_name, server.get_connection_string());
+
+            // 同步执行连接测试（简化实现）
+            match SshConnectionBuilder::test_connection(&server_clone) {
+                Ok(result) => {
+                    log::info!("服务器 {} 连接测试结果: {:?}", server_name, result);
+                    self.update_connection_test_result(server_id, result);
+                }
+                Err(e) => {
+                    log::error!("服务器 {} 连接测试失败: {}", server_name, e);
+                    self.update_connection_test_result(server_id, ConnectionTestResult::Failed(e));
+                }
+            }
+        } else {
+            log::error!("找不到服务器ID: {}", server_id);
+            self.test_connection_status.remove(&server_id);
         }
     }
 
@@ -375,8 +435,13 @@ impl RemoteServerUI {
             ConnectionTestResult::Success => ConnectionTestStatus::Success,
             other => ConnectionTestStatus::Failed(other.get_display_text()),
         };
-        
+
         self.test_connection_status.insert(server_id, status);
+    }
+
+    /// 获取连接测试状态
+    pub fn get_connection_test_status(&self, server_id: Uuid) -> Option<&ConnectionTestStatus> {
+        self.test_connection_status.get(&server_id)
     }
 
     /// 显示添加服务器对话框
@@ -476,17 +541,18 @@ impl RemoteServerUI {
 
         ui.horizontal(|ui| {
             // 状态指示器
-            let status_color = if server.enabled {
-                if matches!(self.test_connection_status.get(&server.id), Some(ConnectionTestStatus::Success)) {
-                    Color32::GREEN
-                } else {
-                    Color32::GRAY
-                }
+            let (status_color, status_text) = if !server.enabled {
+                (Color32::RED, "●")
             } else {
-                Color32::RED
+                match self.test_connection_status.get(&server.id) {
+                    Some(ConnectionTestStatus::Testing) => (Color32::YELLOW, "⏳"),
+                    Some(ConnectionTestStatus::Success) => (Color32::GREEN, "✓"),
+                    Some(ConnectionTestStatus::Failed(_)) => (Color32::RED, "✗"),
+                    _ => (Color32::GRAY, "●"),
+                }
             };
 
-            ui.colored_label(status_color, "●");
+            ui.colored_label(status_color, status_text);
 
             // 服务器信息
             ui.vertical(|ui| {
@@ -510,13 +576,28 @@ impl RemoteServerUI {
                 // 操作按钮
                 if server.enabled {
                     if ui.small_button("🔗").on_hover_text("连接").clicked() {
+                        log::info!("紧凑面板：用户点击连接按钮，服务器: {}", server.name);
                         action = Some(RemoteServerAction::Connect(server.id));
                     }
                 } else {
                     ui.add_enabled(false, egui::Button::new("🔗").small());
                 }
 
+                // 连接测试按钮
+                let test_button_text = match self.test_connection_status.get(&server.id) {
+                    Some(ConnectionTestStatus::Testing) => "⏳",
+                    Some(ConnectionTestStatus::Success) => "✅",
+                    Some(ConnectionTestStatus::Failed(_)) => "❌",
+                    _ => "🔍",
+                };
+
+                if ui.small_button(test_button_text).on_hover_text("测试连接").clicked() {
+                    log::info!("紧凑面板：用户点击测试连接按钮，服务器: {} ({})", server.name, server.id);
+                    action = Some(RemoteServerAction::TestConnection(server.id));
+                }
+
                 if ui.small_button("✏️").on_hover_text("编辑").clicked() {
+                    log::info!("紧凑面板：用户点击编辑按钮，服务器: {}", server.name);
                     action = Some(RemoteServerAction::Edit(server.id));
                 }
             });
@@ -773,6 +854,95 @@ impl RemoteServerUI {
                     if ui.button("关闭").clicked() {
                         self.show_import_export_dialog = false;
                     }
+                });
+            });
+    }
+
+    /// 渲染SSH状态对话框
+    fn render_ssh_status_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("SSH支持状态")
+            .resizable(true)
+            .default_width(600.0)
+            .default_height(400.0)
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.label("当前系统SSH支持状态:");
+                    ui.separator();
+
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            let ssh_info = SshConnectionBuilder::get_ssh_support_info();
+                            for line in ssh_info.lines() {
+                                if line.starts_with("✅") {
+                                    ui.colored_label(Color32::GREEN, line);
+                                } else if line.starts_with("❌") {
+                                    ui.colored_label(Color32::RED, line);
+                                } else if line.starts_with("⚠️") {
+                                    ui.colored_label(Color32::YELLOW, line);
+                                } else {
+                                    ui.label(line);
+                                }
+                            }
+                        });
+
+                    ui.separator();
+                    if ui.button("关闭").clicked() {
+                        self.show_ssh_status_dialog = false;
+                    }
+                });
+            });
+    }
+
+    /// 渲染SSH替代方案对话框
+    fn render_alternatives_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("SSH连接替代方案")
+            .resizable(true)
+            .default_width(700.0)
+            .default_height(500.0)
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.label("可用的SSH连接替代方案:");
+                    ui.separator();
+
+                    egui::ScrollArea::vertical()
+                        .max_height(400.0)
+                        .show(ui, |ui| {
+                            let full_report = crate::webssh::SshAlternativeManager::get_full_support_report();
+                            for line in full_report.lines() {
+                                if line.starts_with("✅") {
+                                    ui.colored_label(Color32::GREEN, line);
+                                } else if line.starts_with("❌") {
+                                    ui.colored_label(Color32::RED, line);
+                                } else if line.starts_with("⚠️") {
+                                    ui.colored_label(Color32::YELLOW, line);
+                                } else if line.starts_with("💡") {
+                                    ui.colored_label(Color32::LIGHT_BLUE, line);
+                                } else if line.starts_with("🔧") || line.starts_with("📡") || line.starts_with("🔄") {
+                                    ui.label(RichText::new(line).strong());
+                                } else if line.starts_with("=") {
+                                    ui.separator();
+                                } else if line.starts_with("•") {
+                                    ui.label(RichText::new(line).strong());
+                                } else if line.starts_with("  ") {
+                                    ui.label(format!("    {}", line.trim()));
+                                } else {
+                                    ui.label(line);
+                                }
+                            }
+                        });
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("测试原生SSH").clicked() {
+                            // 这里可以添加测试原生SSH的逻辑
+                            log::info!("测试原生SSH连接");
+                        }
+
+                        if ui.button("关闭").clicked() {
+                            self.show_alternatives_dialog = false;
+                        }
+                    });
                 });
             });
     }

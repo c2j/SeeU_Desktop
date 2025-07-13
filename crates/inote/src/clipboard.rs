@@ -1,6 +1,7 @@
-use arboard::Clipboard;
+use arboard::{Clipboard, ImageData};
 use std::error::Error;
 use std::fmt;
+use std::path::PathBuf;
 use regex::Regex;
 
 /// Clipboard manager for handling rich text conversion
@@ -49,6 +50,20 @@ impl ClipboardManager {
         self.clipboard
             .set_text(text)
             .map_err(|e| ClipboardError::AccessError(e.to_string()))
+    }
+
+    /// Get image from clipboard
+    pub fn get_image(&mut self) -> Result<Option<ImageData>, ClipboardError> {
+        match self.clipboard.get_image() {
+            Ok(image_data) => Ok(Some(image_data)),
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(e) => Err(ClipboardError::AccessError(e.to_string())),
+        }
+    }
+
+    /// Check if clipboard contains image data
+    pub fn has_image(&mut self) -> bool {
+        self.get_image().map(|img| img.is_some()).unwrap_or(false)
     }
 
     /// Get HTML content from clipboard and convert to Markdown

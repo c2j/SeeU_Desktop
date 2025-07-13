@@ -85,19 +85,26 @@ impl RemoteServerManager {
     /// 添加服务器
     pub fn add_server(&mut self, server: RemoteServer) -> Result<(), String> {
         server.validate()?;
-        
+
         // 检查是否已存在相同的服务器
         for existing in self.servers.values() {
-            if existing.host == server.host 
-                && existing.port == server.port 
+            if existing.host == server.host
+                && existing.port == server.port
                 && existing.username == server.username {
                 return Err("已存在相同的服务器配置".to_string());
             }
         }
-        
+
+        let server_name = server.name.clone();
         self.servers.insert(server.id, server);
         self.has_unsaved_changes = true;
-        log::info!("添加远程服务器: {}", self.servers.len());
+        log::info!("添加远程服务器: {} (总数: {})", server_name, self.servers.len());
+
+        // 自动保存配置
+        if let Err(e) = self.save_to_file() {
+            log::error!("自动保存配置失败: {}", e);
+        }
+
         Ok(())
     }
 

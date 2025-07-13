@@ -66,6 +66,7 @@ pub struct DbINoteState {
     pub new_tag_color: String,
     pub storage: Arc<Mutex<DbStorageManager>>,
     pub clipboard_manager: Option<ClipboardManager>,  // Clipboard manager for rich text conversion
+    pub image_storage: crate::image_storage::ImageStorageManager, // Image storage manager
     pub markdown_preview: bool,      // Whether to show markdown preview instead of editor
     pub last_saved_content: String,  // Last saved content for auto-save comparison
     pub last_saved_title: String,    // Last saved title for auto-save comparison
@@ -133,6 +134,7 @@ impl Default for DbINoteState {
             new_tag_color: "#3498db".to_string(),
             storage,
             clipboard_manager: ClipboardManager::new().ok(),
+            image_storage: crate::image_storage::ImageStorageManager::default(),
             markdown_preview: false,
             last_saved_content: String::new(),
             last_saved_title: String::new(),
@@ -1254,5 +1256,61 @@ impl DbINoteState {
     /// Get recent notes
     pub fn get_recent_notes(&self, limit: usize) -> Vec<RecentNoteAccess> {
         self.recent_notes.iter().take(limit).cloned().collect()
+    }
+
+    /// Check if clipboard has image data
+    pub fn clipboard_has_image(&mut self) -> bool {
+        if let Some(ref mut clipboard) = self.clipboard_manager {
+            clipboard.has_image()
+        } else {
+            false
+        }
+    }
+
+    /// Paste image from clipboard and return markdown text
+    pub fn paste_image(&mut self) -> Result<String, String> {
+        if let Some(ref mut clipboard) = self.clipboard_manager {
+            match clipboard.get_image() {
+                Ok(Some(image_data)) => {
+                    // Save image to storage
+                    match self.image_storage.save_image(&image_data) {
+                        Ok(relative_path) => {
+                            // Return markdown image syntax
+                            Ok(format!("![图片]({})", relative_path))
+                        }
+                        Err(e) => {
+                            Err(format!("Failed to save image: {}", e))
+                        }
+                    }
+                }
+                Ok(None) => {
+                    Err("No image data in clipboard".to_string())
+                }
+                Err(e) => {
+                    Err(format!("Failed to get image from clipboard: {}", e))
+                }
+            }
+        } else {
+            Err("Clipboard manager not available".to_string())
+        }
+    }
+
+    /// Insert image at cursor position in note content
+    pub fn insert_image_at_cursor(&mut self, image_markdown: &str) {
+        // For now, just append to the end of the content
+        // In a more sophisticated implementation, we would track cursor position
+        if !self.note_content.is_empty() && !self.note_content.ends_with('\n') {
+            self.note_content.push('\n');
+        }
+        self.note_content.push_str(image_markdown);
+        self.note_content.push('\n');
+    }
+
+    /// Paste image and insert into note
+    pub fn paste_and_insert_image(&mut self) -> Result<(), String> {
+        let image_markdown = self.paste_image()?;
+        self.insert_image_at_cursor(&image_markdown);
+        log::info!("Image pasted and inserted into note");
+        Ok(())
     }
 }

@@ -476,6 +476,31 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                     if has_rich_content {
                         ui.label("💡 检测到富文本内容");
                     }
+
+                    // 图片粘贴按钮
+                    ui.separator();
+
+                    // 检查剪贴板是否有图片内容
+                    let has_image = state.clipboard_has_image();
+
+                    let image_paste_button = ui.button("🖼️ 粘贴图片")
+                        .on_hover_text("从剪贴板粘贴图片并插入到笔记中\n支持：PNG、JPG、GIF等格式");
+
+                    if image_paste_button.clicked() {
+                        match state.paste_and_insert_image() {
+                            Ok(()) => {
+                                log::info!("Image pasted successfully");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to paste image: {}", e);
+                            }
+                        }
+                    }
+
+                    // 如果剪贴板有图片内容，显示提示
+                    if has_image {
+                        ui.label("🖼️ 检测到图片内容");
+                    }
                 }
 
                 // Markdown 帮助按钮
@@ -641,16 +666,41 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
 
                         // 只有在没有IME组合状态时才处理快捷键
                         if !has_ime_composition {
-                            // Check for Ctrl+V (Cmd+V on Mac) for rich text paste
+                            // Check for Ctrl+V (Cmd+V on Mac) for smart paste
                             if i.modifiers.command && i.key_pressed(egui::Key::V) {
-                                // Prevent default paste behavior and handle rich text paste
-                                match state.paste_rich_text() {
-                                    Ok(markdown_text) => {
-                                        state.append_to_note_content(&markdown_text);
-                                        log::info!("Rich text pasted via keyboard shortcut");
+                                // Smart paste: check for image first, then rich text
+                                if state.clipboard_has_image() {
+                                    // Paste image
+                                    match state.paste_and_insert_image() {
+                                        Ok(()) => {
+                                            log::info!("Image pasted via keyboard shortcut");
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to paste image via keyboard shortcut: {}", e);
+                                        }
+                                    }
+                                } else {
+                                    // Fallback to rich text paste
+                                    match state.paste_rich_text() {
+                                        Ok(markdown_text) => {
+                                            state.append_to_note_content(&markdown_text);
+                                            log::info!("Rich text pasted via keyboard shortcut");
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to paste rich text via keyboard shortcut: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Check for Ctrl+Shift+V for image-only paste
+                            if i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::V) {
+                                match state.paste_and_insert_image() {
+                                    Ok(()) => {
+                                        log::info!("Image pasted via Ctrl+Shift+V shortcut");
                                     }
                                     Err(e) => {
-                                        log::error!("Failed to paste rich text via keyboard shortcut: {}", e);
+                                        log::error!("Failed to paste image via Ctrl+Shift+V: {}", e);
                                     }
                                 }
                             }
@@ -950,14 +1000,27 @@ pub fn render_note_editor(ui: &mut egui::Ui, state: &mut DbINoteState, font_fami
                             }
 
                             // 图片示例
-                            let image_code = "![图片描述](图片URL)";
+                            let image_code = "![图片描述](images/example.png)";
                             columns[0].label(image_code);
-                            columns[1].label("图片将在此显示");
+                            columns[1].label("🖼️ 图片将在此显示");
                             if columns[2].button("插入").clicked() {
                                 state.append_to_note_content(image_code);
                                 state.show_markdown_help = false;
                                 log::info!("已插入内容到笔记: {}", image_code);
                             }
+                        });
+
+                        // 图片粘贴功能说明
+                        ui.add_space(5.0);
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                ui.strong("🖼️ 图片粘贴功能");
+                                ui.label("• 复制图片到剪贴板后，使用 Ctrl+V (Mac: Cmd+V) 直接粘贴");
+                                ui.label("• 或点击工具栏中的「🖼️ 粘贴图片」按钮");
+                                ui.label("• 支持 PNG、JPG、GIF 等常见图片格式");
+                                ui.label("• 图片会自动保存到本地存储，并生成相应的 Markdown 语法");
+                                ui.label("• 使用 Ctrl+Shift+V 强制粘贴图片（忽略富文本）");
+                            });
                         });
 
                         // 引用

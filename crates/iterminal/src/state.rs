@@ -141,29 +141,37 @@ impl ITerminalState {
 
     /// Create SSH session from remote server
     pub fn create_ssh_session(&mut self, server_id: Uuid, ctx: &egui::Context) -> Result<Uuid, String> {
+        log::info!("开始创建SSH会话，服务器ID: {}", server_id);
+
         // First, get the server info and build the command
         let (shell, args, title) = if let Some(ref remote_ui) = self.remote_server_ui {
             if let Some(server) = remote_ui.manager.get_server(server_id) {
+                log::info!("找到服务器配置: {}@{}:{}", server.username, server.host, server.port);
                 let (shell, args) = SshConnectionBuilder::build_ssh_command(server)?;
+                log::info!("构建SSH命令: {} {}", shell, args.join(" "));
                 let title = format!("SSH: {}", server.get_display_name());
                 (shell, args, title)
             } else {
+                log::error!("服务器配置不存在，ID: {}", server_id);
                 return Err("服务器配置不存在".to_string());
             }
         } else {
+            log::error!("远程服务器管理器未初始化");
             return Err("远程服务器管理器未初始化".to_string());
         };
 
         // Create the session
         let backend_settings = BackendSettings {
-            shell,
-            args,
+            shell: shell.clone(),
+            args: args.clone(),
             working_directory: None,
             ssh_config: None, // SSH config is embedded in the command
             env_vars: std::collections::HashMap::new(),
         };
 
+        log::info!("创建终端会话，shell: {}, args: {:?}", shell, args);
         let session_id = self.create_session_with_settings(Some(title), ctx, backend_settings)?;
+        log::info!("SSH会话创建成功，会话ID: {}", session_id);
 
         // Update connection statistics
         if let Some(ref mut remote_ui) = self.remote_server_ui {
@@ -180,11 +188,17 @@ impl ITerminalState {
         &mut self,
         title: Option<String>,
         ctx: &egui::Context,
-        _settings: BackendSettings
+        settings: BackendSettings
     ) -> Result<Uuid, String> {
-        // This method would need to be implemented to support custom backend settings
-        // For now, we'll use the existing create_session method
-        self.create_session(title, Some(ctx))
+        log::info!("创建带有自定义设置的终端会话: shell={}, args={:?}", settings.shell, settings.args);
+
+        // Create session with SSH command and arguments
+        self.egui_terminal_manager.create_session_with_command(
+            title,
+            ctx,
+            &settings.shell,
+            &settings.args
+        )
     }
 
     /// Handle remote server actions
@@ -216,8 +230,11 @@ impl ITerminalState {
                 Ok(())
             }
             RemoteServerAction::TestConnection(server_id) => {
+                log::info!("处理连接测试动作，服务器ID: {}", server_id);
                 if let Some(ref mut remote_ui) = self.remote_server_ui {
                     remote_ui.start_connection_test(server_id);
+                } else {
+                    log::error!("远程服务器UI未初始化，无法执行连接测试");
                 }
                 Ok(())
             }

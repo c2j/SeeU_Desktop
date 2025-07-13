@@ -49,6 +49,15 @@ base64 = "0.21"
 # 系统密钥环支持
 keyring = "2.0"
 
+# 原生SSH支持（不依赖外部SSH客户端）
+ssh2 = "0.9"
+# WebSocket支持（用于Web SSH）
+tokio-tungstenite = "0.20"
+# HTTP客户端（用于REST API SSH）
+reqwest = { version = "0.11", features = ["json"] }
+# 网络连接
+tokio-util = { version = "0.7", features = ["codec"] }
+
 [dev-dependencies]
 env_logger = "0.10"
 eframe = "0.28.1"
@@ -80,3 +89,23 @@ path = "examples/ui_demo.rs"
 [[example]]
 name = "lazy_init_demo"
 path = "examples/lazy_init_demo.rs"
+
+[[example]]
+name = "connection_test_demo"
+path = "examples/connection_test_demo.rs"
+
+[[example]]
+name = "simple_ssh_test"
+path = "examples/simple_ssh_test.rs"
+
+[[example]]
+name = "debug_connection_test"
+path = "examples/debug_connection_test.rs"
+
+[[example]]
+name = "ssh_platform_test"
+path = "examples/ssh_platform_test.rs"
+
+[[example]]
+name = "ssh_alternatives_test"
+path = "examples/ssh_alternatives_test.rs"

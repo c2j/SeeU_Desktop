@@ -41,17 +41,23 @@ impl EguiTerminalSession {
     }
 
     pub fn initialize_terminal(&mut self, ctx: &egui::Context) -> Result<(), Box<dyn std::error::Error>> {
+        self.initialize_terminal_with_settings(ctx, BackendSettings::default())
+    }
+
+    pub fn initialize_terminal_with_settings(&mut self, ctx: &egui::Context, settings: BackendSettings) -> Result<(), Box<dyn std::error::Error>> {
         // Create a channel for terminal events
         let (sender, receiver) = mpsc::channel();
 
         // Generate a unique ID for this terminal
         let terminal_id = self.id.as_u128() as u64;
 
+        log::info!("初始化终端后端，设置: shell={}, args={:?}", settings.shell, settings.args);
+
         match TerminalBackend::new(
             terminal_id,
             ctx.clone(),
             sender,
-            BackendSettings::default()
+            settings
         ) {
             Ok(backend) => {
                 self.backend = Some(backend);
@@ -238,6 +244,62 @@ impl EguiTerminalManager {
 
         self.sessions.insert(session_id, session);
         log::info!("Created new terminal session: {} ({})", title, session_id);
+
+        Ok(session_id)
+    }
+
+    pub fn create_session_with_command(
+        &mut self,
+        title: Option<String>,
+        ctx: &egui::Context,
+        shell: &str,
+        args: &[String]
+    ) -> Result<Uuid, String> {
+        let title = title.unwrap_or_else(|| {
+            let title = format!("Terminal {}", self.next_session_number);
+            self.next_session_number += 1;
+            title
+        });
+
+        let mut session = EguiTerminalSession::new(title.clone());
+        let session_id = session.id;
+
+        // Create custom backend settings with SSH command
+        let settings = BackendSettings {
+            shell: shell.to_string(),
+            args: args.to_vec(),
+            working_directory: None,
+            ssh_config: None,
+            env_vars: std::collections::HashMap::new(),
+        };
+
+        // Initialize the terminal with custom settings
+        match session.initialize_terminal_with_settings(ctx, settings) {
+            Ok(_) => {
+                log::info!("Terminal backend initialized successfully for new session with command: {} {:?}", shell, args);
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to initialize terminal backend for new session '{}' with command '{}': {}", title, shell, e);
+                log::error!("{}", error_msg);
+                return Err(error_msg);
+            }
+        }
+
+        // Verify the terminal is ready
+        if !session.is_terminal_ready() {
+            let error_msg = format!("Terminal backend is not ready after initialization for session '{}'", title);
+            log::error!("{}", error_msg);
+            return Err(error_msg);
+        }
+
+        // Set as active if it's the first session
+        if self.sessions.is_empty() {
+            self.active_session_id = Some(session_id);
+            session.is_active = true;
+        }
+
+        self.sessions.insert(session_id, session);
+        log::info!("Created new terminal session with command: {} ({}) - {} {:?}", title, session_id, shell, args);
 
         Ok(session_id)
     }
