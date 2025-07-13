@@ -12,7 +12,10 @@ use eframe::egui;
 use state::AIAssistState;
 
 // Re-export types that are needed by the app
-pub use state::SlashCommand;
+pub use state::{
+    SlashCommand, TerminalCommand, NoteCommand, EditorCommand,
+    TerminalContext, NoteContext, FileContext, ChatMessage, MessageRole
+};
 
 /// Render the AI assistant
 pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
@@ -75,9 +78,65 @@ pub fn update_can_insert_to_note(state: &mut AIAssistState, can_insert: bool) {
     state.update_can_insert_to_note(can_insert);
 }
 
-/// Set current file context for AI assistant
-pub fn set_file_context(state: &mut AIAssistState, context: Option<state::FileContext>) {
-    state.set_file_context(context);
+/// Set terminal context
+pub fn set_terminal_context(state: &mut AIAssistState, context: TerminalContext) {
+    state.set_terminal_context(context);
+}
+
+/// Update terminal output
+pub fn update_terminal_output(state: &mut AIAssistState, output: String) {
+    state.update_terminal_output(output);
+}
+
+
+
+/// Update note context
+pub fn update_note_context(state: &mut AIAssistState, title: String, content: String) {
+    state.update_note_context(title, content);
+}
+
+/// Clear note context
+pub fn clear_note_context(state: &mut AIAssistState) {
+    state.clear_note_context();
+}
+
+/// Update file context
+pub fn update_file_context(state: &mut AIAssistState, file_name: String, content: String) {
+    state.update_file_context(file_name, content);
+}
+
+/// Clear file context
+pub fn clear_file_context(state: &mut AIAssistState) {
+    state.clear_file_context();
+}
+
+
+
+/// Process @ references in content
+pub fn process_at_references(state: &AIAssistState, content: &str) -> String {
+    state.process_at_references(content)
+}
+
+
+
+/// Set note context
+pub fn set_note_context(state: &mut AIAssistState, context: NoteContext) {
+    state.set_note_context(context);
+}
+
+/// Update current note
+pub fn update_current_note(state: &mut AIAssistState, note_id: String, title: String, content: String) {
+    state.update_current_note(note_id, title, content);
+}
+
+/// Update note search results
+pub fn update_note_search_results(state: &mut AIAssistState, query: String, results: Vec<String>) {
+    state.update_note_search_results(query, results);
+}
+
+/// Set file context
+pub fn set_file_context(state: &mut AIAssistState, context: Option<FileContext>) {
+    state.current_file_context = context;
 }
 
 /// Save AI assistant settings

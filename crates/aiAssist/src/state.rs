@@ -33,6 +33,12 @@ pub type InsertToNoteCallback = Box<dyn FnMut(String) + Send + 'static>;
 /// Type for MCP refresh callback
 pub type McpRefreshCallback = Box<dyn FnMut() + Send + 'static>;
 
+
+
+
+
+
+
 /// Command menu state for smart command suggestions
 #[derive(Debug, Clone)]
 pub struct CommandMenuState {
@@ -99,12 +105,22 @@ pub struct AIAssistState {
     pub insert_to_note_callback: Option<InsertToNoteCallback>,
     pub mcp_refresh_callback: Option<McpRefreshCallback>,
 
+
+
+
     // 标记当前是否处于笔记视图且有打开的笔记
     pub can_insert_to_note: bool,
 
     // 控制@指令和Slash指令的提示框显示
     pub show_at_commands: bool,
     pub show_slash_commands: bool,
+
+    // 存储按钮位置用于定位选择框
+    pub at_button_rect: Option<egui::Rect>,
+    pub slash_button_rect: Option<egui::Rect>,
+
+    // 防止智能指令菜单处理回车键后立即发送消息
+    pub command_menu_just_handled_enter: bool,
 
     // 智能指令菜单状态
     pub command_menu: CommandMenuState,
@@ -140,6 +156,12 @@ pub struct AIAssistState {
 
     // 文件编辑器上下文信息
     pub current_file_context: Option<FileContext>,
+
+    // 终端上下文信息
+    pub terminal_context: Option<TerminalContext>,
+
+    // 笔记上下文信息
+    pub note_context: Option<NoteContext>,
 }
 
 impl Default for AIAssistState {
@@ -181,9 +203,15 @@ impl Default for AIAssistState {
             slash_command_callback: None,
             insert_to_note_callback: None,
             mcp_refresh_callback: None,
+
+
+
             can_insert_to_note: false,
             show_at_commands: false,
             show_slash_commands: false,
+            at_button_rect: None,
+            slash_button_rect: None,
+            command_menu_just_handled_enter: false,
             command_menu: CommandMenuState::default(),
             selected_mcp_server: None,
             mcp_server_capabilities: HashMap::new(),
@@ -201,6 +229,8 @@ impl Default for AIAssistState {
             last_search_query: None,
             last_search_results: None,
             current_file_context: None,
+            terminal_context: None,
+            note_context: None,
             show_api_key_masked: true, // 默认启用掩码显示
         }
     }
@@ -359,7 +389,7 @@ impl AIAssistState {
                     let help_message = ChatMessage {
                         id: Uuid::new_v4(),
                         role: MessageRole::System,
-                        content: "可用的斜杠命令:\n/search [查询] - 执行搜索\n/clear - 清空当前会话\n/new - 创建新会话\n/help - 显示此帮助信息".to_string(),
+                        content: "可用的斜杠命令:\n/search [查询] - 执行搜索\n/clear - 清空当前会话\n/new - 创建新会话\n/help - 显示此帮助信息\n/term [命令] - 终端操作\n/note [操作] - 笔记操作\n/editor [操作] - 文件编辑器操作".to_string(),
                         timestamp: Utc::now(),
                         attachments: vec![],
                         tool_calls: None,
@@ -377,6 +407,44 @@ impl AIAssistState {
                     self.chat_input.clear();
                     self.auto_save_sessions();
                     return None;
+                },
+                SlashCommand::Terminal(_) | SlashCommand::Note(_) | SlashCommand::Editor(_) => {
+                    // Create a slash command message showing the command
+                    let user_message = ChatMessage {
+                        id: Uuid::new_v4(),
+                        role: MessageRole::SlashCommand,
+                        content: self.chat_input.clone(),
+                        timestamp: Utc::now(),
+                        attachments: vec![],
+                        tool_calls: None,
+                        tool_call_results: None,
+                        mcp_server_info: None,
+                    };
+
+                    // Add the message to the current session
+                    if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                        // 检查是否是该会话的第一条用户消息
+                        let is_first_user_message = session.messages.iter()
+                            .filter(|msg| msg.role == MessageRole::User)
+                            .count() == 0;
+
+                        // 如果是第一条用户消息，更新会话名称为消息摘要
+                        if is_first_user_message {
+                            // 获取消息摘要（最多12个字符）
+                            let summary = Self::get_message_summary(&user_message.content, 12);
+                            session.name = summary;
+                        }
+
+                        session.messages.push(user_message.clone());
+                    }
+
+                    // Add the message to the current chat
+                    self.chat_messages.push(user_message);
+
+                    // Clear the input
+                    self.chat_input.clear();
+
+                    return slash_command;
                 }
             }
         }
@@ -419,6 +487,8 @@ impl AIAssistState {
         // Auto-save sessions after adding a message
         self.auto_save_sessions();
 
+
+
         // Mark as sending
         self.is_sending = true;
 
@@ -430,7 +500,7 @@ impl AIAssistState {
 
     /// Parse slash command
     fn parse_slash_command(&self, input: &str) -> Option<SlashCommand> {
-        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+        let parts: Vec<&str> = input.splitn(3, ' ').collect();
 
         if parts.len() < 1 {
             return None;
@@ -447,6 +517,110 @@ impl AIAssistState {
             "/clear" => Some(SlashCommand::Clear),
             "/new" => Some(SlashCommand::New),
             "/help" => Some(SlashCommand::Help),
+            "/term" | "/terminal" => {
+                self.parse_terminal_command(&parts[1..])
+            },
+            "/note" => {
+                self.parse_note_command(&parts[1..])
+            },
+            "/editor" => {
+                self.parse_editor_command(&parts[1..])
+            },
+            _ => None
+        }
+    }
+
+    /// Parse terminal command
+    fn parse_terminal_command(&self, parts: &[&str]) -> Option<SlashCommand> {
+        if parts.is_empty() {
+            return Some(SlashCommand::Terminal(TerminalCommand::Export));
+        }
+
+        match parts[0] {
+            "new" => {
+                let title = if parts.len() > 1 {
+                    Some(parts[1..].join(" "))
+                } else {
+                    None
+                };
+                Some(SlashCommand::Terminal(TerminalCommand::NewSession(title)))
+            },
+            "switch" => {
+                if parts.len() > 1 {
+                    Some(SlashCommand::Terminal(TerminalCommand::SwitchSession(parts[1].to_string())))
+                } else {
+                    None
+                }
+            },
+            "export" => Some(SlashCommand::Terminal(TerminalCommand::Export)),
+            _ => {
+                // 默认作为执行命令
+                let command = parts.join(" ");
+                Some(SlashCommand::Terminal(TerminalCommand::Execute(command)))
+            }
+        }
+    }
+
+    /// Parse note command
+    fn parse_note_command(&self, parts: &[&str]) -> Option<SlashCommand> {
+        if parts.is_empty() {
+            return Some(SlashCommand::Note(NoteCommand::List));
+        }
+
+        match parts[0] {
+            "create" => {
+                if parts.len() > 1 {
+                    let title = parts[1..].join(" ");
+                    Some(SlashCommand::Note(NoteCommand::Create(title)))
+                } else {
+                    Some(SlashCommand::Note(NoteCommand::Create("新笔记".to_string())))
+                }
+            },
+            "search" => {
+                if parts.len() > 1 {
+                    let query = parts[1..].join(" ");
+                    Some(SlashCommand::Note(NoteCommand::Search(query)))
+                } else {
+                    None
+                }
+            },
+            "open" => {
+                if parts.len() > 1 {
+                    Some(SlashCommand::Note(NoteCommand::Open(parts[1].to_string())))
+                } else {
+                    None
+                }
+            },
+            "list" => Some(SlashCommand::Note(NoteCommand::List)),
+            _ => None
+        }
+    }
+
+    /// Parse editor command
+    fn parse_editor_command(&self, parts: &[&str]) -> Option<SlashCommand> {
+        if parts.is_empty() {
+            return Some(SlashCommand::Editor(EditorCommand::List));
+        }
+
+        match parts[0] {
+            "open" => {
+                if parts.len() > 1 {
+                    let path = parts[1..].join(" ");
+                    Some(SlashCommand::Editor(EditorCommand::Open(path)))
+                } else {
+                    None
+                }
+            },
+            "create" => {
+                if parts.len() > 1 {
+                    let path = parts[1..].join(" ");
+                    Some(SlashCommand::Editor(EditorCommand::Create(path)))
+                } else {
+                    None
+                }
+            },
+            "save" => Some(SlashCommand::Editor(EditorCommand::Save)),
+            "list" => Some(SlashCommand::Editor(EditorCommand::List)),
             _ => None
         }
     }
@@ -577,8 +751,13 @@ impl AIAssistState {
                     state.is_complete = true;
 
                     if let Err(e) = result {
-                        log::error!("Error sending chat stream: {}", e);
-                        state.error = Some(format!("错误: {}", e));
+                        let error_msg = if e.to_string().trim().is_empty() {
+                            "API请求失败，请检查网络连接和API配置".to_string()
+                        } else {
+                            e.to_string()
+                        };
+                        log::error!("Error sending chat stream: {}", error_msg);
+                        state.error = Some(format!("错误: {}", error_msg));
                     }
                 } else {
                     // Use non-streaming API with tools support
@@ -668,12 +847,8 @@ impl AIAssistState {
         for message in &session.messages {
             match message.role {
                 MessageRole::User => {
-                    // 处理用户消息中的 @search 引用
-                    let content = if message.content.contains("@search") {
-                        self.process_search_references(&message.content)
-                    } else {
-                        message.content.clone()
-                    };
+                    // 处理用户消息中的 @ 引用
+                    let content = self.process_at_references(&message.content);
                     messages.push((MessageRole::User, content));
                 },
                 MessageRole::Assistant => {
@@ -716,6 +891,9 @@ impl AIAssistState {
 
     /// Prepare messages for the API
     fn prepare_messages_for_api(&self) -> Vec<(MessageRole, String)> {
+        log::info!("🔄 开始准备API消息");
+        log::info!("🔄 当前终端上下文状态: {:?}",
+            self.terminal_context.as_ref().map(|ctx| ctx.last_output.as_ref().map(|s| s.len()).unwrap_or(0)));
         // Get all messages from the current session
         let session = &self.chat_sessions[self.active_session_idx];
         let mut messages = Vec::new();
@@ -732,8 +910,11 @@ impl AIAssistState {
             .filter(|msg| msg.role != MessageRole::SlashCommand)
             .map(|msg| {
                 let content = if msg.role == MessageRole::User {
-                    // 处理用户消息中的 @search 引用
-                    self.process_search_references(&msg.content)
+                    // 处理用户消息中的 @ 引用
+                    log::info!("🔄 处理用户消息，原始内容: {:?}", msg.content);
+                    let processed = self.process_at_references(&msg.content);
+                    log::info!("🔄 处理后内容: {:?}", processed);
+                    processed
                 } else {
                     msg.content.clone()
                 };
@@ -746,21 +927,137 @@ impl AIAssistState {
         messages
     }
 
-    /// 处理消息中的 @search 引用
-    fn process_search_references(&self, content: &str) -> String {
-        // 如果消息中包含 @search 并且我们有搜索结果，则替换为实际的搜索结果
-        if content.contains("@search") && self.last_search_query.is_some() && self.last_search_results.is_some() {
-            let query = self.last_search_query.as_ref().unwrap();
-            let results = self.last_search_results.as_ref().unwrap();
+    /// 处理消息中的 @ 引用
+    pub fn process_at_references(&self, content: &str) -> String {
+        let mut result = content.to_string();
 
-            // 替换 @search 为实际的搜索结果（第一条结果的详细内容）
-            let replacement = format!("@search (查询: \"{}\" 的第一条结果):\n{}", query, results);
-            content.replace("@search", &replacement)
-        } else if content.contains("@search") {
-            // 如果没有搜索结果，提示用户先进行搜索
-            content.replace("@search", "@search (请先使用 /search 命令进行搜索)")
+        // 处理 @search 引用
+        if result.contains("@search") {
+            if self.last_search_query.is_some() && self.last_search_results.is_some() {
+                let query = self.last_search_query.as_ref().unwrap();
+                let results = self.last_search_results.as_ref().unwrap();
+                let replacement = format!("@search (查询: \"{}\" 的第一条结果):\n{}", query, results);
+                result = result.replace("@search", &replacement);
+            } else {
+                result = result.replace("@search", "@search (请先使用 /search 命令进行搜索)");
+            }
+        }
+
+        // 处理 @term 引用
+        if result.contains("@term") {
+            log::info!("🔍 检测到 @term 引用，开始处理");
+
+            // 检查是否有存储的终端上下文
+            let terminal_content = if let Some(terminal_context) = &self.terminal_context {
+                log::info!("📋 找到终端上下文，内容长度: {}",
+                    terminal_context.last_output.as_ref().map(|s| s.len()).unwrap_or(0));
+                terminal_context.last_output.clone()
+            } else {
+                log::info!("❌ 没有找到终端上下文");
+                None
+            };
+
+            if let Some(content) = terminal_content {
+                // 如果有终端内容，替换 @term
+                let replacement = format!("@term (当前终端输出):\n{}", content);
+                result = result.replace("@term", &replacement);
+                log::info!("✅ @term 已替换为终端内容，替换后长度: {}", replacement.len());
+            } else {
+                log::info!("⚠️ 没有终端内容，保持 @term 不变");
+            }
+            // 如果没有终端内容，保持 @term 不变，不进行替换
+        }
+
+        // 处理 @note 引用
+        if result.contains("@note") {
+            let replacement = if let Some(note_context) = &self.note_context {
+                if let Some(content) = &note_context.current_note_content {
+                    let title = note_context.current_note_title.as_deref().unwrap_or("未知笔记");
+                    format!("@note (当前笔记: \"{}\"):\n{}", title, content)
+                } else {
+                    "@note (暂无打开的笔记)".to_string()
+                }
+            } else {
+                "@note (暂无打开的笔记)".to_string()
+            };
+            result = result.replace("@note", &replacement);
+        }
+
+        // 处理 @editor 引用
+        if result.contains("@editor") {
+            let replacement = if let Some(file_context) = &self.current_file_context {
+                format!("@editor (当前文件: \"{}\"):\n{}",
+                    file_context.file_name, file_context.content)
+            } else {
+                "@editor (暂无打开的文件)".to_string()
+            };
+            result = result.replace("@editor", &replacement);
+        }
+
+        result
+    }
+
+    /// 设置终端上下文
+    pub fn set_terminal_context(&mut self, context: TerminalContext) {
+        self.terminal_context = Some(context);
+    }
+
+    /// 更新终端输出
+    pub fn update_terminal_output(&mut self, output: String) {
+        if let Some(context) = &mut self.terminal_context {
+            context.last_output = Some(output);
         } else {
-            content.to_string()
+            // 如果没有终端上下文，创建一个新的
+            self.terminal_context = Some(TerminalContext {
+                current_session_id: None,
+                current_session_title: None,
+                last_command: None,
+                last_output: Some(output),
+                command_history: Vec::new(),
+                working_directory: None,
+            });
+        }
+    }
+
+    /// 设置笔记上下文
+    pub fn set_note_context(&mut self, context: NoteContext) {
+        self.note_context = Some(context);
+    }
+
+    /// 更新当前笔记内容
+    pub fn update_current_note(&mut self, note_id: String, title: String, content: String) {
+        if let Some(context) = &mut self.note_context {
+            context.current_note_id = Some(note_id);
+            context.current_note_title = Some(title);
+            context.current_note_content = Some(content);
+        } else {
+            self.note_context = Some(NoteContext {
+                current_note_id: Some(note_id),
+                current_note_title: Some(title),
+                current_note_content: Some(content),
+                current_notebook_id: None,
+                current_notebook_name: None,
+                last_search_query: None,
+                last_search_results: Vec::new(),
+            });
+        }
+    }
+
+    /// 更新笔记搜索结果
+    pub fn update_note_search_results(&mut self, query: String, results: Vec<String>) {
+        if let Some(context) = &mut self.note_context {
+            context.last_search_query = Some(query);
+            context.last_search_results = results;
+        } else {
+            self.note_context = Some(NoteContext {
+                current_note_id: None,
+                current_note_title: None,
+                current_note_content: None,
+                current_notebook_id: None,
+                current_notebook_name: None,
+                last_search_query: Some(query),
+                last_search_results: results,
+            });
         }
     }
 
@@ -1000,6 +1297,53 @@ impl AIAssistState {
         self.mcp_refresh_callback = Some(Box::new(callback));
     }
 
+
+
+
+
+
+
+    /// Update note context
+    pub fn update_note_context(&mut self, title: String, content: String) {
+        self.note_context = Some(NoteContext {
+            current_note_id: None,
+            current_note_title: Some(title),
+            current_note_content: Some(content),
+            current_notebook_id: None,
+            current_notebook_name: None,
+            last_search_query: None,
+            last_search_results: Vec::new(),
+        });
+    }
+
+    /// Clear note context
+    pub fn clear_note_context(&mut self) {
+        self.note_context = None;
+    }
+
+    /// Update file context
+    pub fn update_file_context(&mut self, file_name: String, content: String) {
+        use std::path::PathBuf;
+
+        self.current_file_context = Some(FileContext {
+            file_path: PathBuf::from(&file_name),
+            file_name,
+            language: None,
+            content,
+            selected_text: None,
+            cursor_line: 0,
+            cursor_column: 0,
+            total_lines: 0,
+            is_modified: false,
+            is_read_only: false,
+        });
+    }
+
+    /// Clear file context
+    pub fn clear_file_context(&mut self) {
+        self.current_file_context = None;
+    }
+
     /// Add a search result reference to the current chat
     pub fn add_search_reference(&mut self, query: &str, result_count: usize) {
         // 存储最近的搜索查询
@@ -1205,28 +1549,44 @@ impl AIAssistState {
     /// 检查输入变化并更新指令菜单状态
     pub fn update_command_menu(&mut self, cursor_pos: Option<egui::Pos2>) {
         let input = &self.chat_input;
+        // log::info!("🔍 更新指令菜单: 输入内容='{}'", input);
 
         // 检查是否应该显示指令菜单
         if let Some(trigger_pos) = self.find_command_trigger(input) {
             let trigger_char = input.chars().nth(trigger_pos).unwrap_or(' ');
+            log::info!("✅ 找到指令触发字符: '{}' 在位置 {}", trigger_char, trigger_pos);
 
             // 只有在菜单不可见或者触发位置改变时才更新
             if !self.command_menu.is_visible || self.command_menu.trigger_position != trigger_pos {
+                log::info!("🎯 激活智能指令菜单: 触发字符='{}', 位置={}", trigger_char, trigger_pos);
                 self.command_menu.is_visible = true;
                 self.command_menu.trigger_position = trigger_pos;
                 self.command_menu.cursor_position = cursor_pos;
                 self.command_menu.selected_index = 0;
 
                 match trigger_char {
-                    '@' => self.command_menu.menu_type = CommandMenuType::AtCommands,
-                    '/' => self.command_menu.menu_type = CommandMenuType::SlashCommands,
-                    _ => self.command_menu.menu_type = CommandMenuType::None,
+                    '@' => {
+                        self.command_menu.menu_type = CommandMenuType::AtCommands;
+                        log::info!("📋 设置菜单类型: AtCommands");
+                    },
+                    '/' => {
+                        self.command_menu.menu_type = CommandMenuType::SlashCommands;
+                        log::info!("📋 设置菜单类型: SlashCommands");
+                    },
+                    _ => {
+                        self.command_menu.menu_type = CommandMenuType::None;
+                        log::info!("📋 设置菜单类型: None");
+                    },
                 }
             } else {
                 // 只更新光标位置
                 self.command_menu.cursor_position = cursor_pos;
+                log::info!("🔄 更新光标位置: 菜单已可见");
             }
         } else {
+            if self.command_menu.is_visible {
+                log::info!("❌ 隐藏智能指令菜单: 未找到触发字符");
+            }
             self.command_menu.is_visible = false;
             self.command_menu.menu_type = CommandMenuType::None;
         }
@@ -1235,33 +1595,55 @@ impl AIAssistState {
     /// 查找指令触发位置（@ 或 / 在单词开头）
     fn find_command_trigger(&self, input: &str) -> Option<usize> {
         let chars: Vec<char> = input.chars().collect();
+        // log::info!("🔍 查找指令触发字符: 输入='{}'", input);
 
         // 从后往前查找最近的 @ 或 /
         for (i, &ch) in chars.iter().enumerate().rev() {
             if ch == '@' {
                 // @ 指令可以出现在任何位置（前面是空格或开头）
                 let is_word_start = i == 0 || chars[i - 1].is_whitespace();
+                // log::info!("🔍 检查@字符: 位置={}, is_word_start={}", i, is_word_start);
 
                 if is_word_start {
                     // 检查后面的字符（如果有的话）
                     let after_chars = &chars[i + 1..];
 
-                    // 如果后面没有字符，或者后面只有字母、数字、下划线，且长度合理
+                    // 如果后面没有字符，或者后面只有字母、数字、下划线、换行符，且长度合理
+                    let after_chars_str: String = after_chars.iter().collect();
+                    let all_valid = after_chars.iter().all(|&c| c.is_alphanumeric() || c == '_' || c == '\n');
+                    // log::info!("🔍 @字符后面的内容: '{:?}', 长度={}, 全部有效={}", after_chars_str, after_chars.len(), all_valid);
+
+                    // 检查是否已经是完整的指令（包含换行符意味着已经完成输入）
+                    let has_newline = after_chars.iter().any(|&c| c == '\n');
+                    let is_complete_command = has_newline && after_chars.len() > 1;
+                    // log::info!("🔍 @指令完整性检查: 包含换行符={}, 是完整指令={}", has_newline, is_complete_command);
+
                     if after_chars.is_empty() ||
-                       (after_chars.iter().all(|&c| c.is_alphanumeric() || c == '_') && after_chars.len() <= 10) {
+                       (all_valid && after_chars.len() <= 10 && !is_complete_command) {
+                        // log::info!("✅ 找到@触发字符在位置: {}", i);
                         return Some(i);
+                    } else {
+                        // log::info!("❌ @字符后面内容不符合要求或已是完整指令");
                     }
                 }
             } else if ch == '/' {
                 // / 指令只能出现在输入框的第一个字符
+                // log::info!("🔍 检查/字符: 位置={}, 是否在开头={}", i, i == 0);
                 if i == 0 {
                     // 检查后面的字符（如果有的话）
                     let after_chars = &chars[i + 1..];
 
-                    // 如果后面没有字符，或者后面只有字母、数字、下划线，且长度合理
+                    // 如果后面没有字符，或者后面只有字母、数字、下划线、换行符，且长度合理
+                    let after_chars_str: String = after_chars.iter().collect();
+                    let all_valid = after_chars.iter().all(|&c| c.is_alphanumeric() || c == '_' || c == '\n');
+                    // log::info!("🔍 /字符后面的内容: '{:?}', 长度={}, 全部有效={}", after_chars_str, after_chars.len(), all_valid);
+
                     if after_chars.is_empty() ||
-                       (after_chars.iter().all(|&c| c.is_alphanumeric() || c == '_') && after_chars.len() <= 10) {
+                       (all_valid && after_chars.len() <= 10) {
+                        // log::info!("✅ 找到/触发字符在位置: {}", i);
                         return Some(i);
+                    } else {
+                        // log::info!("❌ /字符后面内容不符合要求");
                     }
                 }
             }
@@ -1318,6 +1700,9 @@ impl AIAssistState {
                     "@date".to_string(),
                     "@time".to_string(),
                     "@user".to_string(),
+                    "@term".to_string(),
+                    "@note".to_string(),
+                    "@editor".to_string(),
                 ]
             },
             CommandMenuType::SlashCommands => {
@@ -1326,6 +1711,9 @@ impl AIAssistState {
                     "/clear".to_string(),
                     "/help".to_string(),
                     "/new".to_string(),
+                    "/term".to_string(),
+                    "/note".to_string(),
+                    "/editor".to_string(),
                 ]
             },
             CommandMenuType::None => vec![],
@@ -1356,12 +1744,17 @@ impl AIAssistState {
             if selected_command.starts_with('/') && selected_command != "/clear" && selected_command != "/help" && selected_command != "/new" {
                 self.chat_input.push(' ');
             }
+
+            log::info!("智能指令菜单: 应用选中的指令 '{}', 输入框内容更新为: '{}'", selected_command, self.chat_input);
         }
 
         // 隐藏菜单，但保持输入框焦点
         self.command_menu.is_visible = false;
         self.command_menu.menu_type = CommandMenuType::None;
         self.should_focus_chat = true; // 确保输入框保持焦点
+
+        // 设置标志，防止在同一帧中处理正常的发送逻辑
+        self.command_menu_just_handled_enter = true;
     }
 
     /// 设置选中的MCP服务器
@@ -2000,6 +2393,39 @@ pub enum SlashCommand {
     Clear,
     New,
     Help,
+    // 新增终端相关命令
+    Terminal(TerminalCommand),
+    // 新增笔记相关命令
+    Note(NoteCommand),
+    // 新增编辑器相关命令
+    Editor(EditorCommand),
+}
+
+/// 终端命令类型
+#[derive(Clone, Debug, PartialEq)]
+pub enum TerminalCommand {
+    Execute(String),        // 执行命令
+    NewSession(Option<String>), // 创建新会话
+    SwitchSession(String),  // 切换会话
+    Export,                 // 导出内容
+}
+
+/// 笔记命令类型
+#[derive(Clone, Debug, PartialEq)]
+pub enum NoteCommand {
+    Create(String),         // 创建笔记
+    Search(String),         // 搜索笔记
+    Open(String),          // 打开笔记
+    List,                  // 列出笔记
+}
+
+/// 编辑器命令类型
+#[derive(Clone, Debug, PartialEq)]
+pub enum EditorCommand {
+    Open(String),          // 打开文件
+    Create(String),        // 创建文件
+    Save,                  // 保存文件
+    List,                  // 列出文件
 }
 
 /// 文件上下文信息（用于AI助手）
@@ -2015,6 +2441,29 @@ pub struct FileContext {
     pub total_lines: usize,
     pub is_modified: bool,
     pub is_read_only: bool,
+}
+
+/// 终端上下文信息（用于AI助手）
+#[derive(Debug, Clone)]
+pub struct TerminalContext {
+    pub current_session_id: Option<String>,
+    pub current_session_title: Option<String>,
+    pub last_command: Option<String>,
+    pub last_output: Option<String>,
+    pub command_history: Vec<String>,
+    pub working_directory: Option<String>,
+}
+
+/// 笔记上下文信息（用于AI助手）
+#[derive(Debug, Clone)]
+pub struct NoteContext {
+    pub current_note_id: Option<String>,
+    pub current_note_title: Option<String>,
+    pub current_note_content: Option<String>,
+    pub current_notebook_id: Option<String>,
+    pub current_notebook_name: Option<String>,
+    pub last_search_query: Option<String>,
+    pub last_search_results: Vec<String>,
 }
 
 // 移除ProviderType，统一使用OpenAI compatible格式

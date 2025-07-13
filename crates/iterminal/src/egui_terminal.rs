@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui_term::{TerminalView, TerminalBackend, BackendSettings};
+use egui_term::{TerminalView, TerminalBackend, BackendSettings, BackendCommand};
 use alacritty_terminal::event::Event as PtyEvent;
 use std::collections::HashMap;
 use std::sync::mpsc;
@@ -100,11 +100,27 @@ impl EguiTerminalSession {
             };
 
             // Create and render the terminal view
+            // 简化的焦点管理：只在活动会话时设置焦点，但允许点击获得焦点
             let terminal_view = TerminalView::new(ui, backend)
-                .set_focus(self.is_active)
+                .set_focus(self.is_active)  // 只有活动会话才能获得焦点
                 .set_size(available_size);
 
-            ui.add(terminal_view);
+            let response = ui.add(terminal_view);
+
+            // 如果用户点击了非活动终端，记录日志但不强制请求焦点
+            if response.clicked() {
+                log::info!("Terminal clicked, session {} (active: {})", self.id, self.is_active);
+                if !self.is_active {
+                    log::info!("Clicked terminal is not active, focus will be handled by session switching");
+                }
+            }
+
+            // 如果鼠标悬停在终端上，显示提示
+            if response.hovered() && !self.is_active {
+                response.on_hover_text("点击此处切换到该终端会话");
+            } else if response.hovered() && self.is_active && !response.has_focus() {
+                response.on_hover_text("点击此处获得终端焦点");
+            }
         } else {
             // Show initialization message
             ui.vertical_centered(|ui| {
@@ -236,13 +252,11 @@ impl EguiTerminalManager {
             return Err(error_msg);
         }
 
-        // Set as active if it's the first session
-        if self.sessions.is_empty() {
-            self.active_session_id = Some(session_id);
-            session.is_active = true;
-        }
-
+        // Add session to manager first
         self.sessions.insert(session_id, session);
+
+        // Set as active session (always make new session active)
+        self.set_active_session(session_id);
         log::info!("Created new terminal session: {} ({})", title, session_id);
 
         Ok(session_id)
@@ -292,13 +306,11 @@ impl EguiTerminalManager {
             return Err(error_msg);
         }
 
-        // Set as active if it's the first session
-        if self.sessions.is_empty() {
-            self.active_session_id = Some(session_id);
-            session.is_active = true;
-        }
-
+        // Add session to manager first
         self.sessions.insert(session_id, session);
+
+        // Set as active session (always make new session active)
+        self.set_active_session(session_id);
         log::info!("Created new terminal session with command: {} ({}) - {} {:?}", title, session_id, shell, args);
 
         Ok(session_id)
@@ -432,6 +444,26 @@ impl EguiTerminalManager {
         for _session in self.sessions.values_mut() {
             // Here we could add periodic updates if needed
             // For now, egui_term handles its own updates
+        }
+    }
+
+    /// Send command to active session
+    pub fn send_command_to_active_session(&mut self, command: &str) -> Result<(), String> {
+        if let Some(session_id) = self.active_session_id {
+            if let Some(session) = self.sessions.get_mut(&session_id) {
+                if let Some(backend) = &mut session.backend {
+                    let command_bytes = format!("{}\n", command).into_bytes();
+                    backend.process_command(BackendCommand::Write(command_bytes));
+                    session.last_activity = chrono::Utc::now();
+                    Ok(())
+                } else {
+                    Err("No backend available for active session".to_string())
+                }
+            } else {
+                Err("Active session not found".to_string())
+            }
+        } else {
+            Err("No active session".to_string())
         }
     }
 

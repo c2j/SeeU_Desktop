@@ -9,6 +9,28 @@ mod config;
 use eframe::{self, egui};
 
 fn main() -> Result<(), eframe::Error> {
+    // Set up panic hook to handle panics gracefully
+    std::panic::set_hook(Box::new(|panic_info| {
+        let location = panic_info.location().unwrap_or_else(|| {
+            std::panic::Location::caller()
+        });
+
+        let msg = match panic_info.payload().downcast_ref::<&'static str>() {
+            Some(s) => *s,
+            None => match panic_info.payload().downcast_ref::<String>() {
+                Some(s) => &s[..],
+                None => "Box<dyn Any>",
+            },
+        };
+
+        eprintln!("Panic occurred at {}:{}: {}", location.file(), location.line(), msg);
+
+        // Try to log the panic if logger is available
+        if log::log_enabled!(log::Level::Error) {
+            log::error!("Panic occurred at {}:{}: {}", location.file(), location.line(), msg);
+        }
+    }));
+
     // Initialize custom logger with WARN level to reduce log noise
     utils::logger::Logger::init(log::LevelFilter::Info, true)
         .expect("Failed to initialize logger");

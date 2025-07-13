@@ -3,6 +3,12 @@ use crate::state::{AIAssistState, MessageRole};
 
 /// Render the AI assistant UI
 pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
+    // 在每帧开始时重置智能指令菜单的回车键处理标志
+    // 注意：这个重置必须在处理任何输入之前进行
+    if !state.command_menu.is_visible {
+        state.command_menu_just_handled_enter = false;
+    }
+
     // 检查是否有来自异步任务的更新
     state.check_for_updates();
 
@@ -272,17 +278,19 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                         // AI消息内容
                                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                                             // 根据AI侧边栏的实际宽度动态调整对话框宽度
-                                            // 预留一些边距，确保内容不会贴边
+                                            // 预留右边距，防止长文本撑开整个界面宽度
                                             let available_width = ui.available_width();
-                                            let max_content_width = (available_width - 0.0).max(200.0); // 预留40px边距，最小200px
-                                            // 移除 ui.set_max_width，让内容可以自然流动到最大可用宽度
+                                            let max_content_width = (available_width * 0.85).max(200.0); // 限制为可用宽度的85%，最小200px
+
+                                            // 设置最大宽度，防止AI消息过宽
+                                            ui.set_max_width(max_content_width);
 
                                             // 如果是流式输出中的消息，显示动画效果
                                             if is_streaming && state.is_sending {
                                                 let text = &message.content;
 
                                                 // 处理消息内容
-                                                render_formatted_message(ui, text, max_content_width - 0.0, true, text_color);
+                                                render_formatted_message(ui, text, max_content_width, true, text_color);
 
                                                 // 添加闪烁的光标
                                                 let cursor = if (ui.input(|i| i.time) * 2.0).sin() > 0.0 { "▋" } else { " " };
@@ -307,7 +315,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                                 if has_content && !has_tool_calls {
                                                     log::debug!("🎨 UI渲染: 仅包含content，消息ID: {}", message.id);
                                                     ui.group(|ui| {
-                                                        render_formatted_message(ui, &message.content, max_content_width - 20.0, false, text_color);
+                                                        render_formatted_message(ui, &message.content, max_content_width, false, text_color);
                                                     });
                                                 }
                                                 // 情况2: 仅包含tool_calls - 显示工具调用框
@@ -315,7 +323,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                                     if let Some(tool_calls) = &message.tool_calls {
                                                         log::debug!("🎨 UI渲染: 仅包含工具调用，消息ID: {}", message.id);
                                                         ui.group(|ui| {
-                                                            if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 20.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
+                                                            if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
                                                                 pending_tool_executions.push(tool_call_request);
                                                             }
                                                         });
@@ -329,7 +337,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                                     ui.vertical(|ui| {
                                                         // 先显示content
                                                         ui.group(|ui| {
-                                                            render_formatted_message(ui, &message.content, max_content_width - 20.0, false, text_color);
+                                                            render_formatted_message(ui, &message.content, max_content_width, false, text_color);
                                                         });
 
                                                         if let Some(tool_calls) = &message.tool_calls {
@@ -344,7 +352,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                                                             // 再显示工具调用框
                                                             ui.group(|ui| {
-                                                                if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width - 20.0, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
+                                                                if let Some(tool_call_request) = render_tool_calls_in_message(ui, tool_calls, max_content_width, message.tool_call_results.as_deref(), message.mcp_server_info.as_ref()) {
                                                                     pending_tool_executions.push(tool_call_request);
                                                                 }
                                                             });
@@ -365,7 +373,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                                             });
                                                             ui.add_space(8.0);
                                                         }
-                                                        render_tool_call_results_in_message(ui, tool_results, max_content_width - 10.0);
+                                                        render_tool_call_results_in_message(ui, tool_results, max_content_width);
                                                     }
                                                 }
                                             }
@@ -449,7 +457,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     let input_height = (actual_rows as f32 * line_height) + 16.0; // 16.0为内边距
 
                     // 使用 ScrollArea 来强制限制高度并提供滚动功能
-                    let response = egui::ScrollArea::vertical()
+                    let text_edit_response = egui::ScrollArea::vertical()
                         .id_source("chat_input_scroll")
                         .max_height(input_height)
                         .show(ui, |ui| {
@@ -457,7 +465,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                 [available_width, input_height],
                                 egui::TextEdit::multiline(&mut state.chat_input)
                                     .id(egui::Id::new("main_chat_input"))
-                                    .hint_text("输入消息...")
+                                    .hint_text("输入消息... (点击此处获得焦点)")
                                     .desired_rows(actual_rows) // 使用计算出的行数
                                     // 如果正在发送，禁用输入框
                                     .interactive(!state.is_sending)
@@ -466,14 +474,25 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
 
                     // 如果需要聚焦，则请求焦点
                     if state.should_focus_chat {
-                        response.request_focus();
+                        log::info!("AI助手请求焦点: should_focus_chat = true");
+                        text_edit_response.request_focus();
                         state.should_focus_chat = false;
+                        // 强制刷新UI以确保焦点生效
+                        ui.ctx().request_repaint();
+                    }
+
+                    // 如果用户点击了输入框区域，也请求焦点
+                    if text_edit_response.clicked() {
+                        log::info!("AI助手输入框被点击，请求焦点");
+                        text_edit_response.request_focus();
+                        // 强制刷新UI以确保焦点生效
+                        ui.ctx().request_repaint();
                     }
 
                     // 获取光标位置并更新指令菜单
-                    let cursor_pos = if response.has_focus() {
+                    let cursor_pos = if text_edit_response.has_focus() {
                         // 尝试获取光标在屏幕上的位置
-                        Some(response.rect.left_bottom())
+                        Some(text_edit_response.rect.left_bottom())
                     } else {
                         None
                     };
@@ -484,7 +503,11 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     // 处理键盘输入 - 首先检查菜单是否需要处理
                     let mut menu_handled = false;
 
-                    if state.command_menu.is_visible && response.has_focus() {
+                    // 检查是否刚刚处理了智能指令菜单的回车键（在菜单可见性检查之前）
+                    if state.command_menu_just_handled_enter {
+                        menu_handled = true;
+                        log::info!("智能指令菜单刚刚处理了回车键，跳过所有键盘处理");
+                    } else if state.command_menu.is_visible && text_edit_response.has_focus() {
                         // 当菜单可见时，优先处理菜单相关的键盘事件
                         ui.input_mut(|i| {
                             // 检查是否有IME组合状态，如果有则不处理特殊键
@@ -503,7 +526,9 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                     // 消费回车键事件，防止被正常发送逻辑处理
                                     i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
                                     menu_handled = true;
+                                    log::info!("智能指令菜单: 处理回车键，当前输入框内容: '{}'", state.chat_input);
                                     state.handle_command_menu_input(egui::Key::Enter);
+                                    log::info!("智能指令菜单: 回车键处理完成，输入框内容: '{}'", state.chat_input);
                                 } else if i.key_pressed(egui::Key::Tab) {
                                     // 消费Tab键事件，防止焦点转移
                                     i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
@@ -518,7 +543,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     }
 
                     // 只有在菜单没有处理输入时，才处理正常的键盘输入
-                    if !menu_handled && response.has_focus() && !state.is_sending {
+                    if !menu_handled && text_edit_response.has_focus() && !state.is_sending {
                         // 检查IME组合状态
                         let has_ime_composition = ui.input(|i| {
                             i.events.iter().any(|event| {
@@ -530,12 +555,18 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                             let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                             let alt_pressed = ui.input(|i| i.modifiers.alt);
 
-                            if enter_pressed {
+                            // 检查是否刚刚处理了智能指令菜单的回车键
+                            if state.command_menu_just_handled_enter {
+                                log::info!("跳过正常发送逻辑: 智能指令菜单刚刚处理了回车键");
+                                // 重置标志，为下一帧做准备
+                                state.command_menu_just_handled_enter = false;
+                            } else if enter_pressed {
                                 if alt_pressed {
                                     // Alt+回车：添加换行符
                                     state.chat_input.push('\n');
                                 } else {
                                     // 单独的回车：发送消息
+                                    log::info!("正常发送逻辑: 处理回车键，当前输入框内容: '{}'", state.chat_input);
                                     if let Some(cmd) = state.send_message() {
                                         // Return the slash command to be handled by the parent
                                         if let Some(callback) = &mut state.slash_command_callback {
@@ -565,19 +596,42 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                     }
 
                     // @命令按钮
-                    if ui.button("@").clicked() {
-                        // 切换@命令提示框的显示状态
-                        state.show_at_commands = !state.show_at_commands;
-                        // 关闭Slash命令提示框
+                    let at_button_response = ui.button("@");
+                    if at_button_response.clicked() {
+                        // 在输入框中插入@字符并激活智能指令菜单
+                        if !state.chat_input.ends_with('@') {
+                            state.chat_input.push('@');
+                        }
+                        // 激活智能指令菜单
+                        state.command_menu.is_visible = true;
+                        state.command_menu.menu_type = crate::state::CommandMenuType::AtCommands;
+                        state.command_menu.selected_index = 0;
+                        state.command_menu.trigger_position = state.chat_input.len() - 1;
+                        state.command_menu.cursor_position = Some(at_button_response.rect.left_bottom());
+                        // 请求输入框焦点
+                        state.should_focus_chat = true;
+                        // 关闭旧的选择框
+                        state.show_at_commands = false;
                         state.show_slash_commands = false;
                     }
 
                     // Slash命令按钮
-                    if ui.button("/").clicked() {
-                        // 切换Slash命令提示框的显示状态
-                        state.show_slash_commands = !state.show_slash_commands;
-                        // 关闭@命令提示框
+                    let slash_button_response = ui.button("/");
+                    if slash_button_response.clicked() {
+                        // 清空输入框并插入/字符，激活智能指令菜单
+                        state.chat_input.clear();
+                        state.chat_input.push('/');
+                        // 激活智能指令菜单
+                        state.command_menu.is_visible = true;
+                        state.command_menu.menu_type = crate::state::CommandMenuType::SlashCommands;
+                        state.command_menu.selected_index = 0;
+                        state.command_menu.trigger_position = 0;
+                        state.command_menu.cursor_position = Some(slash_button_response.rect.left_bottom());
+                        // 请求输入框焦点
+                        state.should_focus_chat = true;
+                        // 关闭旧的选择框
                         state.show_at_commands = false;
+                        state.show_slash_commands = false;
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -693,15 +747,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
         render_smart_command_menu(ui.ctx(), state);
     }
 
-    // 显示@命令提示框
-    if state.show_at_commands {
-        render_at_commands(ui.ctx(), state);
-    }
-
-    // 显示Slash命令提示框
-    if state.show_slash_commands {
-        render_slash_commands(ui.ctx(), state);
-    }
+    // 旧的选择框已被智能指令菜单替代，不再需要单独渲染
 
     // 工具调用现在嵌入在消息中显示，不使用外部弹出对话框
     // if state.show_tool_call_confirmation {
@@ -824,12 +870,18 @@ fn render_smart_command_menu(ctx: &egui::Context, state: &mut AIAssistState) {
             ("@date", "插入当前日期"),
             ("@time", "插入当前时间"),
             ("@user", "引用当前用户"),
+            ("@term", "引用终端输出内容"),
+            ("@note", "引用当前笔记内容"),
+            ("@editor", "引用当前文件内容"),
         ],
         CommandMenuType::SlashCommands => vec![
             ("/search", "执行搜索"),
             ("/clear", "清空当前会话"),
             ("/help", "显示帮助信息"),
             ("/new", "创建新会话"),
+            ("/term", "终端操作"),
+            ("/note", "笔记操作"),
+            ("/editor", "文件编辑器操作"),
         ],
         CommandMenuType::None => return,
     };
@@ -891,15 +943,45 @@ fn render_smart_command_menu(ctx: &egui::Context, state: &mut AIAssistState) {
 fn render_at_commands(ctx: &egui::Context, state: &mut AIAssistState) {
     let mut open = true;
 
-    // 获取屏幕信息
-    let screen_rect = ctx.screen_rect();
     let window_size = egui::vec2(300.0, 200.0);
 
-    // 计算窗口位置 - 放在底部工具栏上方，@按钮附近
-    let window_pos = egui::pos2(
-        screen_rect.right() - 250.0, // 大约在@按钮上方
-        screen_rect.bottom() - window_size.y - 80.0 // 在底部工具栏上方
-    );
+    // 计算窗口位置 - 基于@按钮的实际位置
+    let window_pos = if let Some(button_rect) = state.at_button_rect {
+        let screen_rect = ctx.screen_rect();
+
+        // 计算初始位置：在@按钮的上方
+        let mut pos_x = button_rect.left() - 50.0; // 向左偏移50像素
+        let mut pos_y = button_rect.top() - window_size.y - 10.0; // 在按钮上方10像素
+
+        // 边界检查：确保不超出屏幕左边界
+        if pos_x < screen_rect.left() {
+            pos_x = screen_rect.left() + 10.0;
+        }
+
+        // 边界检查：确保不超出屏幕右边界
+        if pos_x + window_size.x > screen_rect.right() {
+            pos_x = screen_rect.right() - window_size.x - 10.0;
+        }
+
+        // 边界检查：如果上方空间不够，放在按钮下方
+        if pos_y < screen_rect.top() {
+            pos_y = button_rect.bottom() + 10.0;
+        }
+
+        // 边界检查：确保不超出屏幕下边界
+        if pos_y + window_size.y > screen_rect.bottom() {
+            pos_y = screen_rect.bottom() - window_size.y - 10.0;
+        }
+
+        egui::pos2(pos_x, pos_y)
+    } else {
+        // 回退到屏幕中央（如果没有按钮位置信息）
+        let screen_rect = ctx.screen_rect();
+        egui::pos2(
+            screen_rect.center().x - window_size.x / 2.0,
+            screen_rect.center().y - window_size.y / 2.0
+        )
+    };
 
     egui::Window::new("@命令列表")
         .open(&mut open)
@@ -914,6 +996,9 @@ fn render_at_commands(ctx: &egui::Context, state: &mut AIAssistState) {
             ui.label("@date - 插入当前日期");
             ui.label("@time - 插入当前时间");
             ui.label("@user - 引用当前用户");
+            ui.label("@term - 引用终端输出内容");
+            ui.label("@note - 引用当前笔记内容");
+            ui.label("@editor - 引用当前文件内容");
 
             ui.separator();
             ui.label("点击命令将其插入到输入框");
@@ -938,6 +1023,21 @@ fn render_at_commands(ctx: &egui::Context, state: &mut AIAssistState) {
                 state.chat_input.push_str("@user");
                 state.show_at_commands = false;
             }
+
+            if ui.button("插入 @term").clicked() {
+                state.chat_input.push_str("@term");
+                state.show_at_commands = false;
+            }
+
+            if ui.button("插入 @note").clicked() {
+                state.chat_input.push_str("@note");
+                state.show_at_commands = false;
+            }
+
+            if ui.button("插入 @editor").clicked() {
+                state.chat_input.push_str("@editor");
+                state.show_at_commands = false;
+            }
         });
 
     if !open {
@@ -949,15 +1049,45 @@ fn render_at_commands(ctx: &egui::Context, state: &mut AIAssistState) {
 fn render_slash_commands(ctx: &egui::Context, state: &mut AIAssistState) {
     let mut open = true;
 
-    // 获取屏幕信息
-    let screen_rect = ctx.screen_rect();
     let window_size = egui::vec2(300.0, 200.0);
 
-    // 计算窗口位置 - 放在底部工具栏上方，/按钮附近
-    let window_pos = egui::pos2(
-        screen_rect.right() - 200.0, // 大约在/按钮上方
-        screen_rect.bottom() - window_size.y - 80.0 // 在底部工具栏上方
-    );
+    // 计算窗口位置 - 基于/按钮的实际位置
+    let window_pos = if let Some(button_rect) = state.slash_button_rect {
+        let screen_rect = ctx.screen_rect();
+
+        // 计算初始位置：在/按钮的上方
+        let mut pos_x = button_rect.left() - 50.0; // 向左偏移50像素
+        let mut pos_y = button_rect.top() - window_size.y - 10.0; // 在按钮上方10像素
+
+        // 边界检查：确保不超出屏幕左边界
+        if pos_x < screen_rect.left() {
+            pos_x = screen_rect.left() + 10.0;
+        }
+
+        // 边界检查：确保不超出屏幕右边界
+        if pos_x + window_size.x > screen_rect.right() {
+            pos_x = screen_rect.right() - window_size.x - 10.0;
+        }
+
+        // 边界检查：如果上方空间不够，放在按钮下方
+        if pos_y < screen_rect.top() {
+            pos_y = button_rect.bottom() + 10.0;
+        }
+
+        // 边界检查：确保不超出屏幕下边界
+        if pos_y + window_size.y > screen_rect.bottom() {
+            pos_y = screen_rect.bottom() - window_size.y - 10.0;
+        }
+
+        egui::pos2(pos_x, pos_y)
+    } else {
+        // 回退到屏幕中央（如果没有按钮位置信息）
+        let screen_rect = ctx.screen_rect();
+        egui::pos2(
+            screen_rect.center().x - window_size.x / 2.0,
+            screen_rect.center().y - window_size.y / 2.0
+        )
+    };
 
     egui::Window::new("Slash命令列表")
         .open(&mut open)
@@ -972,6 +1102,9 @@ fn render_slash_commands(ctx: &egui::Context, state: &mut AIAssistState) {
             ui.label("/clear - 清空当前会话");
             ui.label("/help - 显示帮助信息");
             ui.label("/new - 创建新会话");
+            ui.label("/term [命令] - 终端操作");
+            ui.label("/note [操作] - 笔记操作");
+            ui.label("/editor [操作] - 文件编辑器操作");
 
             ui.separator();
             ui.label("点击命令将其插入到输入框");
@@ -994,6 +1127,21 @@ fn render_slash_commands(ctx: &egui::Context, state: &mut AIAssistState) {
 
             if ui.button("插入 /new").clicked() {
                 state.chat_input.push_str("/new");
+                state.show_slash_commands = false;
+            }
+
+            if ui.button("插入 /term").clicked() {
+                state.chat_input.push_str("/term ");
+                state.show_slash_commands = false;
+            }
+
+            if ui.button("插入 /note").clicked() {
+                state.chat_input.push_str("/note ");
+                state.show_slash_commands = false;
+            }
+
+            if ui.button("插入 /editor").clicked() {
+                state.chat_input.push_str("/editor ");
                 state.show_slash_commands = false;
             }
         });
@@ -1145,16 +1293,23 @@ fn render_formatted_message(ui: &mut egui::Ui, content: &str, max_width: f32, _i
         text_color
     };
 
-    // 使用动态宽度控制，允许内容自适应但不超过最大宽度
-    // 不使用 allocate_ui_with_layout，直接设置最大宽度让内容自然流动
+    // 使用严格的宽度控制，防止长文本撑开界面
     ui.set_max_width(max_width);
 
-    // 使用 Label 并强制换行
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(content)
-                .color(display_color)
-        ).wrap()
+    // 使用 allocate_ui_with_layout 来确保内容在指定宽度内换行
+    ui.allocate_ui_with_layout(
+        egui::Vec2::new(max_width, ui.available_height()),
+        egui::Layout::top_down_justified(egui::Align::LEFT),
+        |ui| {
+            ui.set_max_width(max_width);
+            // 使用 Label 并强制换行，确保文本在指定宽度内换行
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(content)
+                        .color(display_color)
+                ).wrap()
+            );
+        }
     );
 }
 
@@ -1466,7 +1621,7 @@ fn render_tool_calls_in_message(ui: &mut egui::Ui, tool_calls: &[crate::api::Too
             }
         }
     });
-        
+
     tool_call_to_execute
 }
 

@@ -151,6 +151,43 @@ enum AppCommand {
     Search(String),
     InsertToNote(String),
     RefreshMcpServers,
+    // 新增面板互动命令
+    TerminalAction(TerminalAction),
+    NoteAction(NoteAction),
+    EditorAction(EditorAction),
+}
+
+/// 终端操作命令
+#[derive(Debug, Clone)]
+pub enum TerminalAction {
+    Execute(String),
+    NewSession(Option<String>),
+    SwitchSession(String),
+    Export,
+    GetOutput,
+    GetHistory,
+}
+
+/// 笔记操作命令
+#[derive(Debug, Clone)]
+pub enum NoteAction {
+    Create(String),
+    Search(String),
+    Open(String),
+    List,
+    GetCurrent,
+    GetSearchResults,
+}
+
+/// 编辑器操作命令
+#[derive(Debug, Clone)]
+pub enum EditorAction {
+    Open(String),
+    Create(String),
+    Save,
+    List,
+    GetCurrent,
+    GetSelection,
 }
 
 /// Global search results for Home page display
@@ -357,6 +394,33 @@ impl SeeUApp {
                 aiAssist::SlashCommand::Search(query) => {
                     let _ = tx_clone.send(AppCommand::Search(query.clone()));
                 },
+                aiAssist::SlashCommand::Terminal(term_cmd) => {
+                    let action = match term_cmd {
+                        aiAssist::TerminalCommand::Execute(cmd) => TerminalAction::Execute(cmd),
+                        aiAssist::TerminalCommand::NewSession(title) => TerminalAction::NewSession(title),
+                        aiAssist::TerminalCommand::SwitchSession(id) => TerminalAction::SwitchSession(id),
+                        aiAssist::TerminalCommand::Export => TerminalAction::Export,
+                    };
+                    let _ = tx_clone.send(AppCommand::TerminalAction(action));
+                },
+                aiAssist::SlashCommand::Note(note_cmd) => {
+                    let action = match note_cmd {
+                        aiAssist::NoteCommand::Create(title) => NoteAction::Create(title),
+                        aiAssist::NoteCommand::Search(query) => NoteAction::Search(query),
+                        aiAssist::NoteCommand::Open(id) => NoteAction::Open(id),
+                        aiAssist::NoteCommand::List => NoteAction::List,
+                    };
+                    let _ = tx_clone.send(AppCommand::NoteAction(action));
+                },
+                aiAssist::SlashCommand::Editor(editor_cmd) => {
+                    let action = match editor_cmd {
+                        aiAssist::EditorCommand::Open(path) => EditorAction::Open(path),
+                        aiAssist::EditorCommand::Create(path) => EditorAction::Create(path),
+                        aiAssist::EditorCommand::Save => EditorAction::Save,
+                        aiAssist::EditorCommand::List => EditorAction::List,
+                    };
+                    let _ = tx_clone.send(AppCommand::EditorAction(action));
+                },
                 // 其他命令已在AI助手内部处理，不需要发送到应用层
                 aiAssist::SlashCommand::Clear |
                 aiAssist::SlashCommand::New |
@@ -379,6 +443,8 @@ impl SeeUApp {
             // 发送MCP刷新的命令
             let _ = tx_clone.send(AppCommand::RefreshMcpServers);
         });
+
+        // 注意：我们将在右侧边栏渲染时更新终端上下文
     }
 
     /// 启动进度跟踪器
@@ -1216,6 +1282,15 @@ impl SeeUApp {
                 AppCommand::RefreshMcpServers => {
                     log::info!("🔄 收到MCP服务器刷新请求，立即强制同步");
                     self.sync_mcp_servers_to_ai_assistant_force();
+                },
+                AppCommand::TerminalAction(action) => {
+                    self.handle_terminal_action(action);
+                },
+                AppCommand::NoteAction(action) => {
+                    self.handle_note_action(action);
+                },
+                AppCommand::EditorAction(action) => {
+                    self.handle_editor_action(action);
                 }
             }
         }
@@ -1288,6 +1363,89 @@ impl SeeUApp {
             "log" | "csv" | "sql" | "sh" | "bat" | "ps1" | "php" | "java" | "c" |
             "cpp" | "h" | "hpp" | "go" | "rb" | "pl" | "swift" | "kt" | "scala" |
             "clj" | "hs" | "elm" | "dart" | "vue" | "jsx" | "tsx" | "svelte")
+    }
+
+    /// 更新AI助手的上下文信息
+    fn update_ai_assistant_contexts(&mut self) {
+        // 更新终端上下文
+        if let Some(session_id) = self.iterminal_state.egui_terminal_manager.get_active_session_id() {
+            if let Some(session) = self.iterminal_state.egui_terminal_manager.get_sessions().get(&session_id) {
+                match session.get_text_content() {
+                    Ok(content) => {
+                        // 限制输出长度，避免过长的内容
+                        let terminal_output = if content.len() > 2000 {
+                            format!("{}...\n[输出已截断，总长度: {} 字符]",
+                                &content[content.len().saturating_sub(2000)..], content.len())
+                        } else {
+                            content
+                        };
+                        aiAssist::update_terminal_output(&mut self.ai_assist_state, terminal_output);
+                    },
+                    Err(_) => {
+                        // 如果获取失败，清空终端上下文
+                        aiAssist::update_terminal_output(&mut self.ai_assist_state, String::new());
+                    }
+                }
+            }
+        }
+
+        // 更新笔记上下文
+        if let Some(note_id) = &self.inote_state.current_note {
+            if let Some(note) = self.inote_state.notes.get(note_id) {
+                aiAssist::update_note_context(&mut self.ai_assist_state,
+                    note.title.clone(), note.content.clone());
+            }
+        } else {
+            // 清空笔记上下文
+            aiAssist::clear_note_context(&mut self.ai_assist_state);
+        }
+
+        // 更新编辑器上下文
+        if let Some(file_context) = self.ifile_editor_state.get_current_file_context() {
+            aiAssist::update_file_context(&mut self.ai_assist_state,
+                file_context.file_name.clone(), file_context.content.clone());
+        } else {
+            // 清空编辑器上下文
+            aiAssist::clear_file_context(&mut self.ai_assist_state);
+        }
+    }
+
+    /// 处理消息中的 @term 引用，获取当前终端内容
+    fn process_term_references(&self, content: &str) -> String {
+        if !content.contains("@term") {
+            return content.to_string();
+        }
+
+        // 尝试获取当前终端内容
+        let terminal_content = if let Some(session_id) = self.iterminal_state.egui_terminal_manager.get_active_session_id() {
+            if let Some(session) = self.iterminal_state.egui_terminal_manager.get_sessions().get(&session_id) {
+                match session.get_text_content() {
+                    Ok(content) => {
+                        // 限制输出长度，避免过长的内容
+                        if content.len() > 2000 {
+                            Some(format!("{}...\n[输出已截断，总长度: {} 字符]",
+                                &content[content.len().saturating_sub(2000)..], content.len()))
+                        } else {
+                            Some(content)
+                        }
+                    },
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 如果获取到终端内容，替换 @term；否则保持不变
+        if let Some(terminal_output) = terminal_content {
+            let replacement = format!("@term (当前终端输出):\n{}", terminal_output);
+            content.replace("@term", &replacement)
+        } else {
+            // 如果没有终端内容，保持 @term 不变
+            content.to_string()
+        }
     }
 
     /// Render the search bar
@@ -1863,6 +2021,12 @@ impl eframe::App for SeeUApp {
         // Process any pending slash commands
         self.process_slash_commands();
 
+        // 更新AI助手的上下文信息
+        self.update_ai_assistant_contexts();
+
+        // 处理全局键盘快捷键
+        self.handle_global_shortcuts(ctx);
+
         // Check if search module wants to navigate to settings
         if self.isearch_state.navigate_to_settings {
             self.active_module = Module::Settings;
@@ -1915,21 +2079,12 @@ impl eframe::App for SeeUApp {
 
         // 更新 AI 助手的文件上下文 - 当处于文件编辑器模块时
         if self.active_module == Module::FileEditor {
-            let file_context = self.ifile_editor_state.get_current_file_context();
-            // 转换文件上下文类型
-            let ai_file_context = file_context.map(|ctx| aiAssist::state::FileContext {
-                file_path: ctx.file_path.clone(),
-                file_name: ctx.file_name.clone(),
-                language: ctx.language.clone(),
-                content: ctx.content.clone(),
-                selected_text: ctx.selected_text.clone(),
-                cursor_line: ctx.cursor_line,
-                cursor_column: ctx.cursor_column,
-                total_lines: ctx.total_lines,
-                is_modified: ctx.is_modified,
-                is_read_only: ctx.is_read_only,
-            });
-            aiAssist::set_file_context(&mut self.ai_assist_state, ai_file_context);
+            if let Some(file_context) = self.ifile_editor_state.get_current_file_context() {
+                let ai_file_context = Self::convert_file_context(file_context);
+                aiAssist::set_file_context(&mut self.ai_assist_state, Some(ai_file_context));
+            } else {
+                aiAssist::set_file_context(&mut self.ai_assist_state, None);
+            }
         } else {
             // 清除文件上下文
             aiAssist::set_file_context(&mut self.ai_assist_state, None);
@@ -1963,14 +2118,15 @@ impl eframe::App for SeeUApp {
         iterminal::update_iterminal(&mut self.iterminal_state);
 
         // 定期保存笔记数据（每5秒检查一次）
-        if ctx.input(|i| i.time) % 5.0 < 0.1 {
+        let current_time = ctx.input(|i| i.time);
+        if current_time % 5.0 < 0.1 {
             if self.inote_state.save_status == inote::db_state::SaveStatus::Modified {
                 self.inote_state.auto_save_if_modified();
             }
         }
 
         // 定期保存应用设置（每10秒检查一次，减少频率）
-        if ctx.input(|i| i.time) % 10.0 < 0.1 {
+        if current_time % 10.0 < 0.1 {
             if let Err(err) = self.save_app_settings() {
                 log::error!("Failed to save app settings: {}", err);
             }
@@ -2394,5 +2550,552 @@ impl SeeUApp {
         if let Err(e) = self.ifile_editor_state.open_file_from_search(path) {
             log::error!("Failed to open file in editor: {}", e);
         }
+    }
+
+    /// 处理终端操作命令
+    fn handle_terminal_action(&mut self, action: TerminalAction) {
+        log::info!("处理终端操作: {:?}", action);
+
+        // 切换到终端模块
+        self.active_module = Module::Terminal;
+
+        match action {
+            TerminalAction::Execute(command) => {
+                // 在当前终端会话执行命令
+                log::info!("执行终端命令: {}", command);
+
+                // 获取当前活动会话的信息
+                let manager = &self.iterminal_state.egui_terminal_manager;
+                let session_info = if let Some(session_id) = manager.get_active_session_id() {
+                    if let Some(session) = manager.get_sessions().get(&session_id) {
+                        (session_id.to_string(), session.title.clone())
+                    } else {
+                        ("unknown".to_string(), "Unknown Session".to_string())
+                    }
+                } else {
+                    ("default".to_string(), "主会话".to_string())
+                };
+
+                // 向终端发送命令
+                let manager = &mut self.iterminal_state.egui_terminal_manager;
+                if let Err(e) = manager.send_command_to_active_session(&command) {
+                    log::error!("发送命令到终端失败: {}", e);
+                }
+
+                // 更新AI助手的终端上下文
+                let context = aiAssist::TerminalContext {
+                    current_session_id: Some(session_info.0),
+                    current_session_title: Some(session_info.1),
+                    last_command: Some(command.clone()),
+                    last_output: Some("命令执行中...".to_string()),
+                    command_history: vec![command.clone()],
+                    working_directory: None,
+                };
+                self.ai_assist_state.set_terminal_context(context);
+
+                // 添加系统消息到AI助手
+                self.add_terminal_system_message(&format!("已执行终端命令: {}", command));
+            },
+            TerminalAction::NewSession(title) => {
+                // 创建新的终端会话
+                log::info!("创建新终端会话: {:?}", title);
+
+                // 需要egui上下文来创建会话，这里我们暂时记录请求
+                // 实际创建会话需要在UI渲染时进行
+                self.iterminal_state.pending_new_session = title.clone();
+
+                let session_title = title.unwrap_or_else(|| "新会话".to_string());
+                self.add_terminal_system_message(&format!("请求创建新终端会话: {}", session_title));
+            },
+            TerminalAction::SwitchSession(session_id) => {
+                // 切换终端会话
+                log::info!("切换到终端会话: {}", session_id);
+
+                // 尝试解析UUID
+                if let Ok(uuid) = uuid::Uuid::parse_str(&session_id) {
+                    if self.iterminal_state.set_active_session(uuid) {
+                        self.add_terminal_system_message(&format!("已切换到终端会话: {}", session_id));
+
+                        // 更新AI助手上下文
+                        if let Some(session) = self.iterminal_state.egui_terminal_manager.get_sessions().get(&uuid) {
+                            let context = aiAssist::TerminalContext {
+                                current_session_id: Some(uuid.to_string()),
+                                current_session_title: Some(session.title.clone()),
+                                last_command: None,
+                                last_output: None,
+                                command_history: vec![],
+                                working_directory: None,
+                            };
+                            self.ai_assist_state.set_terminal_context(context);
+                        }
+                    } else {
+                        self.add_terminal_system_message(&format!("切换终端会话失败: 会话 {} 不存在", session_id));
+                    }
+                } else {
+                    self.add_terminal_system_message(&format!("无效的会话ID: {}", session_id));
+                }
+            },
+            TerminalAction::Export => {
+                // 导出终端内容
+                log::info!("导出终端内容");
+
+                if let Some(session_id) = self.iterminal_state.egui_terminal_manager.get_active_session_id() {
+                    if let Some(session) = self.iterminal_state.egui_terminal_manager.get_sessions().get(&session_id) {
+                        match session.get_text_content() {
+                            Ok(content) => {
+                                // 更新AI助手的终端输出
+                                self.ai_assist_state.update_terminal_output(content.clone());
+                                self.add_terminal_system_message(&format!("已导出终端内容 ({} 字符)", content.len()));
+                            },
+                            Err(e) => {
+                                log::error!("导出终端内容失败: {}", e);
+                                self.add_terminal_system_message(&format!("导出终端内容失败: {}", e));
+                            }
+                        }
+                    } else {
+                        self.add_terminal_system_message("导出失败: 没有活动的终端会话");
+                    }
+                } else {
+                    self.add_terminal_system_message("导出失败: 没有活动的终端会话");
+                }
+            },
+            TerminalAction::GetOutput => {
+                // 获取终端输出
+                log::info!("获取终端输出");
+
+                if let Some(session_id) = self.iterminal_state.egui_terminal_manager.get_active_session_id() {
+                    if let Some(session) = self.iterminal_state.egui_terminal_manager.get_sessions().get(&session_id) {
+                        match session.get_text_content() {
+                            Ok(content) => {
+                                // 更新AI助手的终端输出
+                                self.ai_assist_state.update_terminal_output(content);
+                                self.add_terminal_system_message("已获取当前终端输出");
+                            },
+                            Err(e) => {
+                                log::error!("获取终端输出失败: {}", e);
+                                self.add_terminal_system_message(&format!("获取终端输出失败: {}", e));
+                            }
+                        }
+                    } else {
+                        self.add_terminal_system_message("获取失败: 没有活动的终端会话");
+                    }
+                } else {
+                    self.add_terminal_system_message("获取失败: 没有活动的终端会话");
+                }
+            },
+            TerminalAction::GetHistory => {
+                // 获取命令历史
+                log::info!("获取命令历史");
+
+                // 这里可以从终端历史管理器获取历史
+                // 暂时返回一个占位符
+                self.add_terminal_system_message("命令历史功能正在开发中");
+            },
+        }
+    }
+
+    /// 添加终端系统消息到AI助手
+    fn add_terminal_system_message(&mut self, message: &str) {
+        use aiAssist::{ChatMessage, MessageRole};
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        let system_message = ChatMessage {
+            id: Uuid::new_v4(),
+            role: MessageRole::System,
+            content: format!("🖥️ 终端: {}", message),
+            timestamp: Utc::now(),
+            attachments: vec![],
+            tool_calls: None,
+            tool_call_results: None,
+            mcp_server_info: None,
+        };
+
+        self.ai_assist_state.chat_messages.push(system_message.clone());
+
+        // Add to current session
+        if let Some(session) = self.ai_assist_state.chat_sessions.get_mut(self.ai_assist_state.active_session_idx) {
+            session.messages.push(system_message);
+        }
+    }
+
+    /// 添加笔记系统消息到AI助手
+    fn add_note_system_message(&mut self, message: &str) {
+        use aiAssist::{ChatMessage, MessageRole};
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        let system_message = ChatMessage {
+            id: Uuid::new_v4(),
+            role: MessageRole::System,
+            content: format!("📝 笔记: {}", message),
+            timestamp: Utc::now(),
+            attachments: vec![],
+            tool_calls: None,
+            tool_call_results: None,
+            mcp_server_info: None,
+        };
+
+        self.ai_assist_state.chat_messages.push(system_message.clone());
+
+        // Add to current session
+        if let Some(session) = self.ai_assist_state.chat_sessions.get_mut(self.ai_assist_state.active_session_idx) {
+            session.messages.push(system_message);
+        }
+    }
+
+    /// 处理笔记操作命令
+    fn handle_note_action(&mut self, action: NoteAction) {
+        log::info!("处理笔记操作: {:?}", action);
+
+        // 切换到笔记模块
+        self.active_module = Module::Note;
+
+        match action {
+            NoteAction::Create(title) => {
+                // 创建新笔记
+                log::info!("创建新笔记: {}", title);
+
+                // 确保有默认笔记本
+                if self.inote_state.notebooks.is_empty() {
+                    self.inote_state.create_notebook("默认笔记本".to_string(), "默认笔记本".to_string());
+                    self.inote_state.current_notebook = Some(0);
+                }
+
+                let note_id = self.inote_state.create_note(title.clone(), "".to_string());
+                if let Some(id) = note_id {
+                    self.inote_state.select_note(&id);
+
+                    // 更新AI助手的笔记上下文
+                    self.ai_assist_state.update_current_note(id.clone(), title.clone(), "".to_string());
+                    self.add_note_system_message(&format!("已创建新笔记: {}", title));
+                } else {
+                    self.add_note_system_message(&format!("创建笔记失败: {}", title));
+                }
+            },
+            NoteAction::Search(query) => {
+                // 搜索笔记
+                log::info!("搜索笔记: {}", query);
+                self.inote_state.search_query = query.clone();
+                self.inote_state.search_notes();
+
+                // 更新AI助手的笔记搜索结果
+                let results: Vec<String> = self.inote_state.search_results.clone();
+                let result_count = results.len();
+                self.ai_assist_state.update_note_search_results(query.clone(), results);
+
+                self.add_note_system_message(&format!("搜索笔记 \"{}\" 完成，找到 {} 个结果", query, result_count));
+            },
+            NoteAction::Open(note_id) => {
+                // 打开指定笔记
+                log::info!("打开笔记: {}", note_id);
+
+                // 首先检查笔记是否存在
+                if let Some(note) = self.inote_state.notes.get(&note_id) {
+                    let note_title = note.title.clone();
+                    let note_content = note.content.clone();
+
+                    self.inote_state.select_note(&note_id);
+
+                    // 更新AI助手的笔记上下文
+                    self.ai_assist_state.update_current_note(
+                        note_id.clone(),
+                        note_title.clone(),
+                        note_content
+                    );
+
+                    self.add_note_system_message(&format!("已打开笔记: {}", note_title));
+                } else {
+                    // 尝试选择笔记（会自动从数据库加载）
+                    self.inote_state.select_note(&note_id);
+                    self.add_note_system_message(&format!("正在加载笔记: {}", note_id));
+                }
+            },
+            NoteAction::List => {
+                // 列出所有笔记
+                log::info!("列出所有笔记");
+
+                let mut note_list = Vec::new();
+                for notebook in &self.inote_state.notebooks {
+                    for note_id in &notebook.note_ids {
+                        if let Some(note) = self.inote_state.notes.get(note_id) {
+                            note_list.push(format!("📝 {} ({})", note.title, notebook.name));
+                        }
+                    }
+                }
+
+                if note_list.is_empty() {
+                    self.add_note_system_message("当前没有笔记");
+                } else {
+                    let list_text = note_list.join("\n");
+                    self.add_note_system_message(&format!("笔记列表 ({} 个笔记):\n{}", note_list.len(), list_text));
+                }
+            },
+            NoteAction::GetCurrent => {
+                // 获取当前笔记
+                log::info!("获取当前笔记");
+
+                if let Some(note_id) = &self.inote_state.current_note {
+                    if let Some(note) = self.inote_state.notes.get(note_id) {
+                        self.ai_assist_state.update_current_note(
+                            note_id.clone(),
+                            note.title.clone(),
+                            note.content.clone()
+                        );
+                        self.add_note_system_message(&format!("已获取当前笔记: {}", note.title));
+                    } else {
+                        self.add_note_system_message("当前笔记不存在");
+                    }
+                } else {
+                    self.add_note_system_message("当前没有打开的笔记");
+                }
+            },
+            NoteAction::GetSearchResults => {
+                // 获取搜索结果
+                log::info!("获取笔记搜索结果");
+
+                let results: Vec<String> = self.inote_state.search_results.clone();
+                let query = self.inote_state.search_query.clone();
+
+                if results.is_empty() {
+                    self.add_note_system_message("没有搜索结果");
+                } else {
+                    let mut result_list = Vec::new();
+                    for note_id in &results {
+                        if let Some(note) = self.inote_state.notes.get(note_id) {
+                            result_list.push(format!("📝 {}", note.title));
+                        }
+                    }
+
+                    let list_text = result_list.join("\n");
+                    self.ai_assist_state.update_note_search_results(query.clone(), results);
+                    self.add_note_system_message(&format!("搜索结果 \"{}\" ({} 个结果):\n{}", query, result_list.len(), list_text));
+                }
+            },
+        }
+    }
+
+    /// 处理编辑器操作命令
+    fn handle_editor_action(&mut self, action: EditorAction) {
+        log::info!("处理编辑器操作: {:?}", action);
+
+        // 切换到文件编辑器模块
+        self.active_module = Module::FileEditor;
+
+        match action {
+            EditorAction::Open(path) => {
+                // 打开文件
+                log::info!("打开文件: {}", path);
+                use std::path::PathBuf;
+                let file_path = PathBuf::from(&path);
+
+                // 确保文件编辑器已初始化
+                self.ifile_editor_state.ensure_initialized();
+
+                if let Err(e) = self.ifile_editor_state.open_file_from_search(file_path.clone()) {
+                    log::error!("打开文件失败: {}", e);
+                    self.add_editor_system_message(&format!("打开文件失败: {} - {}", path, e));
+                } else {
+                    // 更新AI助手的文件上下文
+                    if let Some(context) = self.ifile_editor_state.get_current_file_context() {
+                        let ai_context = Self::convert_file_context(context);
+                        aiAssist::set_file_context(&mut self.ai_assist_state, Some(ai_context));
+                        self.add_editor_system_message(&format!("已打开文件: {}", path));
+                    } else {
+                        self.add_editor_system_message(&format!("文件已打开，但无法获取内容: {}", path));
+                    }
+                }
+            },
+            EditorAction::Create(path) => {
+                // 创建新文件
+                log::info!("创建新文件: {}", path);
+                use std::path::PathBuf;
+                let file_path = PathBuf::from(&path);
+
+                // 确保文件编辑器已初始化
+                self.ifile_editor_state.ensure_initialized();
+
+                // 创建新文件（创建空文件）
+                match std::fs::File::create(&file_path) {
+                    Ok(_) => {
+                        // 文件创建成功，现在打开它
+                        if let Err(e) = self.ifile_editor_state.open_file_from_search(file_path) {
+                            log::error!("创建文件后打开失败: {}", e);
+                            self.add_editor_system_message(&format!("创建文件失败: {} - {}", path, e));
+                        } else {
+                            self.add_editor_system_message(&format!("已创建并打开新文件: {}", path));
+
+                            // 更新AI助手的文件上下文
+                            if let Some(context) = self.ifile_editor_state.get_current_file_context() {
+                                let ai_context = Self::convert_file_context(context);
+                                aiAssist::set_file_context(&mut self.ai_assist_state, Some(ai_context));
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        log::error!("创建文件失败: {}", e);
+                        self.add_editor_system_message(&format!("创建文件失败: {} - {}", path, e));
+                    }
+                }
+            },
+            EditorAction::Save => {
+                // 保存当前文件
+                log::info!("保存当前文件");
+
+                if let Some(buffer) = self.ifile_editor_state.editor.get_active_buffer() {
+                    let file_path = buffer.file_path.clone();
+                    let file_name = file_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("未知文件");
+
+                    // 检查文件是否被修改
+                    if buffer.modified {
+                        // 执行保存操作
+                        match self.ifile_editor_state.editor.save_active_file() {
+                            Ok(_) => {
+                                self.add_editor_system_message(&format!("已保存文件: {}", file_name));
+
+                                // 更新AI助手的文件上下文
+                                if let Some(context) = self.ifile_editor_state.get_current_file_context() {
+                                    let ai_context = Self::convert_file_context(context);
+                                    aiAssist::set_file_context(&mut self.ai_assist_state, Some(ai_context));
+                                }
+                            },
+                            Err(e) => {
+                                log::error!("保存文件失败: {}", e);
+                                self.add_editor_system_message(&format!("保存文件失败: {} - {}", file_name, e));
+                            }
+                        }
+                    } else {
+                        self.add_editor_system_message(&format!("文件无需保存: {}", file_name));
+                    }
+                } else {
+                    self.add_editor_system_message("没有打开的文件可以保存");
+                }
+            },
+            EditorAction::List => {
+                // 列出打开的文件
+                log::info!("列出打开的文件");
+
+                let tabs = &self.ifile_editor_state.editor.tabs;
+                if tabs.is_empty() {
+                    self.add_editor_system_message("当前没有打开的文件");
+                } else {
+                    let mut file_list = Vec::new();
+                    for (index, path) in tabs.iter().enumerate() {
+                        let file_name = path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("未知文件");
+
+                        let is_active = self.ifile_editor_state.editor.active_tab == Some(index);
+                        let is_modified = self.ifile_editor_state.editor.buffers.get(path)
+                            .map(|b| b.modified)
+                            .unwrap_or(false);
+
+                        let status = if is_active { "🔸" } else { "📄" };
+                        let modified_mark = if is_modified { "*" } else { "" };
+
+                        file_list.push(format!("{} {}{}", status, file_name, modified_mark));
+                    }
+
+                    let list_text = file_list.join("\n");
+                    self.add_editor_system_message(&format!("打开的文件 ({} 个):\n{}", tabs.len(), list_text));
+                }
+            },
+            EditorAction::GetCurrent => {
+                // 获取当前文件内容
+                log::info!("获取当前文件内容");
+
+                if let Some(context) = self.ifile_editor_state.get_current_file_context() {
+                    let file_name = context.file_name.clone();
+                    let total_lines = context.total_lines;
+                    let ai_context = Self::convert_file_context(context);
+                    aiAssist::set_file_context(&mut self.ai_assist_state, Some(ai_context));
+                    self.add_editor_system_message(&format!("已获取当前文件内容: {} ({} 行)",
+                        file_name, total_lines));
+                } else {
+                    self.add_editor_system_message("当前没有打开的文件");
+                }
+            },
+            EditorAction::GetSelection => {
+                // 获取选中的文本
+                log::info!("获取选中的文本");
+
+                if let Some(context) = self.ifile_editor_state.get_current_file_context() {
+                    if let Some(selected_text) = &context.selected_text {
+                        let text_len = selected_text.len();
+                        let ai_context = Self::convert_file_context(context);
+                        aiAssist::set_file_context(&mut self.ai_assist_state, Some(ai_context));
+                        self.add_editor_system_message(&format!("已获取选中文本 ({} 字符)", text_len));
+                    } else {
+                        self.add_editor_system_message("当前没有选中的文本");
+                    }
+                } else {
+                    self.add_editor_system_message("当前没有打开的文件");
+                }
+            },
+        }
+    }
+
+    /// 添加编辑器系统消息到AI助手
+    fn add_editor_system_message(&mut self, message: &str) {
+        use aiAssist::{ChatMessage, MessageRole};
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        let system_message = ChatMessage {
+            id: Uuid::new_v4(),
+            role: MessageRole::System,
+            content: format!("📄 编辑器: {}", message),
+            timestamp: Utc::now(),
+            attachments: vec![],
+            tool_calls: None,
+            tool_call_results: None,
+            mcp_server_info: None,
+        };
+
+        self.ai_assist_state.chat_messages.push(system_message.clone());
+
+        // Add to current session
+        if let Some(session) = self.ai_assist_state.chat_sessions.get_mut(self.ai_assist_state.active_session_idx) {
+            session.messages.push(system_message);
+        }
+    }
+
+    /// 将 ifile_editor::FileContext 转换为 aiAssist::FileContext
+    fn convert_file_context(context: ifile_editor::FileContext) -> aiAssist::FileContext {
+        aiAssist::FileContext {
+            file_path: context.file_path,
+            file_name: context.file_name,
+            language: context.language,
+            content: context.content,
+            selected_text: context.selected_text,
+            cursor_line: context.cursor_line,
+            cursor_column: context.cursor_column,
+            total_lines: context.total_lines,
+            is_modified: context.is_modified,
+            is_read_only: context.is_read_only,
+        }
+    }
+
+    /// 处理全局键盘快捷键
+    fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        ctx.input(|i| {
+            // Ctrl+/ 或 Cmd+/ 快速切换到AI助手输入框
+            let cmd_slash = if cfg!(target_os = "macos") {
+                i.modifiers.mac_cmd && i.key_pressed(egui::Key::Slash)
+            } else {
+                i.modifiers.ctrl && i.key_pressed(egui::Key::Slash)
+            };
+
+            if cmd_slash {
+                // 打开右侧边栏（如果未打开）
+                if !self.show_right_sidebar {
+                    self.show_right_sidebar = true;
+                }
+                // 设置AI助手输入框获得焦点
+                self.ai_assist_state.should_focus_chat = true;
+            }
+        });
     }
 }

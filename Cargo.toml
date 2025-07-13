@@ -69,6 +69,7 @@ aiAssist = { path = "crates/aiAssist" }
 itools = { path = "crates/itools" }
 iterminal = { path = "crates/iterminal" }
 ifile_editor = { path = "crates/ifile_editor" }
+egui_term = { path = "crates/egui_term" }
 
 
 

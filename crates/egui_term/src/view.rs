@@ -48,7 +48,7 @@ pub struct TerminalView<'a> {
 
 impl Widget for TerminalView<'_> {
     fn ui(self, ui: &mut egui::Ui) -> Response {
-        let (layout, painter) =
+        let (mut layout, painter) =
             ui.allocate_painter(self.size, egui::Sense::click());
 
         let widget_id = self.widget_id;
@@ -64,6 +64,12 @@ impl Widget for TerminalView<'_> {
             .show(&mut state, &layout, &painter);
 
         ui.memory_mut(|m| m.data.insert_temp(widget_id, state));
+
+        // 添加提示信息，让用户知道如何获得焦点
+        if !layout.has_focus() && layout.hovered() {
+            layout = layout.on_hover_text("点击此处获得终端焦点");
+        }
+
         layout
     }
 }
@@ -121,9 +127,15 @@ impl<'a> TerminalView<'a> {
 
     fn focus(self, layout: &Response) -> Self {
         if self.has_focus {
-            layout.request_focus();
+            // 只有在终端被点击时才请求焦点，避免自动抢夺焦点
+            if layout.clicked() {
+                layout.request_focus();
+            }
         } else {
-            layout.surrender_focus();
+            // 如果终端不应该有焦点，则释放焦点
+            if layout.has_focus() {
+                layout.surrender_focus();
+            }
         }
 
         self

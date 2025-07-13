@@ -47,6 +47,8 @@ pub struct ITerminalState {
     pub terminal_history: Vec<String>,
     /// Current session name
     pub current_session: String,
+    /// Pending new session title (for AI assistant requests)
+    pub pending_new_session: Option<String>,
 }
 
 impl ITerminalState {
@@ -88,6 +90,7 @@ impl ITerminalState {
             last_cursor_blink: std::time::Instant::now(),
             terminal_history: Vec::new(),
             current_session: "主会话".to_string(),
+            pending_new_session: None,
         }
     }
 
