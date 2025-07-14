@@ -171,11 +171,11 @@ fn render_code_editor_widget(ui: &mut egui::Ui, state: &mut IFileEditorState) {
     let content_size_mb = rope_content.len() as f64 / (1024.0 * 1024.0);
     let is_large_file = content_size_mb > 1.0 || line_count > state.settings.virtual_scroll_threshold;
 
-    if state.settings.large_file_optimization && is_large_file {
+    // if state.settings.large_file_optimization && is_large_file {
         render_large_file_editor(ui, state, &rope_content, &file_path, language.as_deref(), read_only, line_count);
-    } else {
-        render_standard_file_editor(ui, state, &rope_content, &file_path, language.as_deref(), read_only);
-    }
+    // } else {
+    //     render_standard_file_editor(ui, state, &rope_content, &file_path, language.as_deref(), read_only);
+    // }
 }
 
 /// 渲染标准文件编辑器（小文件）
@@ -862,13 +862,13 @@ fn render_large_file_editor(
     let content_size_mb = rope_content.len() as f64 / (1024.0 * 1024.0);
     ui.horizontal(|ui| {
         ui.label("⚠️");
-        if content_size_mb > 1.0 {
-            ui.label(format!("大文件模式 ({:.1} MB, {} 行)", content_size_mb, line_count));
-        } else {
-            ui.label(format!("大文件模式 ({} 行)", line_count));
-        }
+        // if content_size_mb > 1.0 {
+        //     ui.label(format!("大文件模式 ({:.1} MB, {} 行)", content_size_mb, line_count));
+        // } else {
+        //     ui.label(format!("大文件模式 ({} 行)", line_count));
+        // }
         if state.settings.syntax_highlighting {
-            ui.label("| 语法高亮已禁用以提高性能");
+            ui.label(" 语法高亮已禁用以提高性能");
         }
     });
     ui.separator();
@@ -941,7 +941,7 @@ fn render_large_file_editor(
         if content_size_mb > 2.0 {
             ui.label("超大文件模式：内容已截断，编辑功能受限");
         } else {
-            ui.label("大文件模式：部分功能已优化以确保流畅体验");
+            // ui.label("大文件模式：部分功能已优化以确保流畅体验");
         }
     });
 }
