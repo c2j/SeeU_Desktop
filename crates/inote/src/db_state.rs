@@ -1228,8 +1228,8 @@ impl DbINoteState {
             // 找到对应的笔记本并更新其note_ids
             if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == selected_notebook_id) {
                 if !notebook.note_ids.contains(note_id) {
-                    notebook.append_note(note_id.clone()); // 使用 append_note 保持导入顺序
-                    log::debug!("已将笔记 {} 添加到笔记本 {} 的note_ids中", note_id, selected_notebook_id);
+                    notebook.add_note(note_id.clone()); // 使用 add_note 将新笔记插入到第一条之前
+                    log::debug!("已将笔记 {} 添加到笔记本 {} 的note_ids中（插入到第一条之前）", note_id, selected_notebook_id);
 
                     // 保存更新后的笔记本到数据库
                     if let Ok(storage) = self.storage.lock() {

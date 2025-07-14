@@ -63,6 +63,14 @@ where
     state.set_mcp_refresh_callback(callback);
 }
 
+/// Set the get editor context callback
+pub fn set_get_editor_context_callback<F>(state: &mut AIAssistState, callback: F)
+where
+    F: Fn() -> Option<FileContext> + Send + 'static,
+{
+    state.get_editor_context_callback = Some(Box::new(callback));
+}
+
 /// Add a search result reference to the current chat
 pub fn add_search_reference(state: &mut AIAssistState, query: &str, result_count: usize) {
     state.add_search_reference(query, result_count);
@@ -115,6 +123,11 @@ pub fn clear_file_context(state: &mut AIAssistState) {
 /// Process @ references in content
 pub fn process_at_references(state: &AIAssistState, content: &str) -> String {
     state.process_at_references(content)
+}
+
+/// Process @ references in content with file context
+pub fn process_at_references_with_file_context(state: &AIAssistState, content: &str, file_context: Option<&FileContext>) -> String {
+    state.process_at_references_with_context(content, file_context)
 }
 
 

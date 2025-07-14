@@ -17,6 +17,9 @@ pub struct RemoteServer {
     pub username: String,
     /// 认证方式
     pub auth_method: AuthMethod,
+    /// 密码认证方法偏好（仅在使用密码认证时有效）
+    #[serde(default)]
+    pub password_auth_method: PasswordAuthMethod,
     /// 远程工作目录
     pub working_directory: Option<String>,
     /// 创建时间
@@ -49,6 +52,99 @@ pub enum AuthMethod {
     Agent,
 }
 
+/// 密码认证方法偏好
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PasswordAuthMethod {
+    /// 自动选择最佳方法
+    Auto,
+    /// 使用sshpass工具
+    Sshpass,
+    /// 使用expect工具 (Unix)
+    #[cfg(unix)]
+    Expect,
+    /// 使用PowerShell SSH (Windows)
+    #[cfg(windows)]
+    PowerShell,
+    /// 使用PuTTY plink (Windows)
+    #[cfg(windows)]
+    Plink,
+    /// 交互式输入（手动输入密码）
+    Interactive,
+}
+
+impl Default for PasswordAuthMethod {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+impl PasswordAuthMethod {
+    /// 获取所有可用的密码认证方法
+    pub fn available_methods() -> Vec<Self> {
+        let mut methods = vec![
+            Self::Auto,
+            Self::Sshpass,
+            Self::Interactive,
+        ];
+
+        #[cfg(unix)]
+        methods.push(Self::Expect);
+
+        #[cfg(windows)]
+        {
+            methods.push(Self::PowerShell);
+            methods.push(Self::Plink);
+        }
+
+        methods
+    }
+
+    /// 获取方法的显示名称
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Auto => "自动选择",
+            Self::Sshpass => "sshpass工具",
+            #[cfg(unix)]
+            Self::Expect => "expect工具",
+            #[cfg(windows)]
+            Self::PowerShell => "PowerShell SSH",
+            #[cfg(windows)]
+            Self::Plink => "PuTTY plink",
+            Self::Interactive => "交互式输入",
+        }
+    }
+
+    /// 获取方法的描述
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Auto => "自动选择最佳的可用方法",
+            Self::Sshpass => "使用sshpass工具自动输入密码",
+            #[cfg(unix)]
+            Self::Expect => "使用expect脚本自动输入密码",
+            #[cfg(windows)]
+            Self::PowerShell => "使用PowerShell进行SSH连接",
+            #[cfg(windows)]
+            Self::Plink => "使用PuTTY的plink工具",
+            Self::Interactive => "手动输入密码（最兼容）",
+        }
+    }
+
+    /// 检查方法是否可用
+    pub fn is_available(&self) -> bool {
+        match self {
+            Self::Auto => true,
+            Self::Sshpass => crate::ssh_connection::SshConnectionBuilder::check_sshpass_availability(),
+            #[cfg(unix)]
+            Self::Expect => crate::ssh_connection::SshConnectionBuilder::check_expect_availability(),
+            #[cfg(windows)]
+            Self::PowerShell => crate::ssh_connection::SshConnectionBuilder::check_powershell_ssh_availability(),
+            #[cfg(windows)]
+            Self::Plink => crate::ssh_connection::SshConnectionBuilder::check_plink_availability(),
+            Self::Interactive => true,
+        }
+    }
+}
+
 impl RemoteServer {
     /// 创建新的远程服务器配置
     pub fn new(name: String, host: String, username: String, auth_method: AuthMethod) -> Self {
@@ -59,6 +155,7 @@ impl RemoteServer {
             port: 22,
             username,
             auth_method,
+            password_auth_method: PasswordAuthMethod::default(),
             working_directory: None,
             created_at: chrono::Utc::now(),
             last_connected: None,
@@ -200,6 +297,7 @@ impl Default for RemoteServer {
             port: 22,
             username: String::new(),
             auth_method: AuthMethod::Agent,
+            password_auth_method: PasswordAuthMethod::default(),
             working_directory: None,
             created_at: chrono::Utc::now(),
             last_connected: None,
@@ -278,8 +376,8 @@ mod tests {
         // 无效端口应该失败
         server.port = 0;
         assert!(server.validate().is_err());
-        
-        server.port = 70000;
-        assert!(server.validate().is_err());
+
+        // 注意：u16的最大值是65535，所以我们不能直接设置70000
+        // 这里我们测试端口0的情况就足够了，因为端口范围已经由类型系统保证
     }
 }

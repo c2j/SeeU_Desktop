@@ -826,9 +826,15 @@ fn render_detailed_view_internal<F>(
     state: &mut ISearchState,
     open_in_editor_callback: &Option<F>
 ) where F: Fn(String) {
-    // Clone the results to avoid borrowing issues
-    let results = state.search_results.clone();
-    for result in &results {
+    // 添加滚动区域以支持大量搜索结果的滚动查看
+    let available_height = ui.available_height();
+    egui::ScrollArea::vertical()
+        .max_height(available_height)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            // Clone the results to avoid borrowing issues
+            let results = state.search_results.clone();
+            for result in &results {
         ui.push_id(&result.id, |ui| {
             // Create a frame for the search result item with hover effect
             let frame_response = egui::Frame::none()
@@ -1031,12 +1037,13 @@ fn render_detailed_view_internal<F>(
                 ui.painter().rect_stroke(rect, egui::Rounding::same(4.0), egui::Stroke::new(1.0, border_color));
             }
 
-            ui.add_space(4.0);
-            ui.separator();
-        });
-    }
+                ui.add_space(4.0);
+                ui.separator();
+            });
+        }
 
-    render_search_statistics(ui, state);
+        render_search_statistics(ui, state);
+        });
 }
 
 /// Render search results in list view (table-style) with editor callback

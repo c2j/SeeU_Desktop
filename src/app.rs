@@ -448,6 +448,14 @@ impl SeeUApp {
             let _ = tx_clone.send(AppCommand::RefreshMcpServers);
         });
 
+        // 设置获取编辑器上下文的回调
+        // 暂时返回None，@editor引用将通过其他方式实现
+        aiAssist::set_get_editor_context_callback(&mut self.ai_assist_state, move || {
+            // 这里我们需要一个更安全的方式来获取编辑器上下文
+            // 暂时返回None，将在后续实现中完善
+            None
+        });
+
         // 注意：我们将在右侧边栏渲染时更新终端上下文
     }
 
@@ -1444,14 +1452,9 @@ impl SeeUApp {
             aiAssist::clear_note_context(&mut self.ai_assist_state);
         }
 
-        // 更新编辑器上下文
-        if let Some(file_context) = self.ifile_editor_state.get_current_file_context() {
-            aiAssist::update_file_context(&mut self.ai_assist_state,
-                file_context.file_name.clone(), file_context.content.clone());
-        } else {
-            // 清空编辑器上下文
-            aiAssist::clear_file_context(&mut self.ai_assist_state);
-        }
+        // 注意：不再自动更新编辑器上下文到AI助手
+        // 编辑器上下文只有在用户显式使用@editor时才会被引用
+        // 这避免了文件编辑器中打开文件时自动引用其内容的问题
     }
 
     /// 处理消息中的 @term 引用，获取当前终端内容
@@ -2326,18 +2329,9 @@ impl eframe::App for SeeUApp {
         let can_insert_to_note = self.active_module == Module::Note && self.inote_state.current_note.is_some();
         aiAssist::update_can_insert_to_note(&mut self.ai_assist_state, can_insert_to_note);
 
-        // 更新 AI 助手的文件上下文 - 当处于文件编辑器模块时
-        if self.active_module == Module::FileEditor {
-            if let Some(file_context) = self.ifile_editor_state.get_current_file_context() {
-                let ai_file_context = Self::convert_file_context(file_context);
-                aiAssist::set_file_context(&mut self.ai_assist_state, Some(ai_file_context));
-            } else {
-                aiAssist::set_file_context(&mut self.ai_assist_state, None);
-            }
-        } else {
-            // 清除文件上下文
-            aiAssist::set_file_context(&mut self.ai_assist_state, None);
-        }
+        // 注意：不再自动设置AI助手的文件上下文
+        // 文件上下文只有在用户显式使用@editor时才会被引用
+        // 这避免了切换到文件编辑器模块时自动引用文件内容的问题
 
         // 处理待执行的工具调用
         self.process_pending_tool_execution();

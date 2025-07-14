@@ -311,7 +311,7 @@ impl EguiTerminalManager {
 
         // Set as active session (always make new session active)
         self.set_active_session(session_id);
-        log::info!("Created new terminal session with command: {} ({}) - {} {:?}", title, session_id, shell, args);
+        // log::info!("Created new terminal session with command: {} ({}) - {} {:?}", title, session_id, shell, args);
 
         Ok(session_id)
     }

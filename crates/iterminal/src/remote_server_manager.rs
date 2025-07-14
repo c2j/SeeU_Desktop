@@ -405,6 +405,7 @@ impl RemoteServerManager {
                 port: encrypted_server.port,
                 username: encrypted_server.username.clone(),
                 auth_method,
+                password_auth_method: crate::remote_server::PasswordAuthMethod::default(),
                 working_directory: encrypted_server.working_directory.clone(),
                 created_at: encrypted_server.created_at,
                 last_connected: encrypted_server.last_connected,

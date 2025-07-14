@@ -12,6 +12,9 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
     // 检查是否有来自异步任务的更新
     state.check_for_updates();
 
+    // 处理延迟的MCP服务器选择变化（避免在ComboBox事件处理过程中触发）
+    state.process_pending_mcp_selection_change();
+
     // 请求重绘以保持流式输出的更新
     if state.is_sending {
         ui.ctx().request_repaint();
@@ -687,7 +690,7 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                             // 记录选择前的状态
                             let previous_selection = state.selected_mcp_server;
 
-                            egui::ComboBox::from_label("")
+                            let combo_response = egui::ComboBox::from_label("")
                                 .selected_text(selected_text)
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(&mut state.selected_mcp_server, None, "无");
@@ -720,8 +723,14 @@ pub fn render_ai_assist(ui: &mut egui::Ui, state: &mut AIAssistState) {
                                 }
                             });
 
-                            // 检查选择变化并记录日志
-                            state.check_mcp_server_selection_change(previous_selection);
+                            // 延迟检查选择变化，避免在ComboBox事件处理过程中触发
+                            // 只有在ComboBox关闭后才检查变化，避免macOS事件处理冲突
+                            if combo_response.response.changed() {
+                                // 使用ctx.request_repaint()延迟到下一帧处理
+                                ui.ctx().request_repaint();
+                                // 将选择变化检查存储起来，在下一帧处理
+                                state.pending_mcp_selection_change = Some(previous_selection);
+                            }
 
                             // 添加刷新按钮用于调试
                             if ui.small_button("🔄").on_hover_text("刷新MCP服务器列表").clicked() {

@@ -169,6 +169,14 @@ impl<'a> TerminalView<'a> {
                 | egui::Event::Key { .. }
                 | egui::Event::Copy
                 | egui::Event::Paste(_) => {
+                    // 特殊处理Tab键事件，防止焦点跳转
+                    if let egui::Event::Key { key: Key::Tab, pressed: true, modifiers: key_modifiers, .. } = event {
+                        if key_modifiers == Modifiers::NONE {
+                            // 消费Tab键事件，防止egui处理焦点跳转
+                            layout.ctx.input_mut(|i| i.consume_key(modifiers, Key::Tab));
+                        }
+                    }
+
                     // Keyboard events only need focus, not mouse pointer
                     input_actions.push(process_keyboard_event(
                         event,
@@ -456,6 +464,12 @@ fn process_keyboard_key(
 ) -> InputAction {
     if !pressed {
         return InputAction::Ignore;
+    }
+
+    // 特殊处理Tab键，防止焦点跳转
+    if key == Key::Tab && modifiers == Modifiers::NONE {
+        // 发送Tab字符到终端，这将触发shell的自动补全
+        return InputAction::BackendCall(BackendCommand::Write(b"\t".to_vec()));
     }
 
     let terminal_mode = backend.last_content().terminal_mode;

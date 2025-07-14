@@ -74,11 +74,6 @@ fn update_all_contexts_for_ai_assistant(app: &mut SeeUApp) {
         aiAssist::clear_note_context(&mut app.ai_assist_state);
     }
 
-    // 更新编辑器上下文
-    if let Some(file_context) = app.ifile_editor_state.get_current_file_context() {
-        aiAssist::update_file_context(&mut app.ai_assist_state,
-            file_context.file_name.clone(), file_context.content.clone());
-    } else {
-        aiAssist::clear_file_context(&mut app.ai_assist_state);
-    }
+    // 注意：不再自动更新编辑器上下文到AI助手
+    // 编辑器上下文只有在用户显式使用@editor时才会被引用
 }

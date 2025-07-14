@@ -124,77 +124,24 @@ impl SshConnectionBuilder {
     pub fn build_ssh_command(server: &RemoteServer) -> Result<(String, Vec<String>), String> {
         log::info!("构建SSH命令，服务器: {}@{}:{}", server.username, server.host, server.port);
 
-        // 对于密码认证，使用sshpass工具
+        // 对于密码认证，尝试多种方式
         if let AuthMethod::Password(password) = &server.auth_method {
             if !password.is_empty() {
-                // 检查sshpass是否可用
-                if !Self::check_sshpass_availability() {
-                    log::warn!("sshpass工具不可用，将使用交互式密码输入");
-
-                    // 在Windows上，提供安装建议
-                    #[cfg(target_os = "windows")]
-                    {
-                        log::info!("Windows用户建议：");
-                        log::info!("1. 使用Windows Subsystem for Linux (WSL) 并安装sshpass");
-                        log::info!("2. 使用私钥认证代替密码认证");
-                        log::info!("3. 手动输入密码进行连接");
-                    }
-
-                    // 如果sshpass不可用，回退到普通SSH命令，用户需要手动输入密码
-                } else {
-                    log::info!("使用sshpass进行密码认证");
-
-                    // 获取可用的SSH命令
-                    let ssh_command = Self::get_ssh_command().unwrap_or_else(|| "ssh".to_string());
-
-                    let mut args = vec![
-                        "-p".to_string(),
-                        password.clone(),
-                        ssh_command,
-                    ];
-
-                    // 添加SSH选项
-                    args.extend_from_slice(&[
-                        "-o".to_string(),
-                        "ServerAliveInterval=60".to_string(),
-                        "-o".to_string(),
-                        "ServerAliveCountMax=3".to_string(),
-                        "-o".to_string(),
-                        "StrictHostKeyChecking=ask".to_string(),
-                        "-o".to_string(),
-                        "ConnectTimeout=10".to_string(),
-                        "-o".to_string(),
-                        "PreferredAuthentications=password".to_string(),
-                    ]);
-
-                    // 添加端口配置
-                    if server.port != 22 {
-                        args.extend_from_slice(&["-p".to_string(), server.port.to_string()]);
-                    }
-
-                    // 构建连接字符串
-                    let connection_string = format!("{}@{}", server.username, server.host);
-                    args.push(connection_string);
-
-                    // 如果指定了远程工作目录，添加cd命令
-                    if let Some(ref dir) = server.working_directory {
-                        args.extend_from_slice(&[
-                            "-t".to_string(),
-                            format!("cd '{}' && exec $SHELL -l", dir.replace('\'', "'\"'\"'"))
-                        ]);
-                    } else {
-                        // 默认启动登录shell
-                        args.extend_from_slice(&["-t".to_string(), "exec $SHELL -l".to_string()]);
-                    }
-
-                    log::info!("sshpass命令构建完成: sshpass {}", args.join(" "));
-                    return Ok(("sshpass".to_string(), args));
+                // 尝试多种密码认证方式
+                if let Some((command, args)) = Self::try_password_authentication_methods(server, password)? {
+                    return Ok((command, args));
                 }
+
+                log::warn!("所有自动密码认证方法都不可用，将使用交互式密码输入");
+
+                // 提供用户建议
+                Self::log_password_auth_suggestions();
             }
         }
 
         // 对于其他认证方式，使用原有逻辑
         let mut config = Self::build_ssh_config(server)?;
+
 
         // 检查SSH客户端是否可用，如果不可用则返回错误
         if let Some(ssh_command) = Self::get_ssh_command() {
@@ -219,12 +166,31 @@ impl SshConnectionBuilder {
             "-o".to_string(),
             "ConnectTimeout=10".to_string(),
             "-o".to_string(),
-            "BatchMode=yes".to_string(),
-            "-o".to_string(),
             "StrictHostKeyChecking=no".to_string(),
-            "-o".to_string(),
-            "UserKnownHostsFile=/dev/null".to_string(),
         ];
+
+        // 根据操作系统添加特定参数
+        #[cfg(target_os = "windows")]
+        {
+            // Windows下使用NUL设备
+            args.extend_from_slice(&[
+                "-o".to_string(),
+                "UserKnownHostsFile=NUL".to_string(),
+                "-o".to_string(),
+                "PasswordAuthentication=no".to_string(),
+            ]);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Unix系统使用/dev/null和BatchMode
+            args.extend_from_slice(&[
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
+                "-o".to_string(),
+                "UserKnownHostsFile=/dev/null".to_string(),
+            ]);
+        }
 
         // 添加端口
         if server.port != 22 {
@@ -245,9 +211,9 @@ impl SshConnectionBuilder {
                 args.extend_from_slice(&["-o".to_string(), "PreferredAuthentications=publickey".to_string()]);
             }
             AuthMethod::Password(_) => {
-                // 密码认证在批处理模式下无法测试，但我们可以测试连接性
-                log::info!("密码认证模式，仅测试网络连接性");
-                return Self::test_network_connectivity(server);
+                // 密码认证需要特殊处理
+                log::info!("密码认证模式，测试SSH服务可用性");
+                return Self::test_ssh_service_availability(server);
             }
         }
 
@@ -255,10 +221,14 @@ impl SshConnectionBuilder {
         args.push(format!("{}@{}", server.username, server.host));
         args.push("echo 'connection_test_ok'".to_string());
 
-        log::debug!("执行SSH测试命令: ssh {}", args.join(" "));
+        // 获取SSH命令路径
+        let ssh_command = Self::get_ssh_command()
+            .ok_or_else(|| "找不到可用的SSH客户端".to_string())?;
+
+        log::debug!("执行SSH测试命令: {} {}", ssh_command, args.join(" "));
 
         // 执行测试命令
-        let output = Command::new("ssh")
+        let output = Command::new(&ssh_command)
             .args(&args)
             .output()
             .map_err(|e| format!("执行SSH命令失败: {}", e))?;
@@ -298,7 +268,21 @@ impl SshConnectionBuilder {
         }
     }
 
-    /// 测试网络连接性（用于密码认证）
+    /// 测试SSH服务可用性（用于密码认证）
+    fn test_ssh_service_availability(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
+        log::info!("测试SSH服务可用性到 {}:{}", server.host, server.port);
+
+        // 首先测试网络连接性
+        match Self::test_network_connectivity(server) {
+            Ok(ConnectionTestResult::Success) => {
+                // 网络连接成功，进一步测试SSH服务
+                Self::test_ssh_banner(server)
+            }
+            other => other,
+        }
+    }
+
+    /// 测试网络连接性
     fn test_network_connectivity(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
         log::info!("测试网络连接性到 {}:{}", server.host, server.port);
 
@@ -338,69 +322,170 @@ impl SshConnectionBuilder {
         }
     }
 
+    /// 测试SSH banner（检查SSH服务是否真的在运行）
+    fn test_ssh_banner(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
+        log::info!("测试SSH banner到 {}:{}", server.host, server.port);
+
+        use std::io::{Read, Write};
+        use std::net::{TcpStream, ToSocketAddrs};
+        use std::time::Duration;
+
+        // 解析主机地址
+        let addr_str = format!("{}:{}", server.host, server.port);
+        let mut addrs = match addr_str.to_socket_addrs() {
+            Ok(addrs) => addrs,
+            Err(e) => {
+                return Ok(ConnectionTestResult::Failed(format!("DNS解析失败: {}", e)));
+            }
+        };
+
+        let addr = match addrs.next() {
+            Some(addr) => addr,
+            None => {
+                return Ok(ConnectionTestResult::Failed("无法解析主机地址".to_string()));
+            }
+        };
+
+        // 连接并读取SSH banner
+        match TcpStream::connect_timeout(&addr, Duration::from_secs(10)) {
+            Ok(mut stream) => {
+                // 设置读取超时
+                if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(5))) {
+                    log::warn!("设置读取超时失败: {}", e);
+                }
+
+                // 读取SSH banner
+                let mut buffer = [0; 1024];
+                match stream.read(&mut buffer) {
+                    Ok(n) if n > 0 => {
+                        let banner = String::from_utf8_lossy(&buffer[..n]);
+                        log::debug!("收到SSH banner: {}", banner.trim());
+
+                        if banner.starts_with("SSH-") {
+                            log::info!("SSH服务测试成功");
+                            Ok(ConnectionTestResult::Success)
+                        } else {
+                            Ok(ConnectionTestResult::Failed("不是SSH服务".to_string()))
+                        }
+                    }
+                    Ok(_) => {
+                        Ok(ConnectionTestResult::Failed("未收到SSH banner".to_string()))
+                    }
+                    Err(e) => {
+                        Ok(ConnectionTestResult::Failed(format!("读取SSH banner失败: {}", e)))
+                    }
+                }
+            }
+            Err(e) => {
+                let error_msg = match e.kind() {
+                    std::io::ErrorKind::TimedOut => "连接超时".to_string(),
+                    std::io::ErrorKind::ConnectionRefused => "连接被拒绝".to_string(),
+                    _ => format!("连接失败: {}", e),
+                };
+                Ok(ConnectionTestResult::Failed(error_msg))
+            }
+        }
+    }
+
     /// 检查SSH客户端是否可用
     pub fn check_ssh_availability() -> bool {
+        log::debug!("检查SSH客户端可用性");
+
         // 首先尝试标准的ssh命令
-        if Command::new("ssh")
-            .arg("-V")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-        {
-            return true;
+        match Command::new("ssh").arg("-V").output() {
+            Ok(output) => {
+                if output.status.success() {
+                    log::debug!("找到标准SSH客户端");
+                    return true;
+                } else {
+                    log::debug!("标准SSH命令执行失败: {}", String::from_utf8_lossy(&output.stderr));
+                }
+            }
+            Err(e) => {
+                log::debug!("无法执行标准SSH命令: {}", e);
+            }
         }
 
         // 在Windows上，尝试检查OpenSSH for Windows
         #[cfg(target_os = "windows")]
         {
+            log::debug!("在Windows上检查其他SSH客户端");
+
             // 检查Windows OpenSSH (通常在System32目录)
-            if Command::new("C:\\Windows\\System32\\OpenSSH\\ssh.exe")
-                .arg("-V")
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false)
-            {
-                return true;
+            let windows_ssh = "C:\\Windows\\System32\\OpenSSH\\ssh.exe";
+            match Command::new(windows_ssh).arg("-V").output() {
+                Ok(output) => {
+                    if output.status.success() {
+                        log::debug!("找到Windows OpenSSH客户端");
+                        return true;
+                    } else {
+                        log::debug!("Windows OpenSSH执行失败: {}", String::from_utf8_lossy(&output.stderr));
+                    }
+                }
+                Err(e) => {
+                    log::debug!("无法执行Windows OpenSSH: {}", e);
+                }
             }
 
-            // 检查PowerShell SSH模块
-            if Command::new("powershell")
-                .args(&["-Command", "Get-Command ssh -ErrorAction SilentlyContinue"])
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false)
-            {
-                return true;
+            // 检查Git Bash SSH
+            let git_ssh_paths = [
+                "C:\\Program Files\\Git\\usr\\bin\\ssh.exe",
+                "C:\\Program Files (x86)\\Git\\usr\\bin\\ssh.exe",
+            ];
+
+            for path in &git_ssh_paths {
+                match Command::new(path).arg("-V").output() {
+                    Ok(output) => {
+                        if output.status.success() {
+                            log::debug!("找到Git Bash SSH客户端: {}", path);
+                            return true;
+                        }
+                    }
+                    Err(_) => {
+                        // Git SSH不存在是正常的，不记录错误
+                    }
+                }
             }
         }
 
+        log::warn!("未找到可用的SSH客户端");
         false
     }
 
     /// 获取可用的SSH命令路径
     pub fn get_ssh_command() -> Option<String> {
+        log::debug!("获取可用的SSH命令路径");
+
         // 首先尝试标准的ssh命令
-        if Command::new("ssh")
-            .arg("-V")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-        {
-            return Some("ssh".to_string());
+        match Command::new("ssh").arg("-V").output() {
+            Ok(output) => {
+                if output.status.success() {
+                    log::debug!("使用标准SSH命令");
+                    return Some("ssh".to_string());
+                }
+            }
+            Err(e) => {
+                log::debug!("标准SSH命令不可用: {}", e);
+            }
         }
 
         // 在Windows上，尝试其他SSH客户端
         #[cfg(target_os = "windows")]
         {
+            log::debug!("在Windows上查找其他SSH客户端");
+
             // 检查Windows OpenSSH
             let windows_ssh = "C:\\Windows\\System32\\OpenSSH\\ssh.exe";
-            if Command::new(windows_ssh)
-                .arg("-V")
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false)
-            {
-                return Some(windows_ssh.to_string());
+            match Command::new(windows_ssh).arg("-V").output() {
+                Ok(output) => {
+                    if output.status.success() {
+                        log::debug!("使用Windows OpenSSH");
+                        return Some(windows_ssh.to_string());
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Windows OpenSSH不可用: {}", e);
+                }
             }
 
             // 检查Git Bash SSH (如果安装了Git for Windows)
@@ -410,17 +495,21 @@ impl SshConnectionBuilder {
             ];
 
             for path in &git_ssh_paths {
-                if Command::new(path)
-                    .arg("-V")
-                    .output()
-                    .map(|output| output.status.success())
-                    .unwrap_or(false)
-                {
-                    return Some(path.to_string());
+                match Command::new(path).arg("-V").output() {
+                    Ok(output) => {
+                        if output.status.success() {
+                            log::debug!("使用Git Bash SSH: {}", path);
+                            return Some(path.to_string());
+                        }
+                    }
+                    Err(_) => {
+                        // Git SSH不存在是正常的
+                    }
                 }
             }
         }
 
+        log::warn!("未找到可用的SSH命令");
         None
     }
 
@@ -474,23 +563,385 @@ impl SshConnectionBuilder {
             }
         }
 
-        if Self::check_sshpass_availability() {
-            info.push("✅ sshpass工具可用 (支持密码认证)".to_string());
-        } else {
-            info.push("⚠️  sshpass工具不可用 (密码认证需要手动输入)".to_string());
+        // 检查密码认证工具
+        info.push("".to_string());
+        info.push("密码认证工具支持:".to_string());
 
-            #[cfg(not(target_os = "windows"))]
-            {
-                info.push("   安装sshpass以支持自动密码认证".to_string());
+        if Self::check_sshpass_availability() {
+            info.push("✅ sshpass工具可用".to_string());
+        } else {
+            info.push("❌ sshpass工具不可用".to_string());
+        }
+
+        #[cfg(unix)]
+        if Self::check_expect_availability() {
+            info.push("✅ expect工具可用".to_string());
+        } else {
+            info.push("❌ expect工具不可用".to_string());
+        }
+
+        #[cfg(windows)]
+        {
+            if Self::check_powershell_ssh_availability() {
+                info.push("✅ PowerShell SSH可用".to_string());
+            } else {
+                info.push("❌ PowerShell SSH不可用".to_string());
             }
 
-            #[cfg(target_os = "windows")]
-            {
-                info.push("   Windows用户建议使用私钥认证或WSL".to_string());
+            if Self::check_plink_availability() {
+                info.push("✅ PuTTY plink可用".to_string());
+            } else {
+                info.push("❌ PuTTY plink不可用".to_string());
             }
         }
 
+        // 如果没有任何密码认证工具可用，提供建议
+        let has_password_auth_tool = Self::check_sshpass_availability() ||
+            {
+                #[cfg(unix)]
+                { Self::check_expect_availability() }
+                #[cfg(not(unix))]
+                { false }
+            } ||
+            {
+                #[cfg(windows)]
+                { Self::check_powershell_ssh_availability() || Self::check_plink_availability() }
+                #[cfg(not(windows))]
+                { false }
+            };
+
+        if !has_password_auth_tool {
+            info.push("".to_string());
+            info.push("⚠️  没有可用的自动密码认证工具".to_string());
+            info.push("   建议使用私钥认证或手动输入密码".to_string());
+        }
+
         info.join("\n")
+    }
+
+    /// 尝试多种密码认证方法
+    pub fn try_password_authentication_methods(
+        server: &RemoteServer,
+        password: &str
+    ) -> Result<Option<(String, Vec<String>)>, String> {
+        use crate::remote_server::PasswordAuthMethod;
+
+        // 根据用户偏好选择认证方法
+        match &server.password_auth_method {
+            PasswordAuthMethod::Auto => {
+                // 自动选择：按优先级尝试所有可用方法
+                Self::try_auto_password_authentication(server, password)
+            }
+            PasswordAuthMethod::Sshpass => {
+                if Self::check_sshpass_availability() {
+                    log::info!("使用用户指定的sshpass进行密码认证");
+                    Self::build_sshpass_command(server, password).map(Some).map_err(|e| e)
+                } else {
+                    Err("sshpass工具不可用".to_string())
+                }
+            }
+            #[cfg(unix)]
+            PasswordAuthMethod::Expect => {
+                if Self::check_expect_availability() {
+                    log::info!("使用用户指定的expect进行密码认证");
+                    Self::build_expect_command(server, password).map(Some).map_err(|e| e)
+                } else {
+                    Err("expect工具不可用".to_string())
+                }
+            }
+            #[cfg(windows)]
+            PasswordAuthMethod::PowerShell => {
+                if Self::check_powershell_ssh_availability() {
+                    log::info!("使用用户指定的PowerShell SSH进行密码认证");
+                    Self::build_powershell_ssh_command(server, password).map(Some).map_err(|e| e)
+                } else {
+                    Err("PowerShell SSH不可用".to_string())
+                }
+            }
+            #[cfg(windows)]
+            PasswordAuthMethod::Plink => {
+                if Self::check_plink_availability() {
+                    log::info!("使用用户指定的PuTTY plink进行密码认证");
+                    Self::build_plink_command(server, password).map(Some).map_err(|e| e)
+                } else {
+                    Err("PuTTY plink不可用".to_string())
+                }
+            }
+            PasswordAuthMethod::Interactive => {
+                log::info!("使用用户指定的交互式密码认证");
+                Ok(None) // 返回None表示使用交互式输入
+            }
+        }
+    }
+
+    /// 自动选择密码认证方法
+    pub fn try_auto_password_authentication(
+        server: &RemoteServer,
+        password: &str
+    ) -> Result<Option<(String, Vec<String>)>, String> {
+        // 方法1: 使用sshpass
+        if Self::check_sshpass_availability() {
+            log::info!("自动选择：使用sshpass进行密码认证");
+            if let Ok((command, args)) = Self::build_sshpass_command(server, password) {
+                return Ok(Some((command, args)));
+            }
+        }
+
+        // 方法2: 使用expect (Unix系统)
+        #[cfg(unix)]
+        if Self::check_expect_availability() {
+            log::info!("自动选择：使用expect进行密码认证");
+            if let Ok((command, args)) = Self::build_expect_command(server, password) {
+                return Ok(Some((command, args)));
+            }
+        }
+
+        // 方法3: 使用PowerShell (Windows系统)
+        #[cfg(windows)]
+        if Self::check_powershell_ssh_availability() {
+            log::info!("自动选择：使用PowerShell SSH进行密码认证");
+            if let Ok((command, args)) = Self::build_powershell_ssh_command(server, password) {
+                return Ok(Some((command, args)));
+            }
+        }
+
+        // 方法4: 使用PuTTY plink (Windows系统)
+        #[cfg(windows)]
+        if Self::check_plink_availability() {
+            log::info!("自动选择：使用PuTTY plink进行密码认证");
+            if let Ok((command, args)) = Self::build_plink_command(server, password) {
+                return Ok(Some((command, args)));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// 构建sshpass命令
+    pub fn build_sshpass_command(
+        server: &RemoteServer,
+        password: &str
+    ) -> Result<(String, Vec<String>), String> {
+        let ssh_command = Self::get_ssh_command().unwrap_or_else(|| "ssh".to_string());
+
+        let mut args = vec![
+            "-p".to_string(),
+            password.to_string(),
+            ssh_command,
+        ];
+
+        // 添加SSH选项
+        args.extend_from_slice(&[
+            "-o".to_string(),
+            "ServerAliveInterval=60".to_string(),
+            "-o".to_string(),
+            "ServerAliveCountMax=3".to_string(),
+            "-o".to_string(),
+            "StrictHostKeyChecking=ask".to_string(),
+            "-o".to_string(),
+            "ConnectTimeout=10".to_string(),
+            "-o".to_string(),
+            "PreferredAuthentications=password".to_string(),
+        ]);
+
+        // 添加端口配置
+        if server.port != 22 {
+            args.extend_from_slice(&["-p".to_string(), server.port.to_string()]);
+        }
+
+        // 构建连接字符串
+        let connection_string = format!("{}@{}", server.username, server.host);
+        args.push(connection_string);
+
+        // 如果指定了远程工作目录，添加cd命令
+        if let Some(ref dir) = server.working_directory {
+            args.extend_from_slice(&[
+                "-t".to_string(),
+                format!("cd '{}' && exec $SHELL -l", dir.replace('\'', "'\"'\"'"))
+            ]);
+        } else {
+            // 默认启动登录shell
+            args.extend_from_slice(&["-t".to_string(), "exec $SHELL -l".to_string()]);
+        }
+
+        log::info!("sshpass命令构建完成: sshpass {}", args.join(" "));
+        Ok(("sshpass".to_string(), args))
+    }
+
+    /// 构建expect命令 (Unix系统)
+    #[cfg(unix)]
+    pub fn build_expect_command(
+        server: &RemoteServer,
+        password: &str
+    ) -> Result<(String, Vec<String>), String> {
+        let ssh_command = Self::get_ssh_command().unwrap_or_else(|| "ssh".to_string());
+
+        // 创建expect脚本内容
+        let expect_script = format!(
+            r#"#!/usr/bin/expect -f
+set timeout 30
+spawn {} -o StrictHostKeyChecking=ask -o ConnectTimeout=10 -o PreferredAuthentications=password{} {}@{}
+expect {{
+    "password:" {{
+        send "{}\r"
+        exp_continue
+    }}
+    "Password:" {{
+        send "{}\r"
+        exp_continue
+    }}
+    "yes/no" {{
+        send "yes\r"
+        exp_continue
+    }}
+    eof
+}}
+interact
+"#,
+            ssh_command,
+            if server.port != 22 { format!(" -p {}", server.port) } else { String::new() },
+            server.username,
+            server.host,
+            password.replace("\"", "\\\""),
+            password.replace("\"", "\\\"")
+        );
+
+        // 将expect脚本作为参数传递
+        let args = vec![
+            "-c".to_string(),
+            expect_script,
+        ];
+
+        Ok(("expect".to_string(), args))
+    }
+
+    /// 构建PowerShell SSH命令 (Windows系统)
+    #[cfg(windows)]
+    pub fn build_powershell_ssh_command(
+        server: &RemoteServer,
+        password: &str
+    ) -> Result<(String, Vec<String>), String> {
+        // 使用PowerShell的SSH模块或者调用SSH客户端
+        let powershell_script = format!(
+            r#"
+$password = ConvertTo-SecureString '{}' -AsPlainText -Force
+$credential = New-Object System.Management.Automation.PSCredential ('{}', $password)
+$sshArgs = @('-o', 'StrictHostKeyChecking=ask', '-o', 'ConnectTimeout=10'{})
+try {{
+    ssh $sshArgs {}@{} -t 'exec $SHELL -l'
+}} catch {{
+    Write-Error "SSH连接失败: $_"
+}}
+"#,
+            password.replace("'", "''"),
+            server.username,
+            if server.port != 22 { format!(", '-p', '{}'", server.port) } else { String::new() },
+            server.username,
+            server.host
+        );
+
+        let args = vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-Command".to_string(),
+            powershell_script,
+        ];
+
+        Ok(("powershell".to_string(), args))
+    }
+
+    /// 构建PuTTY plink命令 (Windows系统)
+    #[cfg(windows)]
+    pub fn build_plink_command(
+        server: &RemoteServer,
+        password: &str
+    ) -> Result<(String, Vec<String>), String> {
+        let mut args = vec![
+            "-ssh".to_string(),
+            "-batch".to_string(),  // 非交互模式
+            "-pw".to_string(),
+            password.to_string(),
+        ];
+
+        // 添加端口配置
+        if server.port != 22 {
+            args.extend_from_slice(&["-P".to_string(), server.port.to_string()]);
+        }
+
+        // 构建连接字符串
+        let connection_string = format!("{}@{}", server.username, server.host);
+        args.push(connection_string);
+
+        // 如果指定了远程工作目录，添加cd命令
+        if let Some(ref dir) = server.working_directory {
+            args.push(format!("cd '{}' && exec $SHELL -l", dir.replace('\'', "'\"'\"'")));
+        } else {
+            args.push("exec $SHELL -l".to_string());
+        }
+
+        Ok(("plink".to_string(), args))
+    }
+
+    /// 检查expect工具是否可用 (Unix系统)
+    #[cfg(unix)]
+    pub fn check_expect_availability() -> bool {
+        Command::new("expect")
+            .arg("-v")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    /// 检查PowerShell SSH是否可用 (Windows系统)
+    #[cfg(windows)]
+    pub fn check_powershell_ssh_availability() -> bool {
+        Command::new("powershell")
+            .args(&["-Command", "Get-Command ssh -ErrorAction SilentlyContinue"])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    /// 检查PuTTY plink是否可用 (Windows系统)
+    #[cfg(windows)]
+    pub fn check_plink_availability() -> bool {
+        Command::new("plink")
+            .arg("-V")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    /// 记录密码认证建议
+    pub fn log_password_auth_suggestions() {
+        #[cfg(target_os = "windows")]
+        {
+            log::info!("Windows用户建议：");
+            log::info!("1. 安装并使用PuTTY plink工具");
+            log::info!("2. 使用Windows Subsystem for Linux (WSL) 并安装sshpass");
+            log::info!("3. 使用私钥认证代替密码认证");
+            log::info!("4. 手动输入密码进行连接");
+            log::info!("5. 启用Windows OpenSSH客户端功能");
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            log::info!("macOS用户建议：");
+            log::info!("1. 安装sshpass: brew install sshpass");
+            log::info!("2. 安装expect: brew install expect");
+            log::info!("3. 使用私钥认证代替密码认证");
+            log::info!("4. 手动输入密码进行连接");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            log::info!("Linux用户建议：");
+            log::info!("1. 安装sshpass: sudo apt install sshpass (Ubuntu/Debian)");
+            log::info!("2. 安装expect: sudo apt install expect (Ubuntu/Debian)");
+            log::info!("3. 使用私钥认证代替密码认证");
+            log::info!("4. 手动输入密码进行连接");
+        }
     }
 
     /// 获取SSH客户端版本信息
@@ -652,5 +1103,151 @@ mod tests {
         let auth_failed = ConnectionTestResult::AuthenticationFailed;
         assert!(auth_failed.is_auth_error());
         assert!(!auth_failed.is_success());
+    }
+
+    #[test]
+    fn test_password_auth_method_availability() {
+        use crate::remote_server::PasswordAuthMethod;
+
+        let methods = PasswordAuthMethod::available_methods();
+        assert!(!methods.is_empty(), "应该有可用的密码认证方法");
+
+        // Auto和Interactive应该总是可用
+        assert!(methods.contains(&PasswordAuthMethod::Auto));
+        assert!(methods.contains(&PasswordAuthMethod::Interactive));
+
+        // 检查每个方法的可用性
+        for method in &methods {
+            let is_available = method.is_available();
+            println!("方法 '{}' 可用性: {}", method.display_name(), is_available);
+        }
+    }
+
+    #[test]
+    fn test_ssh_tools_availability() {
+        println!("SSH工具可用性检查:");
+
+        let sshpass_available = SshConnectionBuilder::check_sshpass_availability();
+        println!("sshpass: {}", if sshpass_available { "✅" } else { "❌" });
+
+        #[cfg(unix)]
+        {
+            let expect_available = SshConnectionBuilder::check_expect_availability();
+            println!("expect: {}", if expect_available { "✅" } else { "❌" });
+        }
+
+        #[cfg(windows)]
+        {
+            let powershell_available = SshConnectionBuilder::check_powershell_ssh_availability();
+            println!("PowerShell SSH: {}", if powershell_available { "✅" } else { "❌" });
+
+            let plink_available = SshConnectionBuilder::check_plink_availability();
+            println!("PuTTY plink: {}", if plink_available { "✅" } else { "❌" });
+        }
+    }
+
+    #[test]
+    fn test_password_auth_method_selection() {
+        use crate::remote_server::{AuthMethod, PasswordAuthMethod};
+
+        let mut server = RemoteServer::new(
+            "Test Server".to_string(),
+            "example.com".to_string(),
+            "testuser".to_string(),
+            AuthMethod::Password("testpass".to_string()),
+        );
+
+        // 测试自动选择
+        server.password_auth_method = PasswordAuthMethod::Auto;
+        if let AuthMethod::Password(password) = &server.auth_method {
+            let result = SshConnectionBuilder::try_password_authentication_methods(&server, password);
+            match result {
+                Ok(Some((command, args))) => {
+                    println!("自动选择成功: {} {}", command, args.join(" "));
+                }
+                Ok(None) => {
+                    println!("自动选择回退到交互式输入");
+                }
+                Err(e) => {
+                    println!("自动选择失败: {}", e);
+                }
+            }
+        }
+
+        // 测试交互式方法
+        server.password_auth_method = PasswordAuthMethod::Interactive;
+        if let AuthMethod::Password(password) = &server.auth_method {
+            let result = SshConnectionBuilder::try_password_authentication_methods(&server, password);
+            assert!(result.is_ok(), "交互式方法应该总是成功");
+            assert!(result.unwrap().is_none(), "交互式方法应该返回None");
+        }
+    }
+
+    #[test]
+    fn test_ssh_support_info() {
+        let info = SshConnectionBuilder::get_ssh_support_info();
+        println!("SSH支持信息:\n{}", info);
+
+        // 信息应该包含基本的SSH客户端检查
+        assert!(info.contains("SSH客户端"), "应该包含SSH客户端信息");
+    }
+
+    #[test]
+    fn test_ssh_service_availability() {
+        // 测试网络连接性检查
+        let server = RemoteServer::new(
+            "Test Server".to_string(),
+            "github.com".to_string(),  // 使用GitHub作为测试目标，因为它有SSH服务
+            "git".to_string(),
+            AuthMethod::Password("testpass".to_string()),
+        );
+
+        // 测试网络连接性
+        let network_result = SshConnectionBuilder::test_network_connectivity(&server);
+        println!("网络连接性测试结果: {:?}", network_result);
+
+        // GitHub应该是可以连接的
+        if let Ok(result) = network_result {
+            if result.is_success() {
+                println!("✅ 网络连接成功");
+
+                // 测试SSH banner检测
+                let banner_result = SshConnectionBuilder::test_ssh_banner(&server);
+                println!("SSH banner测试结果: {:?}", banner_result);
+
+                // GitHub的SSH服务应该返回SSH banner
+                if let Ok(banner_result) = banner_result {
+                    if banner_result.is_success() {
+                        println!("✅ SSH服务检测成功");
+                    } else {
+                        println!("⚠️ SSH服务检测失败: {}", banner_result.get_display_text());
+                    }
+                }
+            } else {
+                println!("⚠️ 网络连接失败: {}", result.get_display_text());
+            }
+        }
+    }
+
+    #[test]
+    fn test_ssh_connection_with_invalid_host() {
+        // 测试无效主机的处理
+        let server = RemoteServer::new(
+            "Invalid Server".to_string(),
+            "invalid.nonexistent.domain.test".to_string(),
+            "testuser".to_string(),
+            AuthMethod::Password("testpass".to_string()),
+        );
+
+        let result = SshConnectionBuilder::test_connection(&server);
+        println!("无效主机测试结果: {:?}", result);
+
+        // 应该返回失败结果，而不是错误
+        assert!(result.is_ok());
+
+        if let Ok(test_result) = result {
+            assert!(!test_result.is_success());
+            println!("预期的失败结果: {}", test_result.get_display_text());
+        }
     }
 }

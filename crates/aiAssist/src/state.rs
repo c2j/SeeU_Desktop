@@ -33,6 +33,9 @@ pub type InsertToNoteCallback = Box<dyn FnMut(String) + Send + 'static>;
 /// Type for MCP refresh callback
 pub type McpRefreshCallback = Box<dyn FnMut() + Send + 'static>;
 
+/// Type for get editor context callback
+pub type GetEditorContextCallback = Box<dyn Fn() -> Option<FileContext> + Send + 'static>;
+
 
 
 
@@ -104,6 +107,7 @@ pub struct AIAssistState {
     pub slash_command_callback: Option<SlashCommandCallback>,
     pub insert_to_note_callback: Option<InsertToNoteCallback>,
     pub mcp_refresh_callback: Option<McpRefreshCallback>,
+    pub get_editor_context_callback: Option<GetEditorContextCallback>,
 
 
 
@@ -133,6 +137,8 @@ pub struct AIAssistState {
     pub show_tool_call_confirmation: bool,
     pub current_tool_call_batch: Option<ToolCallBatch>,
     pub tool_execution_pending: bool,
+    /// 待处理的MCP服务器选择变化（延迟处理以避免macOS事件冲突）
+    pub pending_mcp_selection_change: Option<Option<Uuid>>,
 
     /// 待处理的Function Call响应
     pub pending_function_call_response: Option<crate::api::ChatResponse>,
@@ -162,6 +168,9 @@ pub struct AIAssistState {
 
     // 笔记上下文信息
     pub note_context: Option<NoteContext>,
+
+    // 等待参数的slash命令状态
+    pub pending_slash_command: Option<PendingSlashCommand>,
 }
 
 impl Default for AIAssistState {
@@ -203,6 +212,7 @@ impl Default for AIAssistState {
             slash_command_callback: None,
             insert_to_note_callback: None,
             mcp_refresh_callback: None,
+            get_editor_context_callback: None,
 
 
 
@@ -220,6 +230,7 @@ impl Default for AIAssistState {
             show_tool_call_confirmation: false,
             current_tool_call_batch: None,
             tool_execution_pending: false,
+            pending_mcp_selection_change: None,
             pending_function_call_response: None,
             pending_function_call_processing: false,
             pending_auto_save: false,
@@ -231,6 +242,7 @@ impl Default for AIAssistState {
             current_file_context: None,
             terminal_context: None,
             note_context: None,
+            pending_slash_command: None,
             show_api_key_masked: true, // 默认启用掩码显示
         }
     }
@@ -268,9 +280,65 @@ impl AIAssistState {
             return None;
         }
 
+        // 检查是否有待处理的slash命令
+        if let Some(pending_cmd) = &self.pending_slash_command {
+            // 用户输入了参数，处理待处理的命令
+            let param = self.chat_input.trim().to_string();
+
+            // 清除待处理状态
+            let cmd_type = pending_cmd.command_type.clone();
+            self.pending_slash_command = None;
+
+            // 根据命令类型构造完整的slash命令
+            let full_command = format!("/{} {}", cmd_type, param);
+            log::info!("处理待处理的slash命令: {}", full_command);
+
+            // 创建slash命令消息
+            let user_message = ChatMessage {
+                id: Uuid::new_v4(),
+                role: MessageRole::SlashCommand,
+                content: full_command.clone(),
+                timestamp: Utc::now(),
+                attachments: vec![],
+                tool_calls: None,
+                tool_call_results: None,
+                mcp_server_info: None,
+            };
+
+            // Add the message to the current session
+            if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                // 检查是否是该会话的第一条用户消息
+                let is_first_user_message = session.messages.iter()
+                    .filter(|msg| msg.role == MessageRole::User)
+                    .count() == 0;
+
+                // 如果是第一条用户消息，更新会话名称为消息摘要
+                if is_first_user_message {
+                    // 获取消息摘要（最多12个字符）
+                    let summary = Self::get_message_summary(&user_message.content, 12);
+                    session.name = summary;
+                }
+
+                session.messages.push(user_message.clone());
+            }
+
+            // Add the message to the current chat
+            self.chat_messages.push(user_message);
+
+            // 解析完整命令
+            let slash_command = self.parse_slash_command(&full_command);
+
+            // 清空输入框
+            self.chat_input.clear();
+
+            return slash_command;
+        }
+
         // Check for slash commands
         let input = self.chat_input.trim();
-        let slash_command = if input.starts_with('/') {
+        // 检查输入是否以'/'开头（可能包含换行符）
+        let normalized_input = input.replace('\n', " ").replace('\r', " ");
+        let slash_command = if normalized_input.trim().starts_with('/') {
             self.parse_slash_command(input)
         } else {
             None
@@ -279,8 +347,42 @@ impl AIAssistState {
         // Handle slash commands
         if let Some(cmd) = &slash_command {
             match cmd {
-                SlashCommand::Search(_) => {
-                    // Create a slash command message showing the command
+                SlashCommand::Search(query) => {
+                    // 检查是否有搜索查询参数
+                    if query.is_empty() {
+                        // 没有参数，设置待处理状态
+                        self.pending_slash_command = Some(PendingSlashCommand {
+                            command_type: "search".to_string(),
+                            prompt_message: "请输入搜索关键字:".to_string(),
+                        });
+
+                        // 添加提示消息
+                        let prompt_message = ChatMessage {
+                            id: Uuid::new_v4(),
+                            role: MessageRole::System,
+                            content: "请输入搜索关键字:".to_string(),
+                            timestamp: Utc::now(),
+                            attachments: vec![],
+                            tool_calls: None,
+                            tool_call_results: None,
+                            mcp_server_info: None,
+                        };
+
+                        // Add the message to the current session
+                        if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
+                            session.messages.push(prompt_message.clone());
+                        }
+
+                        // Add the message to the current chat
+                        self.chat_messages.push(prompt_message);
+
+                        // Clear the input
+                        self.chat_input.clear();
+
+                        return None; // 不返回命令，等待用户输入参数
+                    }
+
+                    // 有参数，正常处理
                     let user_message = ChatMessage {
                         id: Uuid::new_v4(),
                         role: MessageRole::SlashCommand,
@@ -500,7 +602,13 @@ impl AIAssistState {
 
     /// Parse slash command
     fn parse_slash_command(&self, input: &str) -> Option<SlashCommand> {
-        let parts: Vec<&str> = input.splitn(3, ' ').collect();
+        // 首先规范化输入：去除首尾空白，将换行符替换为空格
+        let normalized_input = input.trim().replace('\n', " ").replace('\r', " ");
+
+        // 将多个连续空格替换为单个空格
+        let normalized_input = normalized_input.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        let parts: Vec<&str> = normalized_input.splitn(3, ' ').collect();
 
         if parts.len() < 1 {
             return None;
@@ -509,7 +617,9 @@ impl AIAssistState {
         match parts[0] {
             "/search" => {
                 if parts.len() > 1 {
-                    Some(SlashCommand::Search(parts[1].trim().to_string()))
+                    // 将所有剩余部分连接为搜索查询
+                    let query = parts[1..].join(" ").trim().to_string();
+                    Some(SlashCommand::Search(query))
                 } else {
                     Some(SlashCommand::Search(String::new()))
                 }
@@ -650,6 +760,8 @@ impl AIAssistState {
         if let Some(session) = self.chat_sessions.get_mut(self.active_session_idx) {
             session.messages.push(placeholder_message);
         }
+
+        // 注意：文件上下文将在prepare_messages_for_api_with_file_context中动态获取
 
         // Prepare the messages for the API
         let messages = self.prepare_messages_for_api();
@@ -873,8 +985,12 @@ impl AIAssistState {
                             }
                         }
                     } else {
-                        // 普通助手消息
-                        messages.push((MessageRole::Assistant, message.content.clone()));
+                        // 普通助手消息 - 过滤掉空的占位符消息
+                        if !message.content.trim().is_empty() {
+                            messages.push((MessageRole::Assistant, message.content.clone()));
+                        } else {
+                            log::info!("🚫 过滤掉空的Assistant消息（占位符）: ID={}", message.id);
+                        }
                     }
                 },
                 MessageRole::System => {
@@ -891,6 +1007,11 @@ impl AIAssistState {
 
     /// Prepare messages for the API
     fn prepare_messages_for_api(&self) -> Vec<(MessageRole, String)> {
+        self.prepare_messages_for_api_with_file_context(None)
+    }
+
+    /// Prepare messages for the API with optional file context
+    pub fn prepare_messages_for_api_with_file_context(&self, file_context: Option<&FileContext>) -> Vec<(MessageRole, String)> {
         log::info!("🔄 开始准备API消息");
         log::info!("🔄 当前终端上下文状态: {:?}",
             self.terminal_context.as_ref().map(|ctx| ctx.last_output.as_ref().map(|s| s.len()).unwrap_or(0)));
@@ -898,21 +1019,38 @@ impl AIAssistState {
         let session = &self.chat_sessions[self.active_session_idx];
         let mut messages = Vec::new();
 
-        // 如果有文件上下文，添加系统消息
-        if let Some(file_context) = &self.current_file_context {
-            let context_message = self.format_file_context_message(file_context);
-            messages.push((MessageRole::System, context_message));
-        }
+        // 注意：不再自动添加文件上下文系统消息
+        // 文件上下文只有在用户显式使用@editor时才会被引用
 
         // Convert to the format expected by the API, processing @search references
-        // 过滤掉Slash指令消息，因为它们不应该发送给LLM
+        // 过滤掉Slash指令消息和空的Assistant消息，因为它们不应该发送给LLM
         let session_messages: Vec<(MessageRole, String)> = session.messages.iter()
-            .filter(|msg| msg.role != MessageRole::SlashCommand)
+            .filter(|msg| {
+                // 过滤掉Slash指令消息
+                if msg.role == MessageRole::SlashCommand {
+                    return false;
+                }
+                // 过滤掉空的Assistant消息（占位符消息）
+                if msg.role == MessageRole::Assistant && msg.content.trim().is_empty() {
+                    log::info!("🚫 过滤掉空的Assistant消息（占位符）: ID={}", msg.id);
+                    return false;
+                }
+                true
+            })
             .map(|msg| {
                 let content = if msg.role == MessageRole::User {
                     // 处理用户消息中的 @ 引用
                     log::info!("🔄 处理用户消息，原始内容: {:?}", msg.content);
-                    let processed = self.process_at_references(&msg.content);
+
+                    // 如果消息包含@editor引用，动态获取文件上下文
+                    let dynamic_file_context = if msg.content.contains("@editor") {
+                        self.get_current_file_context_from_callback()
+                    } else {
+                        None
+                    };
+
+                    let processed = self.process_at_references_with_context(&msg.content,
+                        dynamic_file_context.as_ref().or(file_context));
                     log::info!("🔄 处理后内容: {:?}", processed);
                     processed
                 } else {
@@ -929,6 +1067,11 @@ impl AIAssistState {
 
     /// 处理消息中的 @ 引用
     pub fn process_at_references(&self, content: &str) -> String {
+        self.process_at_references_with_context(content, None)
+    }
+
+    /// 处理消息中的 @ 引用（带可选的文件上下文）
+    pub fn process_at_references_with_context(&self, content: &str, file_context: Option<&FileContext>) -> String {
         let mut result = content.to_string();
 
         // 处理 @search 引用
@@ -985,9 +1128,13 @@ impl AIAssistState {
 
         // 处理 @editor 引用
         if result.contains("@editor") {
-            let replacement = if let Some(file_context) = &self.current_file_context {
+            // 优先使用传入的文件上下文，如果没有则使用当前存储的上下文
+            let replacement = if let Some(context) = file_context {
                 format!("@editor (当前文件: \"{}\"):\n{}",
-                    file_context.file_name, file_context.content)
+                    context.file_name, context.content)
+            } else if let Some(context) = &self.current_file_context {
+                format!("@editor (当前文件: \"{}\"):\n{}",
+                    context.file_name, context.content)
             } else {
                 "@editor (暂无打开的文件)".to_string()
             };
@@ -1392,6 +1539,15 @@ impl AIAssistState {
     /// Get current file context
     pub fn get_file_context(&self) -> Option<&FileContext> {
         self.current_file_context.as_ref()
+    }
+
+    /// Get current file context from callback (for dynamic @editor references)
+    pub fn get_current_file_context_from_callback(&self) -> Option<FileContext> {
+        if let Some(callback) = &self.get_editor_context_callback {
+            callback()
+        } else {
+            None
+        }
     }
 
     /// Format file context as system message
@@ -1813,6 +1969,13 @@ impl AIAssistState {
     /// 获取选中的MCP服务器
     pub fn get_selected_mcp_server(&self) -> Option<Uuid> {
         self.selected_mcp_server
+    }
+
+    /// 处理延迟的MCP服务器选择变化（在UI渲染开始时调用）
+    pub fn process_pending_mcp_selection_change(&mut self) {
+        if let Some(previous_selection) = self.pending_mcp_selection_change.take() {
+            self.check_mcp_server_selection_change(previous_selection);
+        }
     }
 
     /// 检查并记录MCP服务器选择变化（用于UI更新后调用）
@@ -2464,6 +2627,13 @@ pub struct NoteContext {
     pub current_notebook_name: Option<String>,
     pub last_search_query: Option<String>,
     pub last_search_results: Vec<String>,
+}
+
+/// 等待参数的slash命令
+#[derive(Debug, Clone)]
+pub struct PendingSlashCommand {
+    pub command_type: String,  // 例如 "search", "note", "editor"
+    pub prompt_message: String, // 提示用户输入的消息
 }
 
 // 移除ProviderType，统一使用OpenAI compatible格式
