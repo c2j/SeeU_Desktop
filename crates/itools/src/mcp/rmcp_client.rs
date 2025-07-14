@@ -2818,7 +2818,7 @@ impl RmcpClient {
 
     /// Send event to all registered receivers
     fn send_event(&self, event: McpEvent) {
-        log::info!("📤 发送MCP事件到 {} 个接收器: {:?}", self.event_senders.len(), event);
+        log::debug!("📤 发送MCP事件到 {} 个接收器: {:?}", self.event_senders.len(), event);
         for (i, sender) in self.event_senders.iter().enumerate() {
             match sender.send(event.clone()) {
                 Ok(_) => log::debug!("✅ 事件成功发送到接收器 {}", i),

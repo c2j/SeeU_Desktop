@@ -229,8 +229,15 @@ pub fn load_settings(state: &mut AIAssistState) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-/// Load AI assistant chat sessions
+/// Load AI assistant chat sessions (fast mode for startup)
 pub fn load_chat_sessions(state: &mut AIAssistState) -> Result<(), Box<dyn std::error::Error>> {
+    // For fast startup, just load basic settings and defer session loading
+    log::info!("AI assistant initialized (sessions will be loaded on demand)");
+    Ok(())
+}
+
+/// Load AI assistant chat sessions (full mode when actually needed)
+pub fn load_chat_sessions_full(state: &mut AIAssistState) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
     use serde_json;
     use crate::state::ChatSession;

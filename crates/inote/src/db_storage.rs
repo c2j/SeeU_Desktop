@@ -107,6 +107,49 @@ impl DbStorageManager {
         Ok(())
     }
 
+    /// Fast initialization for startup optimization (defers heavy operations)
+    pub fn initialize_async_fast(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Only initialize if this is a placeholder
+        if self.db_path.to_string_lossy() == ":placeholder:" {
+            // Get database path
+            let mut db_path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+            db_path.push("seeu_desktop");
+            db_path.push("inote");
+
+            // Create directories if they don't exist
+            std::fs::create_dir_all(&db_path)?;
+
+            db_path.push("inote.db");
+
+            log::info!("Fast initializing database: {}", db_path.display());
+
+            // Create connection manager with optimized settings
+            let manager = SqliteConnectionManager::file(&db_path)
+                .with_init(|c| {
+                    // Optimize SQLite for faster startup
+                    c.execute_batch("
+                        PRAGMA journal_mode = WAL;
+                        PRAGMA synchronous = NORMAL;
+                        PRAGMA cache_size = 10000;
+                        PRAGMA temp_store = MEMORY;
+                    ")?;
+                    Ok(())
+                });
+            let pool = Pool::new(manager)?;
+
+            // Replace placeholder with real database
+            self.pool = pool;
+            self.db_path = db_path;
+
+            // Fast initialization (defer heavy operations)
+            self.init_database_fast()?;
+
+            log::info!("Fast database initialization completed");
+        }
+
+        Ok(())
+    }
+
     /// Check if this is a placeholder storage
     pub fn is_placeholder(&self) -> bool {
         self.db_path.to_string_lossy() == ":placeholder:"
@@ -993,6 +1036,32 @@ impl DbStorageManager {
         Ok(())
     }
 
+    /// Fast database initialization (defers heavy operations)
+    fn init_database_fast(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.pool.get()?;
+
+        // Create essential tables only (defer FTS and complex indexes)
+        self.create_essential_tables(&conn)?;
+
+        // Check database version
+        self.check_version(&conn)?;
+
+        // Schedule heavy operations for later
+        let pool_clone = self.pool.clone();
+        std::thread::spawn(move || {
+            if let Ok(conn) = pool_clone.get() {
+                log::info!("Creating deferred database indexes...");
+                if let Err(e) = Self::create_deferred_indexes(&conn) {
+                    log::error!("Failed to create deferred indexes: {}", e);
+                } else {
+                    log::info!("Deferred database indexes created successfully");
+                }
+            }
+        });
+
+        Ok(())
+    }
+
     /// Load attachments for a note
     fn load_attachments_for_note(note: &mut Note, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         let mut stmt = conn.prepare("SELECT id, name, file_path, file_type, created_at FROM attachments WHERE note_id = ?")?;
@@ -1296,6 +1365,215 @@ impl DbStorageManager {
         )?;
 
         log::info!("Database indexes created successfully");
+        Ok(())
+    }
+
+    /// Create essential tables only (for fast startup)
+    fn create_essential_tables(&self, conn: &Connection) -> SqlResult<()> {
+        // Create version table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS version (
+                id INTEGER PRIMARY KEY,
+                version INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        // Create notebooks table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS notebooks (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                sort_order INTEGER DEFAULT 0
+            )",
+            [],
+        )?;
+
+        // Create notes table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS notes (
+                id TEXT PRIMARY KEY,
+                notebook_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Create tags table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tags (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                color TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Create note_tags table (many-to-many relationship)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS note_tags (
+                note_id TEXT NOT NULL,
+                tag_id TEXT NOT NULL,
+                PRIMARY KEY (note_id, tag_id),
+                FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Create attachments table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS attachments (
+                id TEXT PRIMARY KEY,
+                note_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Create mcp_servers table for storing green-status MCP servers
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS mcp_servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                transport_type TEXT NOT NULL,
+                transport_config TEXT NOT NULL,
+                directory TEXT,
+                capabilities TEXT,
+                health_status TEXT NOT NULL,
+                last_test_time TEXT,
+                last_test_success INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Create settings table for storing application settings
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        // Create recent_notes table for storing recently accessed notes
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS recent_notes (
+                note_id TEXT NOT NULL,
+                note_title TEXT NOT NULL,
+                accessed_at TEXT NOT NULL,
+                PRIMARY KEY (note_id),
+                FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        log::info!("Essential database tables created successfully");
+        Ok(())
+    }
+
+    /// Create deferred indexes (heavy operations for background)
+    fn create_deferred_indexes(conn: &Connection) -> SqlResult<()> {
+        // Create basic indexes first
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_notebook_id ON notes(notebook_id)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_tags_note_id ON note_tags(note_id)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_note_tags_tag_id ON note_tags(tag_id)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_attachments_note_id ON attachments(note_id)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mcp_servers_health_status ON mcp_servers(health_status)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recent_notes_accessed_at ON recent_notes(accessed_at)",
+            [],
+        )?;
+
+        // Create FTS5 virtual table (most expensive operation)
+        log::info!("Creating FTS5 search index (this may take a moment)...");
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+                id UNINDEXED,
+                title,
+                content,
+                content='notes',
+                content_rowid='rowid'
+            )",
+            [],
+        )?;
+
+        // Create FTS triggers
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_insert AFTER INSERT ON notes BEGIN
+                INSERT INTO notes_fts(rowid, id, title, content) VALUES (new.rowid, new.id, new.title, new.content);
+            END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_delete AFTER DELETE ON notes BEGIN
+                DELETE FROM notes_fts WHERE rowid = old.rowid;
+            END",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
+                DELETE FROM notes_fts WHERE rowid = old.rowid;
+                INSERT INTO notes_fts(rowid, id, title, content) VALUES (new.rowid, new.id, new.title, new.content);
+            END",
+            [],
+        )?;
+
+        log::info!("FTS5 search index and triggers created successfully");
         Ok(())
     }
 

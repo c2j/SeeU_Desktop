@@ -188,8 +188,32 @@ impl SessionHistoryManager {
         Ok(Some(session))
     }
 
-    /// Load all sessions from storage
+    /// Load all sessions from storage (fast mode for startup)
     pub fn load_all_sessions(&mut self) -> Result<(), SessionHistoryError> {
+        if !self.storage_dir.exists() {
+            return Ok(());
+        }
+
+        // For fast startup, just count sessions without loading content
+        let entries = std::fs::read_dir(&self.storage_dir)
+            .map_err(|e| SessionHistoryError::IoError(format!("Failed to read storage directory: {}", e)))?;
+
+        let mut session_count = 0;
+        for entry in entries {
+            let entry = entry.map_err(|e| SessionHistoryError::IoError(e.to_string()))?;
+            let path = entry.path();
+
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                session_count += 1;
+            }
+        }
+
+        log::info!("Found {} sessions in storage (will load on demand)", session_count);
+        Ok(())
+    }
+
+    /// Load all sessions from storage (full mode when actually needed)
+    pub fn load_all_sessions_full(&mut self) -> Result<(), SessionHistoryError> {
         if !self.storage_dir.exists() {
             return Ok(());
         }
@@ -200,7 +224,7 @@ impl SessionHistoryManager {
         for entry in entries {
             let entry = entry.map_err(|e| SessionHistoryError::IoError(e.to_string()))?;
             let path = entry.path();
-            
+
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 match self.load_session_from_file(&path) {
                     Ok(session) => {

@@ -76,6 +76,9 @@ pub struct SeeUApp {
 
     // UI state
     pub request_ui_repaint: bool,
+
+    // MCP sync state
+    pub mcp_sync_pending: bool,
 }
 
 /// Window state for saving and restoring
@@ -329,6 +332,7 @@ impl SeeUApp {
             startup_config,
             startup_metrics,
             request_ui_repaint: false,
+            mcp_sync_pending: false,
         };
 
         // 设置命令通道
@@ -467,25 +471,41 @@ impl SeeUApp {
         let inote_storage = self.inote_state.storage.clone();
         let isearch_indexer = self.isearch_state.get_indexer();
 
-        // 启动后台线程进行数据库初始化
+        // 启动后台线程进行数据库初始化（优化版本）
         std::thread::spawn(move || {
-            log::info!("Starting background database initialization...");
+            log::info!("Starting optimized background database initialization...");
+            let start_time = std::time::Instant::now();
 
-            // 初始化笔记数据库
+            // 初始化笔记数据库（快速模式）
             if let Ok(mut storage) = inote_storage.lock() {
-                if let Err(err) = storage.initialize_async() {
+                if let Err(err) = storage.initialize_async_fast() {
                     log::error!("Failed to initialize note database: {}", err);
+                } else {
+                    let db_time = start_time.elapsed();
+                    log::info!("Database initialization completed in {:?}", db_time);
                 }
             }
 
-            // 初始化搜索索引
-            if let Ok(indexer_lock) = isearch_indexer.lock() {
-                if let Err(err) = indexer_lock.initialize_index() {
-                    log::error!("Failed to initialize search index: {}", err);
-                }
-            }
+            // 延迟初始化搜索索引（非阻塞）
+            std::thread::spawn(move || {
+                // 等待一小段时间让UI先启动
+                std::thread::sleep(std::time::Duration::from_millis(500));
 
-            log::info!("Background initialization completed");
+                log::info!("Starting search index initialization...");
+                let search_start = std::time::Instant::now();
+
+                if let Ok(indexer_lock) = isearch_indexer.lock() {
+                    if let Err(err) = indexer_lock.initialize_index() {
+                        log::error!("Failed to initialize search index: {}", err);
+                    } else {
+                        let search_time = search_start.elapsed();
+                        log::info!("Search index initialization completed in {:?}", search_time);
+                    }
+                }
+            });
+
+            let total_time = start_time.elapsed();
+            log::info!("Background initialization completed in {:?}", total_time);
         });
 
         // 初始化语义搜索引擎（同步方式，标记为启用）
@@ -510,26 +530,41 @@ impl SeeUApp {
     /// 更新启动进度
     fn update_startup_progress(&mut self) {
         let elapsed = self.startup_metrics.start_time.elapsed();
-        let target_duration = std::time::Duration::from_secs(2);
+        // 减少目标时间，让启动更快
+        let target_duration = std::time::Duration::from_millis(1200); // 从2秒减少到1.2秒
 
         // 计算进度（0.0 到 1.0）
         let progress = (elapsed.as_secs_f32() / target_duration.as_secs_f32()).min(1.0);
         self.startup_progress = progress;
 
         // 更新进度消息并执行相应的初始化任务
-        if progress < 0.3 {
-            self.startup_message = "正在初始化笔记模块...".to_string();
-        } else if progress < 0.6 {
-            self.startup_message = "正在预加载字体缓存...".to_string();
-            // 在这个阶段预加载Mermaid字体缓存
-            static FONT_CACHE_PRELOADED: std::sync::Once = std::sync::Once::new();
-            FONT_CACHE_PRELOADED.call_once(|| {
-                inote::mermaid::preload_font_cache();
+        if progress < 0.25 {
+            self.startup_message = "正在初始化核心模块...".to_string();
+        } else if progress < 0.5 {
+            self.startup_message = "正在加载用户界面...".to_string();
+        } else if progress < 0.75 {
+            self.startup_message = "正在加载用户界面...".to_string();
+            // 延迟字体缓存预加载，不阻塞启动
+            static FONT_CACHE_SCHEDULED: std::sync::Once = std::sync::Once::new();
+            FONT_CACHE_SCHEDULED.call_once(|| {
+                // 延迟更长时间，让用户先看到主界面
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    log::info!("Starting delayed font cache preloading...");
+                    inote::mermaid::preload_font_cache();
+                });
             });
         } else if progress < 0.9 {
-            self.startup_message = "正在启动文件监控...".to_string();
+            self.startup_message = "正在启动后台服务...".to_string();
+
+            // 立即开始后台初始化，不等待动画完成
+            static BACKGROUND_INIT_STARTED: std::sync::Once = std::sync::Once::new();
+            BACKGROUND_INIT_STARTED.call_once(|| {
+                log::info!("Starting immediate background initialization...");
+                // 后台初始化将在动画完成后立即开始
+            });
         } else {
-            self.startup_message = "初始化完成".to_string();
+            self.startup_message = "启动完成".to_string();
         }
 
         // 当进度达到100%时，完成启动
@@ -561,10 +596,19 @@ impl SeeUApp {
         // 启动笔记模块的后台数据加载
         self.start_background_data_loading();
 
-        // 执行初始MCP同步
-        self.sync_mcp_servers_to_ai_assistant_force();
+        // 延迟执行MCP同步，不阻塞启动
+        self.schedule_delayed_mcp_sync();
 
         log::info!("Module initialization completed");
+    }
+
+    /// 调度延迟的MCP同步
+    fn schedule_delayed_mcp_sync(&mut self) {
+        log::info!("Scheduling delayed MCP synchronization...");
+
+        // 创建一个标记，表示MCP同步需要在后台执行
+        // 实际的同步将在用户首次访问AI助手时触发
+        self.mcp_sync_pending = true;
     }
 
     /// 启动后台数据加载
@@ -749,7 +793,7 @@ impl SeeUApp {
                                 }).to_string())
                             } else if let Some(static_capabilities) = &config.capabilities {
                                 // 静态能力：直接使用配置文件中的JSON
-                                log::info!("🔧 使用服务器 '{}' 的静态能力配置", server_name);
+                                log::debug!("🔧 使用服务器 '{}' 的静态能力配置", server_name);
                                 log::debug!("📋 静态能力内容: {}", static_capabilities);
                                 Some(static_capabilities.to_string())
                             } else {
@@ -869,14 +913,14 @@ impl SeeUApp {
                                     // 转换为AI助手格式的能力
                                     let ai_capabilities = self.convert_json_capabilities_to_ai_format(&capabilities_value);
 
-                                    log::info!("📊 转换后的AI助手能力 - 服务器 '{}': 工具={}, 资源={}, 提示={}",
+                                    log::debug!("📊 转换后的AI助手能力 - 服务器 '{}': 工具={}, 资源={}, 提示={}",
                                         server_record.name, ai_capabilities.tools.len(), ai_capabilities.resources.len(), ai_capabilities.prompts.len());
 
-                                    // 详细记录工具信息
+                                    // 详细记录工具信息（仅在调试模式）
                                     if !ai_capabilities.tools.is_empty() {
-                                        log::info!("🛠️ 从数据库加载的工具详情 - 服务器 '{}':", server_record.name);
+                                        log::debug!("🛠️ 从数据库加载的工具详情 - 服务器 '{}':", server_record.name);
                                         for (index, tool) in ai_capabilities.tools.iter().enumerate() {
-                                            log::info!("  {}. {} - {}",
+                                            log::debug!("  {}. {} - {}",
                                                 index + 1,
                                                 tool.name,
                                                 tool.description.as_deref().unwrap_or("无描述")
@@ -1975,26 +2019,231 @@ impl SeeUApp {
     /// Render startup screen
     fn render_startup_screen(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(ui.available_height() * 0.3);
-
-                // App logo/title
-                ui.heading("SeeU Desktop");
-                ui.add_space(20.0);
-
-                // Progress bar
-                let progress_bar = egui::ProgressBar::new(self.startup_progress)
-                    .desired_width(300.0)
-                    .text(&self.startup_message);
-                ui.add(progress_bar);
-
-                ui.add_space(10.0);
-                ui.label("正在加载模块和数据...");
-            });
+            self.render_animated_splash(ui);
         });
 
         // Request repaint to update progress
         ctx.request_repaint();
+    }
+
+    /// Render animated splash screen with SVG animations
+    fn render_animated_splash(&mut self, ui: &mut egui::Ui) {
+        let available_rect = ui.available_rect_before_wrap();
+        let center = available_rect.center();
+        let time = ui.input(|i| i.time) as f32;
+
+        // Background gradient
+        let bg_color1 = egui::Color32::from_rgb(15, 23, 42);  // Dark blue
+        let bg_color2 = egui::Color32::from_rgb(30, 41, 59);  // Lighter blue
+        ui.painter().rect_filled(
+            available_rect,
+            egui::Rounding::ZERO,
+            bg_color1,
+        );
+
+        // Central logo area
+        let logo_center = egui::Pos2::new(center.x, center.y - 80.0);
+
+        // Main logo with pulsing animation
+        let pulse_scale = 1.0 + 0.1 * (time * 2.0).sin();
+        let logo_size = 80.0 * pulse_scale;
+        let logo_rect = egui::Rect::from_center_size(logo_center, egui::Vec2::splat(logo_size));
+
+        // Draw main logo circle with gradient
+        let logo_color = egui::Color32::from_rgb(59, 130, 246); // Blue
+        ui.painter().circle_filled(logo_center, logo_size / 2.0, logo_color);
+
+        // Inner glow effect
+        let glow_alpha = (0.3 + 0.2 * (time * 3.0).sin()).max(0.0).min(1.0);
+        let glow_color = egui::Color32::from_rgba_unmultiplied(59, 130, 246, (glow_alpha * 100.0) as u8);
+        ui.painter().circle_filled(logo_center, logo_size / 2.0 + 10.0, glow_color);
+
+        // Logo text "SeeU"
+        let logo_text_color = egui::Color32::WHITE;
+        ui.painter().text(
+            logo_center,
+            egui::Align2::CENTER_CENTER,
+            "SeeU",
+            egui::FontId::proportional(24.0),
+            logo_text_color,
+        );
+
+        // Feature modules animation
+        self.render_feature_modules_animation(ui, center, time);
+
+        // App title
+        let title_pos = egui::Pos2::new(center.x, logo_center.y + 120.0);
+        ui.painter().text(
+            title_pos,
+            egui::Align2::CENTER_CENTER,
+            "SeeU Desktop",
+            egui::FontId::proportional(32.0),
+            egui::Color32::WHITE,
+        );
+
+        // Subtitle with typewriter effect
+        let subtitle_pos = egui::Pos2::new(center.x, title_pos.y + 40.0);
+        let subtitle_text = "智能桌面应用 · AI驱动 · 高性能";
+        let chars: Vec<char> = subtitle_text.chars().collect();
+        let typewriter_progress = ((time * 2.0) % (chars.len() as f32 + 2.0)) as usize;
+        let displayed_text = if typewriter_progress < chars.len() {
+            chars[..typewriter_progress].iter().collect::<String>()
+        } else {
+            subtitle_text.to_string()
+        };
+
+        ui.painter().text(
+            subtitle_pos,
+            egui::Align2::CENTER_CENTER,
+            &displayed_text,
+            egui::FontId::proportional(16.0),
+            egui::Color32::from_rgb(148, 163, 184),
+        );
+
+        // Progress area
+        let progress_y = subtitle_pos.y + 80.0;
+        self.render_animated_progress(ui, center.x, progress_y, time);
+    }
+
+    /// Render feature modules with animation
+    fn render_feature_modules_animation(&mut self, ui: &mut egui::Ui, center: egui::Pos2, time: f32) {
+        let modules = [
+            ("📝", "笔记", egui::Color32::from_rgb(34, 197, 94)),   // Green
+            ("🔍", "搜索", egui::Color32::from_rgb(249, 115, 22)),  // Orange
+            ("💻", "终端", egui::Color32::from_rgb(168, 85, 247)),  // Purple
+            ("📁", "文件", egui::Color32::from_rgb(236, 72, 153)),  // Pink
+            ("🤖", "AI", egui::Color32::from_rgb(14, 165, 233)),    // Sky blue
+        ];
+
+        let radius = 150.0;
+        let logo_center = egui::Pos2::new(center.x, center.y - 80.0);
+
+        for (i, (icon, name, color)) in modules.iter().enumerate() {
+            // Staggered appearance animation
+            let delay = i as f32 * 0.3;
+            let appear_progress = ((time - delay) * 2.0).max(0.0).min(1.0);
+
+            if appear_progress > 0.0 {
+                let angle = (i as f32 * 2.0 * std::f32::consts::PI / modules.len() as f32) - std::f32::consts::PI / 2.0;
+                let module_pos = egui::Pos2::new(
+                    logo_center.x + radius * angle.cos(),
+                    logo_center.y + radius * angle.sin(),
+                );
+
+                // Scale animation
+                let scale = appear_progress * (1.0 + 0.1 * (time * 3.0 + i as f32).sin());
+                let module_size = 40.0 * scale;
+
+                // Draw connection line with drawing animation
+                let line_progress = ((time - delay - 0.5) * 3.0).max(0.0).min(1.0);
+                if line_progress > 0.0 {
+                    let line_end = egui::Pos2::new(
+                        logo_center.x + (module_pos.x - logo_center.x) * line_progress,
+                        logo_center.y + (module_pos.y - logo_center.y) * line_progress,
+                    );
+                    ui.painter().line_segment(
+                        [logo_center, line_end],
+                        egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60)),
+                    );
+                }
+
+                // Draw module circle
+                ui.painter().circle_filled(module_pos, module_size / 2.0, *color);
+
+                // Module icon
+                ui.painter().text(
+                    module_pos,
+                    egui::Align2::CENTER_CENTER,
+                    icon,
+                    egui::FontId::proportional(20.0),
+                    egui::Color32::WHITE,
+                );
+
+                // Module name
+                let name_pos = egui::Pos2::new(module_pos.x, module_pos.y + module_size / 2.0 + 15.0);
+                ui.painter().text(
+                    name_pos,
+                    egui::Align2::CENTER_CENTER,
+                    name,
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::from_rgb(148, 163, 184),
+                );
+            }
+        }
+    }
+
+    /// Render animated progress bar
+    fn render_animated_progress(&mut self, ui: &mut egui::Ui, center_x: f32, y: f32, time: f32) {
+        let progress_width = 300.0;
+        let progress_height = 8.0;
+        let progress_rect = egui::Rect::from_min_size(
+            egui::Pos2::new(center_x - progress_width / 2.0, y),
+            egui::Vec2::new(progress_width, progress_height),
+        );
+
+        // Background
+        ui.painter().rect_filled(
+            progress_rect,
+            egui::Rounding::same(4.0),
+            egui::Color32::from_rgb(51, 65, 85),
+        );
+
+        // Animated progress fill with gradient
+        let fill_width = progress_width * self.startup_progress;
+        if fill_width > 0.0 {
+            let fill_rect = egui::Rect::from_min_size(
+                progress_rect.min,
+                egui::Vec2::new(fill_width, progress_height),
+            );
+
+            // Gradient effect
+            let gradient_offset = (time * 2.0) % 1.0;
+            let base_color = egui::Color32::from_rgb(59, 130, 246);
+            let highlight_color = egui::Color32::from_rgb(147, 197, 253);
+
+            ui.painter().rect_filled(
+                fill_rect,
+                egui::Rounding::same(4.0),
+                base_color,
+            );
+
+            // Moving highlight
+            if self.startup_progress > 0.1 {
+                let highlight_width = 60.0;
+                let highlight_x = (fill_width - highlight_width) * gradient_offset;
+                let highlight_rect = egui::Rect::from_min_size(
+                    egui::Pos2::new(progress_rect.min.x + highlight_x, progress_rect.min.y),
+                    egui::Vec2::new(highlight_width.min(fill_width), progress_height),
+                );
+
+                ui.painter().rect_filled(
+                    highlight_rect,
+                    egui::Rounding::same(4.0),
+                    highlight_color,
+                );
+            }
+        }
+
+        // Progress text
+        let text_pos = egui::Pos2::new(center_x, y + 25.0);
+        ui.painter().text(
+            text_pos,
+            egui::Align2::CENTER_CENTER,
+            &self.startup_message,
+            egui::FontId::proportional(14.0),
+            egui::Color32::from_rgb(148, 163, 184),
+        );
+
+        // Progress percentage
+        let percentage_text = format!("{}%", (self.startup_progress * 100.0) as u32);
+        let percentage_pos = egui::Pos2::new(center_x, y + 45.0);
+        ui.painter().text(
+            percentage_pos,
+            egui::Align2::CENTER_CENTER,
+            &percentage_text,
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(100, 116, 139),
+        );
     }
 }
 

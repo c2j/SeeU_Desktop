@@ -57,32 +57,34 @@ fn get_or_create_fontdb() -> (Arc<fontdb::Database>, Option<String>) {
 
     log::info!("Loaded {} fonts into fontdb for Mermaid rendering", fontdb.len());
 
-    // Collect available font families for debugging
+    // Quick font discovery - only check for essential fonts to speed up startup
     let mut font_families = std::collections::HashSet::new();
+    let mut chinese_fonts = Vec::new();
+
+    // Only iterate through fonts once and collect what we need
     for face in fontdb.faces() {
         for family in &face.families {
-            font_families.insert(family.0.clone());
+            let family_name = &family.0;
+            font_families.insert(family_name.clone());
+
+            // Check for Chinese/Unicode fonts during iteration
+            if family_name.contains("PingFang") ||
+               family_name.contains("Hiragino") ||
+               family_name.contains("Source Han") ||
+               family_name.contains("Arial Unicode") ||
+               family_name.contains("WQY") {
+                chinese_fonts.push(family_name.clone());
+            }
         }
     }
+
+    // Convert to sorted vector for consistent ordering
     let mut families: Vec<_> = font_families.into_iter().collect();
     families.sort();
 
-    // Log first 20 font families for debugging
-    let sample_families: Vec<_> = families.iter().take(20).cloned().collect();
-    log::debug!("Sample font families available: {:?}", sample_families);
-
-    // Check for specific fonts that might work better
-    let chinese_fonts: Vec<_> = families.iter().filter(|f|
-        f.contains("PingFang") ||
-        f.contains("Hiragino") ||
-        f.contains("Source Han") ||
-        f.contains("Noto") ||
-        f.contains("Arial Unicode") ||
-        f.contains("WQY") ||
-        f.contains("Microsoft YaHei") ||
-        f.contains("SimHei")
-    ).cloned().collect();
-    log::info!("Available Chinese/Unicode fonts: {:?}", chinese_fonts);
+    // Only log essential information to reduce startup time
+    log::debug!("Found {} total font families, {} Chinese/Unicode fonts",
+               families.len(), chinese_fonts.len());
 
     // Build font mapping for app settings with exact name matching
     let mut font_mapping = std::collections::HashMap::new();
@@ -116,30 +118,22 @@ fn get_or_create_fontdb() -> (Arc<fontdb::Database>, Option<String>) {
     // Create a temporary fontdb reference for validation
     let fontdb_ref = Arc::new(fontdb);
 
-    // First try exact matches with validation
+    // Fast font selection - try exact matches first (skip validation for startup speed)
     for target in &target_fonts {
         if let Some(exact_font) = families.iter().find(|f| f.eq_ignore_ascii_case(target)) {
-            if validate_font_rendering(&fontdb_ref, exact_font) {
-                working_font = Some(exact_font.clone());
-                log::info!("Selected '{}' as primary font for Mermaid rendering (exact match, validated)", exact_font);
-                break;
-            } else {
-                log::debug!("Font '{}' found but failed validation", exact_font);
-            }
+            working_font = Some(exact_font.clone());
+            log::info!("Selected '{}' as primary font for Mermaid rendering (exact match)", exact_font);
+            break;
         }
     }
 
-    // If no exact match, try partial matches with validation
+    // If no exact match, try partial matches (skip validation for startup speed)
     if working_font.is_none() {
         for target in &target_fonts {
             if let Some(partial_font) = families.iter().find(|f| f.contains(target)) {
-                if validate_font_rendering(&fontdb_ref, partial_font) {
-                    working_font = Some(partial_font.clone());
-                    log::info!("Selected '{}' as primary font for Mermaid rendering (partial match, validated)", partial_font);
-                    break;
-                } else {
-                    log::debug!("Font '{}' found but failed validation", partial_font);
-                }
+                working_font = Some(partial_font.clone());
+                log::info!("Selected '{}' as primary font for Mermaid rendering (partial match)", partial_font);
+                break;
             }
         }
     }
@@ -153,11 +147,9 @@ fn get_or_create_fontdb() -> (Arc<fontdb::Database>, Option<String>) {
 
         for candidate in &fallback_candidates {
             if let Some(font) = families.iter().find(|f| f.contains(candidate)) {
-                if validate_font_rendering(&fontdb_ref, font) {
-                    working_font = Some(font.clone());
-                    log::info!("Selected '{}' as fallback font for Mermaid rendering (validated)", font);
-                    break;
-                }
+                working_font = Some(font.clone());
+                log::info!("Selected '{}' as fallback font for Mermaid rendering", font);
+                break;
             }
         }
 

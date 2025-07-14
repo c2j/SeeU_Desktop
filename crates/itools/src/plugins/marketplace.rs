@@ -93,9 +93,23 @@ impl PluginMarketplace {
         }
     }
 
-    /// Initialize the marketplace
+    /// Initialize the marketplace (fast mode for startup)
     pub fn initialize(&mut self) {
-        log::info!("Initializing plugin marketplace");
+        log::info!("Initializing plugin marketplace (fast mode)");
+
+        // Load preset plugins immediately
+        self.load_preset_plugins();
+
+        // Load categories immediately
+        self.load_categories();
+
+        // Schedule marketplace refresh in background (don't block startup)
+        self.schedule_background_refresh();
+    }
+
+    /// Initialize with immediate network refresh (for settings page)
+    pub fn initialize_with_refresh(&mut self) {
+        log::info!("Initializing plugin marketplace with immediate refresh");
 
         // Load preset plugins
         self.load_preset_plugins();
@@ -103,8 +117,18 @@ impl PluginMarketplace {
         // Load categories
         self.load_categories();
 
-        // Refresh marketplace data
+        // Refresh marketplace data immediately
         self.refresh_marketplace();
+    }
+
+    /// Schedule background refresh to avoid blocking startup
+    fn schedule_background_refresh(&mut self) {
+        log::info!("Scheduling background marketplace refresh");
+
+        // Note: In a real implementation, we would use a proper async runtime
+        // For now, we'll just mark that refresh is needed and do it later
+        // The actual refresh will happen when the user opens the marketplace
+        self.last_refresh = None; // Mark as needing refresh
     }
 
     /// Update marketplace (called from main loop)
@@ -319,9 +343,10 @@ impl PluginMarketplace {
 
     /// Fetch marketplace data from API
     fn fetch_marketplace_data(&mut self) -> Result<()> {
-        // Create HTTP client
+        // Create HTTP client with shorter timeout for faster failure
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(5)) // Reduced from 30 to 5 seconds
+            .connect_timeout(std::time::Duration::from_secs(2)) // Add connect timeout
             .build()?;
 
         // Fetch plugins list

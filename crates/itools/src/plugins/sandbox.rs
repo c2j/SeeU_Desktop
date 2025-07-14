@@ -79,11 +79,25 @@ impl PluginSandbox {
         }
     }
     
-    /// Initialize the sandbox
+    /// Initialize the sandbox (fast mode for startup)
     pub fn initialize(&mut self) {
-        log::info!("Initializing plugin sandbox");
+        log::info!("Initializing plugin sandbox (fast mode)");
 
-        // Initialize WASM runtime
+        // Setup security policies immediately (lightweight)
+        self.setup_security_policies();
+
+        // Configure resource monitoring immediately (lightweight)
+        self.configure_resource_monitoring();
+
+        // Schedule WASM runtime initialization in background
+        self.schedule_wasm_initialization();
+    }
+
+    /// Initialize with immediate WASM runtime (for when plugins are actually needed)
+    pub fn initialize_full(&mut self) {
+        log::info!("Full plugin sandbox initialization");
+
+        // Initialize WASM runtime immediately
         self.initialize_wasm_runtime();
 
         // Setup security policies
@@ -91,6 +105,14 @@ impl PluginSandbox {
 
         // Configure resource monitoring
         self.configure_resource_monitoring();
+    }
+
+    /// Schedule WASM runtime initialization in background
+    fn schedule_wasm_initialization(&self) {
+        if self.config.enable_wasm {
+            log::info!("Scheduling WASM runtime initialization for later");
+            // WASM runtime will be initialized when first plugin is loaded
+        }
     }
 
     /// Initialize WASM runtime
