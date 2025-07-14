@@ -1,7 +1,23 @@
 use std::path::PathBuf;
 use std::collections::HashMap;
 
-const DEFAULT_SHELL: &str = "/bin/bash";
+/// Get the default shell for the current platform
+fn get_default_shell() -> String {
+    #[cfg(windows)]
+    {
+        // On Windows, try PowerShell first, then fall back to cmd.exe
+        if std::process::Command::new("powershell").arg("-Command").arg("echo test").output().is_ok() {
+            "powershell".to_string()
+        } else {
+            "cmd.exe".to_string()
+        }
+    }
+    #[cfg(unix)]
+    {
+        // On Unix-like systems, use SHELL environment variable or fall back to /bin/bash
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    }
+}
 
 /// SSH认证方式
 #[derive(Debug, Clone)]
@@ -35,7 +51,7 @@ pub struct BackendSettings {
 impl Default for BackendSettings {
     fn default() -> Self {
         Self {
-            shell: DEFAULT_SHELL.to_string(),
+            shell: get_default_shell(),
             args: vec![],
             working_directory: None,
             ssh_config: None,
@@ -177,6 +193,53 @@ impl SshConfig {
             format!("{}@{}", self.username, self.host)
         } else {
             format!("{}@{}:{}", self.username, self.host, self.port)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_shell_selection() {
+        let shell = get_default_shell();
+
+        #[cfg(windows)]
+        {
+            // On Windows, should be either powershell or cmd.exe
+            assert!(shell == "powershell" || shell == "cmd.exe",
+                   "Windows shell should be powershell or cmd.exe, got: {}", shell);
+        }
+
+        #[cfg(unix)]
+        {
+            // On Unix, should be either from SHELL env var or /bin/bash
+            assert!(shell.contains("sh") || shell.contains("bash") || shell.contains("zsh"),
+                   "Unix shell should contain sh, bash, or zsh, got: {}", shell);
+        }
+    }
+
+    #[test]
+    fn test_backend_settings_default() {
+        let settings = BackendSettings::default();
+
+        // Should be a valid shell for the current platform
+        #[cfg(windows)]
+        {
+            assert!(settings.shell == "powershell" || settings.shell == "cmd.exe",
+                   "Windows default shell should be powershell or cmd.exe, got: {}", settings.shell);
+        }
+
+        #[cfg(unix)]
+        {
+            // On Unix, should be a valid shell path (either from SHELL env var or /bin/bash fallback)
+            assert!(settings.shell.contains("sh") || settings.shell.contains("bash") || settings.shell.contains("zsh"),
+                   "Unix default shell should contain sh, bash, or zsh, got: {}", settings.shell);
+
+            // Should be an absolute path on Unix systems
+            assert!(settings.shell.starts_with('/'),
+                   "Unix shell should be an absolute path, got: {}", settings.shell);
         }
     }
 }

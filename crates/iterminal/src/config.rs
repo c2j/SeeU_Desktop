@@ -57,7 +57,12 @@ impl TerminalConfig {
     fn default_shell() -> String {
         #[cfg(windows)]
         {
-            "cmd.exe".to_string()
+            // On Windows, try PowerShell first, then fall back to cmd.exe
+            if std::process::Command::new("powershell").arg("-Command").arg("echo test").output().is_ok() {
+                "powershell".to_string()
+            } else {
+                "cmd.exe".to_string()
+            }
         }
         #[cfg(unix)]
         {
