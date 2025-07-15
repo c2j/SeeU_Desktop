@@ -262,6 +262,80 @@ impl<'a> SettingsModule for INoteSettingsModule<'a> {
             });
         });
 
+        ui.add_space(15.0);
+
+        // 导入导出设置
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("导入导出设置").strong());
+                ui.add_space(5.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("📤 导出所有笔记").clicked() {
+                        log::info!("Exporting all notes");
+                    }
+                    ui.label(egui::RichText::new("导出为Markdown格式").weak());
+                });
+
+                ui.horizontal(|ui| {
+                    if ui.button("📥 导入笔记").clicked() {
+                        log::info!("Importing notes");
+                    }
+                    ui.label(egui::RichText::new("支持Markdown和文本格式").weak());
+                });
+
+                ui.add_space(5.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("🔄 同步设置").clicked() {
+                        log::info!("Opening sync settings");
+                    }
+                    ui.label(egui::RichText::new("配置云端同步").weak());
+                });
+            });
+        });
+
+        ui.add_space(15.0);
+
+        // 高级功能设置
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("高级功能").strong());
+                ui.add_space(5.0);
+
+                if ui.checkbox(&mut self.state.settings_enable_plugin_system, "启用插件系统")
+                    .on_hover_text("允许加载第三方插件扩展功能")
+                    .changed() {
+                    settings_changed = true;
+                }
+
+                if ui.checkbox(&mut self.state.settings_enable_ai_integration, "启用AI集成")
+                    .on_hover_text("允许AI助手访问笔记内容")
+                    .changed() {
+                    settings_changed = true;
+                }
+
+                if ui.checkbox(&mut self.state.settings_enable_collaboration, "启用协作功能")
+                    .on_hover_text("允许多人协作编辑笔记")
+                    .changed() {
+                    settings_changed = true;
+                }
+
+                ui.add_space(5.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("备份频率:");
+                    egui::ComboBox::from_id_source("backup_frequency")
+                        .selected_text("每日")
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut "daily", "daily", "每日");
+                            ui.selectable_value(&mut "weekly", "weekly", "每周");
+                            ui.selectable_value(&mut "monthly", "monthly", "每月");
+                        });
+                });
+            });
+        });
+
         settings_changed
     }
 
@@ -288,10 +362,15 @@ impl<'a> SettingsModule for INoteSettingsModule<'a> {
         self.state.settings_syntax_highlight = true;
         self.state.settings_show_line_numbers = false;
         self.state.large_note_threshold = 1024 * 1024; // 1MB
-        
+
+        // Reset advanced features
+        self.state.settings_enable_plugin_system = false;
+        self.state.settings_enable_ai_integration = true;
+        self.state.settings_enable_collaboration = false;
+
         // Clear cache
         self.state.clear_note_cache();
-        
+
         // Save the reset settings
         self.save_settings()?;
         Ok(())

@@ -92,6 +92,11 @@ pub struct DbINoteState {
     pub settings_syntax_highlight: bool,           // 语法高亮
     pub settings_show_line_numbers: bool,          // 显示行号
 
+    // 高级功能设置
+    pub settings_enable_plugin_system: bool,       // 启用插件系统
+    pub settings_enable_ai_integration: bool,      // 启用AI集成
+    pub settings_enable_collaboration: bool,       // 启用协作功能
+
     // UI 布局设置
     pub show_note_tree: bool,                      // 是否显示笔记树
 
@@ -157,6 +162,11 @@ impl Default for DbINoteState {
             settings_auto_save: true,                   // 自动保存
             settings_syntax_highlight: true,            // 语法高亮
             settings_show_line_numbers: false,          // 不显示行号
+
+            // 高级功能设置默认值
+            settings_enable_plugin_system: false,       // 默认禁用插件系统
+            settings_enable_ai_integration: true,       // 默认启用AI集成
+            settings_enable_collaboration: false,       // 默认禁用协作功能
 
             // UI 布局设置默认值
             show_note_tree: true,                       // 默认显示笔记树

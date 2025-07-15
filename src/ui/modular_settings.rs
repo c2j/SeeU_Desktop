@@ -45,103 +45,135 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
         app.modular_settings_state.selected_category = "app".to_string();
     }
 
-    // Create a horizontal layout with sidebar and content
-    ui.horizontal(|ui| {
-        // Sidebar for categories
-        ui.vertical(|ui| {
-            ui.set_min_width(180.0);
-            ui.set_max_width(180.0);
+    // Use available space more efficiently
+    let available_rect = ui.available_rect_before_wrap();
+    let total_height = available_rect.height();
 
-            ui.label(egui::RichText::new("设置分类").strong());
+    // Create a horizontal layout that fills the available space
+    ui.allocate_ui_with_layout(
+        egui::Vec2::new(available_rect.width(), total_height),
+        egui::Layout::left_to_right(egui::Align::TOP),
+        |ui| {
+            // Left sidebar for categories
+            ui.allocate_ui_with_layout(
+                egui::Vec2::new(180.0, total_height),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.label(egui::RichText::new("设置分类").strong());
+                    ui.separator();
+                    ui.add_space(5.0);
+
+                    // Calculate height for category list
+                    let header_height = 40.0; // Height used by title and separator
+                    let category_list_height = total_height - header_height;
+
+                    // Scrollable category list
+                    egui::ScrollArea::vertical()
+                        .id_source("settings_category_scroll")
+                        .auto_shrink([false, false])
+                        .max_height(category_list_height)
+                        .show(ui, |ui| {
+                            let all_categories = get_all_settings_categories();
+
+                            for category in all_categories {
+                                let is_selected = app.modular_settings_state.selected_category == category.id;
+
+                                let response = ui.selectable_label(
+                                    is_selected,
+                                    format!("{} {}", category.icon, category.display_name)
+                                );
+
+                                if response.clicked() {
+                                    app.modular_settings_state.selected_category = category.id.clone();
+                                }
+
+                                // Show help text on hover
+                                if !category.description.is_empty() {
+                                    response.on_hover_text(&category.description);
+                                }
+                            }
+                        });
+                }
+            );
+
             ui.separator();
-            ui.add_space(5.0);
 
-            let all_categories = get_all_settings_categories();
+            // Right content area
+            let content_width = available_rect.width() - 180.0 - 20.0; // Subtract sidebar width and separator
+            ui.allocate_ui_with_layout(
+                egui::Vec2::new(content_width, total_height),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    // Reserve space for buttons at the bottom
+                    let button_area_height = 80.0;
+                    let content_height = total_height - button_area_height;
 
-            for category in all_categories {
-                let is_selected = app.modular_settings_state.selected_category == category.id;
+                    // Scrollable settings content
+                    egui::ScrollArea::vertical()
+                        .id_source("settings_content_scroll")
+                        .auto_shrink([false, false])
+                        .max_height(content_height)
+                        .show(ui, |ui| {
+                            // Render current category settings
+                            let mut settings_changed = false;
 
-                let response = ui.selectable_label(
-                    is_selected,
-                    format!("{} {}", category.icon, category.display_name)
-                );
+                            match app.modular_settings_state.selected_category.as_str() {
+                                "app" => {
+                                    // Render app settings with access to app state
+                                    settings_changed = render_app_settings(ui, app);
+                                }
+                                "appearance" => {
+                                    // Render appearance settings with access to app state
+                                    let ctx = ui.ctx().clone();
+                                    settings_changed = render_appearance_settings(ui, app, &ctx);
+                                }
+                                "advanced" => {
+                                    // Use registry for advanced settings
+                                    if let Some(registry) = &mut app.modular_settings_state.settings_registry {
+                                        registry.set_current_category(app.modular_settings_state.selected_category.clone());
+                                        settings_changed = registry.render_current_settings(ui);
+                                    }
+                                }
+                                "notes" => {
+                                    // Render iNote settings directly
+                                    settings_changed = render_inote_settings(ui, &mut app.inote_state);
+                                }
+                                "file_editor" => {
+                                    // Render file editor settings directly
+                                    settings_changed = render_file_editor_settings(ui, &mut app.ifile_editor_state);
+                                }
+                                "ai_assistant" => {
+                                    // Render AI Assistant settings directly
+                                    settings_changed = render_ai_assistant_settings(ui, &mut app.ai_assist_state);
+                                }
+                                "search" => {
+                                    // Render iSearch settings directly
+                                    settings_changed = render_isearch_settings(ui, &mut app.isearch_state);
+                                }
+                                "terminal" => {
+                                    // Render iTerminal settings directly
+                                    settings_changed = render_iterminal_settings(ui, &mut app.iterminal_state);
+                                }
+                                "tools" => {
+                                    // Render iTools settings directly
+                                    settings_changed = render_itools_settings(ui, &mut app.itools_state);
+                                }
+                                _ => {
+                                    ui.label("未知的设置类别");
+                                }
+                            }
 
-                if response.clicked() {
-                    app.modular_settings_state.selected_category = category.id.clone();
-                }
+                            // Update state if settings changed (inside scroll area)
+                            if settings_changed {
+                                app.modular_settings_state.has_unsaved_changes = true;
+                                app.modular_settings_state.last_save_status = "有未保存的更改".to_string();
+                            }
+                        });
 
-                // Show help text on hover
-                if !category.description.is_empty() {
-                    response.on_hover_text(&category.description);
-                }
-            }
-        });
+                    ui.add_space(10.0);
 
-        ui.separator();
-
-        // Content area
-        ui.vertical(|ui| {
-            ui.set_min_width(400.0);
-
-            // Render current category settings
-            let mut settings_changed = false;
-
-            match app.modular_settings_state.selected_category.as_str() {
-                "app" => {
-                    // Render app settings with access to app state
-                    settings_changed = render_app_settings(ui, app);
-                }
-                "appearance" => {
-                    // Render appearance settings with access to app state
-                    let ctx = ui.ctx().clone();
-                    settings_changed = render_appearance_settings(ui, app, &ctx);
-                }
-                "advanced" => {
-                    // Use registry for advanced settings
-                    if let Some(registry) = &mut app.modular_settings_state.settings_registry {
-                        registry.set_current_category(app.modular_settings_state.selected_category.clone());
-                        settings_changed = registry.render_current_settings(ui);
-                    }
-                }
-                "notes" => {
-                    // Render iNote settings directly
-                    settings_changed = render_inote_settings(ui, &mut app.inote_state);
-                }
-                "file_editor" => {
-                    // Render file editor settings directly
-                    settings_changed = render_file_editor_settings(ui, &mut app.ifile_editor_state);
-                }
-                "ai_assistant" => {
-                    // Render AI Assistant settings directly
-                    settings_changed = render_ai_assistant_settings(ui, &mut app.ai_assist_state);
-                }
-                "search" => {
-                    // Render iSearch settings directly
-                    settings_changed = render_isearch_settings(ui, &mut app.isearch_state);
-                }
-                "terminal" => {
-                    // Render iTerminal settings directly
-                    settings_changed = render_iterminal_settings(ui, &mut app.iterminal_state);
-                }
-                "tools" => {
-                    // Render iTools settings directly
-                    settings_changed = render_itools_settings(ui, &mut app.itools_state);
-                }
-                _ => {
-                    ui.label("未知的设置类别");
-                }
-            }
-
-            // Update state if settings changed
-            if settings_changed {
-                app.modular_settings_state.has_unsaved_changes = true;
-                app.modular_settings_state.last_save_status = "有未保存的更改".to_string();
-            }
-
-            ui.add_space(20.0);
-
-            // Action buttons
-            ui.horizontal(|ui| {
+                    // Action buttons area
+                    ui.horizontal(|ui| {
                 // Save button
                 let save_enabled = app.modular_settings_state.has_unsaved_changes;
                 if ui.add_enabled(save_enabled, egui::Button::new("💾 保存设置")).clicked() {
@@ -234,30 +266,34 @@ pub fn render_modular_settings(ui: &mut egui::Ui, app: &mut SeeUApp) {
                 }
             });
 
-            // Status display
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.label("状态:");
-                ui.label(&app.modular_settings_state.last_save_status);
-                ui.separator();
-                ui.label("验证:");
-                ui.label(&app.modular_settings_state.validation_status);
-            });
 
-            // Show validation errors if any
-            if !app.modular_settings_state.validation_errors.is_empty() {
-                ui.add_space(5.0);
-                ui.group(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("验证错误:").color(egui::Color32::RED));
-                        for error in &app.modular_settings_state.validation_errors {
-                            ui.label(egui::RichText::new(format!("• {}", error)).color(egui::Color32::RED));
-                        }
+
+                    // Status display
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label("状态:");
+                        ui.label(&app.modular_settings_state.last_save_status);
+                        ui.separator();
+                        ui.label("验证:");
+                        ui.label(&app.modular_settings_state.validation_status);
                     });
-                });
-            }
-        });
-    });
+
+                    // Show validation errors if any
+                    if !app.modular_settings_state.validation_errors.is_empty() {
+                        ui.add_space(5.0);
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("验证错误:").color(egui::Color32::RED));
+                                for error in &app.modular_settings_state.validation_errors {
+                                    ui.label(egui::RichText::new(format!("• {}", error)).color(egui::Color32::RED));
+                                }
+                            });
+                        });
+                    }
+                }
+            );
+        }
+    );
 
     // Reset confirmation dialog
     if app.modular_settings_state.show_reset_confirmation {
