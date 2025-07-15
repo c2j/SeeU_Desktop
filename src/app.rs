@@ -1102,52 +1102,52 @@ impl SeeUApp {
         }
     }
 
-    /// 转换MCP服务器能力为AI助手格式
-    fn convert_mcp_capabilities_to_ai_format(
-        &self,
-        capabilities: &itools::mcp::rmcp_client::ServerCapabilities,
-    ) -> aiAssist::mcp_tools::McpServerCapabilities {
-        use aiAssist::mcp_tools::{McpServerCapabilities, McpToolInfo, McpResourceInfo, McpPromptInfo, McpPromptArgument};
+    // /// 转换MCP服务器能力为AI助手格式
+    // fn convert_mcp_capabilities_to_ai_format(
+    //     &self,
+    //     capabilities: &itools::mcp::rmcp_client::ServerCapabilities,
+    // ) -> aiAssist::mcp_tools::McpServerCapabilities {
+    //     use aiAssist::mcp_tools::{McpServerCapabilities, McpToolInfo, McpResourceInfo, McpPromptInfo, McpPromptArgument};
 
-        let tools = capabilities.tools.iter().map(|tool| {
-            McpToolInfo {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                input_schema: tool.input_schema.clone(),
-            }
-        }).collect();
+    //     let tools = capabilities.tools.iter().map(|tool| {
+    //         McpToolInfo {
+    //             name: tool.name.clone(),
+    //             description: tool.description.clone(),
+    //             input_schema: tool.input_schema.clone(),
+    //         }
+    //     }).collect();
 
-        let resources = capabilities.resources.iter().map(|resource| {
-            McpResourceInfo {
-                uri: resource.uri.clone(),
-                name: resource.name.clone(),
-                description: resource.description.clone(),
-                mime_type: resource.mime_type.clone(),
-            }
-        }).collect();
+    //     let resources = capabilities.resources.iter().map(|resource| {
+    //         McpResourceInfo {
+    //             uri: resource.uri.clone(),
+    //             name: resource.name.clone(),
+    //             description: resource.description.clone(),
+    //             mime_type: resource.mime_type.clone(),
+    //         }
+    //     }).collect();
 
-        let prompts = capabilities.prompts.iter().map(|prompt| {
-            let arguments = prompt.arguments.iter().map(|arg| {
-                McpPromptArgument {
-                    name: arg.name.clone(),
-                    description: arg.description.clone(),
-                    required: arg.required,
-                }
-            }).collect();
+    //     let prompts = capabilities.prompts.iter().map(|prompt| {
+    //         let arguments = prompt.arguments.iter().map(|arg| {
+    //             McpPromptArgument {
+    //                 name: arg.name.clone(),
+    //                 description: arg.description.clone(),
+    //                 required: arg.required,
+    //             }
+    //         }).collect();
 
-            McpPromptInfo {
-                name: prompt.name.clone(),
-                description: prompt.description.clone(),
-                arguments,
-            }
-        }).collect();
+    //         McpPromptInfo {
+    //             name: prompt.name.clone(),
+    //             description: prompt.description.clone(),
+    //             arguments,
+    //         }
+    //     }).collect();
 
-        McpServerCapabilities {
-            tools,
-            resources,
-            prompts,
-        }
-    }
+    //     McpServerCapabilities {
+    //         tools,
+    //         resources,
+    //         prompts,
+    //     }
+    // }
 
     /// 转换JSON格式的能力为AI助手格式
     fn convert_json_capabilities_to_ai_format(
@@ -2037,7 +2037,7 @@ impl SeeUApp {
 
         // Background gradient
         let bg_color1 = egui::Color32::from_rgb(15, 23, 42);  // Dark blue
-        let bg_color2 = egui::Color32::from_rgb(30, 41, 59);  // Lighter blue
+        // let bg_color2 = egui::Color32::from_rgb(30, 41, 59);  // Lighter blue
         ui.painter().rect_filled(
             available_rect,
             egui::Rounding::ZERO,
@@ -2050,7 +2050,7 @@ impl SeeUApp {
         // Main logo with pulsing animation
         let pulse_scale = 1.0 + 0.1 * (time * 2.0).sin();
         let logo_size = 80.0 * pulse_scale;
-        let logo_rect = egui::Rect::from_center_size(logo_center, egui::Vec2::splat(logo_size));
+        // let logo_rect = egui::Rect::from_center_size(logo_center, egui::Vec2::splat(logo_size));
 
         // Draw main logo circle with gradient
         let logo_color = egui::Color32::from_rgb(59, 130, 246); // Blue
@@ -2422,16 +2422,16 @@ impl SeeUApp {
         None
     }
 
-    /// 查找服务器ID根据服务器名称（备用方法）
-    fn find_server_id_by_name_alt(&self, target_server_name: &str) -> Option<uuid::Uuid> {
-        // 从MCP服务器管理器中查找服务器ID
-        for (server_id, server_name) in self.itools_state.get_available_mcp_servers() {
-            if server_name == target_server_name {
-                return Some(server_id);
-            }
-        }
-        None
-    }
+    // /// 查找服务器ID根据服务器名称（备用方法）
+    // fn find_server_id_by_name_alt(&self, target_server_name: &str) -> Option<uuid::Uuid> {
+    //     // 从MCP服务器管理器中查找服务器ID
+    //     for (server_id, server_name) in self.itools_state.get_available_mcp_servers() {
+    //         if server_name == target_server_name {
+    //             return Some(server_id);
+    //         }
+    //     }
+    //     None
+    // }
 
 
 

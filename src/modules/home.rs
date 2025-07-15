@@ -336,131 +336,131 @@ fn render_search_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
     });
 }
 
-/// 渲染紧凑版功能卡片
-fn render_feature_card_compact(ui: &mut egui::Ui, icon: &str, title: &str, description: &str, module: Module, app: &mut SeeUApp) {
-    let is_current = app.active_module == module;
+// /// 渲染紧凑版功能卡片
+// fn render_feature_card_compact(ui: &mut egui::Ui, icon: &str, title: &str, description: &str, module: Module, app: &mut SeeUApp) {
+//     let is_current = app.active_module == module;
 
-    let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(8.0))
-        .stroke(egui::Stroke::new(
-            if is_current { 1.5 } else { 0.5 },
-            if is_current {
-                ui.style().visuals.selection.stroke.color
-            } else {
-                ui.style().visuals.widgets.noninteractive.bg_stroke.color
-            }
-        ))
-        .fill(if is_current {
-            ui.style().visuals.selection.bg_fill.gamma_multiply(0.2)
-        } else {
-            ui.style().visuals.widgets.noninteractive.weak_bg_fill
-        });
+//     let card_frame = egui::Frame::group(ui.style())
+//         .inner_margin(egui::Margin::same(8.0))
+//         .stroke(egui::Stroke::new(
+//             if is_current { 1.5 } else { 0.5 },
+//             if is_current {
+//                 ui.style().visuals.selection.stroke.color
+//             } else {
+//                 ui.style().visuals.widgets.noninteractive.bg_stroke.color
+//             }
+//         ))
+//         .fill(if is_current {
+//             ui.style().visuals.selection.bg_fill.gamma_multiply(0.2)
+//         } else {
+//             ui.style().visuals.widgets.noninteractive.weak_bg_fill
+//         });
 
-    let response = card_frame.show(ui, |ui| {
-        ui.horizontal(|ui| {
-            // 图标
-            ui.label(egui::RichText::new(icon).size(20.0));
-            ui.add_space(8.0);
+//     let response = card_frame.show(ui, |ui| {
+//         ui.horizontal(|ui| {
+//             // 图标
+//             ui.label(egui::RichText::new(icon).size(20.0));
+//             ui.add_space(8.0);
 
-            // 标题和描述
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new(title)
-                    .size(14.0)
-                    .strong()
-                    .color(if is_current {
-                        ui.style().visuals.selection.stroke.color
-                    } else {
-                        ui.style().visuals.text_color()
-                    }));
+//             // 标题和描述
+//             ui.vertical(|ui| {
+//                 ui.label(egui::RichText::new(title)
+//                     .size(14.0)
+//                     .strong()
+//                     .color(if is_current {
+//                         ui.style().visuals.selection.stroke.color
+//                     } else {
+//                         ui.style().visuals.text_color()
+//                     }));
 
-                ui.label(egui::RichText::new(description)
-                    .size(12.0)
-                    .color(ui.style().visuals.weak_text_color()));
-            });
+//                 ui.label(egui::RichText::new(description)
+//                     .size(12.0)
+//                     .color(ui.style().visuals.weak_text_color()));
+//             });
 
-            // 状态指示器
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if is_current {
-                    ui.label(egui::RichText::new("●").size(12.0).color(ui.style().visuals.selection.stroke.color));
-                }
-            });
-        });
-    });
+//             // 状态指示器
+//             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+//                 if is_current {
+//                     ui.label(egui::RichText::new("●").size(12.0).color(ui.style().visuals.selection.stroke.color));
+//                 }
+//             });
+//         });
+//     });
 
-    // 整个卡片可点击
-    if !is_current && response.response.clicked() {
-        app.active_module = module;
-    }
-}
+//     // 整个卡片可点击
+//     if !is_current && response.response.clicked() {
+//         app.active_module = module;
+//     }
+// }
 
-/// 渲染功能卡片（保留原版本用于搜索结果等）
-fn render_feature_card(ui: &mut egui::Ui, icon: &str, title: &str, description: &str, module: Module, app: &mut SeeUApp) {
-    let is_current = app.active_module == module;
+// /// 渲染功能卡片（保留原版本用于搜索结果等）
+// fn render_feature_card(ui: &mut egui::Ui, icon: &str, title: &str, description: &str, module: Module, app: &mut SeeUApp) {
+//     let is_current = app.active_module == module;
 
-    let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(16.0))
-        .stroke(egui::Stroke::new(
-            if is_current { 2.0 } else { 1.0 },
-            if is_current {
-                ui.style().visuals.selection.stroke.color
-            } else {
-                ui.style().visuals.widgets.noninteractive.bg_stroke.color
-            }
-        ))
-        .fill(if is_current {
-            ui.style().visuals.selection.bg_fill.gamma_multiply(0.3)
-        } else {
-            ui.style().visuals.widgets.noninteractive.weak_bg_fill
-        });
+//     let card_frame = egui::Frame::group(ui.style())
+//         .inner_margin(egui::Margin::same(16.0))
+//         .stroke(egui::Stroke::new(
+//             if is_current { 2.0 } else { 1.0 },
+//             if is_current {
+//                 ui.style().visuals.selection.stroke.color
+//             } else {
+//                 ui.style().visuals.widgets.noninteractive.bg_stroke.color
+//             }
+//         ))
+//         .fill(if is_current {
+//             ui.style().visuals.selection.bg_fill.gamma_multiply(0.3)
+//         } else {
+//             ui.style().visuals.widgets.noninteractive.weak_bg_fill
+//         });
 
-    let response = card_frame.show(ui, |ui| {
-        ui.vertical(|ui| {
-            // 图标和标题行
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(icon).size(28.0));
-                ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(title)
-                        .size(18.0)
-                        .strong()
-                        .color(if is_current {
-                            ui.style().visuals.selection.stroke.color
-                        } else {
-                            ui.style().visuals.text_color()
-                        }));
+//     let response = card_frame.show(ui, |ui| {
+//         ui.vertical(|ui| {
+//             // 图标和标题行
+//             ui.horizontal(|ui| {
+//                 ui.label(egui::RichText::new(icon).size(28.0));
+//                 ui.add_space(12.0);
+//                 ui.vertical(|ui| {
+//                     ui.label(egui::RichText::new(title)
+//                         .size(18.0)
+//                         .strong()
+//                         .color(if is_current {
+//                             ui.style().visuals.selection.stroke.color
+//                         } else {
+//                             ui.style().visuals.text_color()
+//                         }));
 
-                    ui.add_space(4.0);
+//                     ui.add_space(4.0);
 
-                    ui.label(egui::RichText::new(description)
-                        .size(14.0)
-                        .color(ui.style().visuals.weak_text_color()));
-                });
-            });
+//                     ui.label(egui::RichText::new(description)
+//                         .size(14.0)
+//                         .color(ui.style().visuals.weak_text_color()));
+//                 });
+//             });
 
-            ui.add_space(12.0);
+//             ui.add_space(12.0);
 
-            // 操作按钮
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let button_text = if is_current { "当前模块" } else { "打开" };
-                    let button = egui::Button::new(button_text)
-                        .min_size(egui::vec2(80.0, 24.0));
+//             // 操作按钮
+//             ui.horizontal(|ui| {
+//                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+//                     let button_text = if is_current { "当前模块" } else { "打开" };
+//                     let button = egui::Button::new(button_text)
+//                         .min_size(egui::vec2(80.0, 24.0));
 
-                    if is_current {
-                        ui.add_enabled(false, button);
-                    } else if ui.add(button).clicked() {
-                        app.active_module = module;
-                    }
-                });
-            });
-        });
-    });
+//                     if is_current {
+//                         ui.add_enabled(false, button);
+//                     } else if ui.add(button).clicked() {
+//                         app.active_module = module;
+//                     }
+//                 });
+//             });
+//         });
+//     });
 
-    // 整个卡片可点击
-    if !is_current && response.response.clicked() {
-        app.active_module = module;
-    }
-}
+//     // 整个卡片可点击
+//     if !is_current && response.response.clicked() {
+//         app.active_module = module;
+//     }
+// }
 
 
 
@@ -854,158 +854,158 @@ fn render_quick_actions_block(ui: &mut egui::Ui, app: &mut SeeUApp) {
     });
 }
 
-/// 渲染紧凑版快速操作区域
-fn render_quick_actions_compact(ui: &mut egui::Ui, app: &mut SeeUApp) {
-    let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(8.0))
-        .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
-        .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
+// /// 渲染紧凑版快速操作区域
+// fn render_quick_actions_compact(ui: &mut egui::Ui, app: &mut SeeUApp) {
+//     let card_frame = egui::Frame::group(ui.style())
+//         .inner_margin(egui::Margin::same(8.0))
+//         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
+//         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
-    card_frame.show(ui, |ui| {
-        ui.vertical(|ui| {
-            // 创建新笔记
-            let create_note_button = egui::Button::new("📝 创建新笔记")
-                .min_size(egui::vec2(ui.available_width(), 24.0));
+//     card_frame.show(ui, |ui| {
+//         ui.vertical(|ui| {
+//             // 创建新笔记
+//             let create_note_button = egui::Button::new("📝 创建新笔记")
+//                 .min_size(egui::vec2(ui.available_width(), 24.0));
 
-            if ui.add(create_note_button).clicked() {
-                app.active_module = Module::Note;
-                // 如果有笔记本，创建新笔记
-                if !app.inote_state.notebooks.is_empty() {
-                    // 如果没有选中笔记本，选择第一个
-                    if app.inote_state.current_notebook.is_none() {
-                        app.inote_state.select_notebook(0);
-                    }
-                    // 创建新笔记
-                    let note_id = app.inote_state.create_note(
-                        "新笔记".to_string(),
-                        "".to_string()
-                    );
-                    // 如果创建成功，选择这个笔记
-                    if let Some(note_id) = note_id {
-                        app.inote_state.select_note(&note_id);
-                    }
-                }
-            }
+//             if ui.add(create_note_button).clicked() {
+//                 app.active_module = Module::Note;
+//                 // 如果有笔记本，创建新笔记
+//                 if !app.inote_state.notebooks.is_empty() {
+//                     // 如果没有选中笔记本，选择第一个
+//                     if app.inote_state.current_notebook.is_none() {
+//                         app.inote_state.select_notebook(0);
+//                     }
+//                     // 创建新笔记
+//                     let note_id = app.inote_state.create_note(
+//                         "新笔记".to_string(),
+//                         "".to_string()
+//                     );
+//                     // 如果创建成功，选择这个笔记
+//                     if let Some(note_id) = note_id {
+//                         app.inote_state.select_note(&note_id);
+//                     }
+//                 }
+//             }
 
-            ui.add_space(4.0);
+//             ui.add_space(4.0);
 
-            // 打开搜索
-            let search_button = egui::Button::new("🔍 开始搜索")
-                .min_size(egui::vec2(ui.available_width(), 24.0));
+//             // 打开搜索
+//             let search_button = egui::Button::new("🔍 开始搜索")
+//                 .min_size(egui::vec2(ui.available_width(), 24.0));
 
-            if ui.add(search_button).clicked() {
-                app.active_module = Module::Search;
-            }
+//             if ui.add(search_button).clicked() {
+//                 app.active_module = Module::Search;
+//             }
 
-            ui.add_space(4.0);
+//             ui.add_space(4.0);
 
-            // 智能终端
-            let terminal_button = egui::Button::new("💻 智能终端")
-                .min_size(egui::vec2(ui.available_width(), 24.0));
+//             // 智能终端
+//             let terminal_button = egui::Button::new("💻 智能终端")
+//                 .min_size(egui::vec2(ui.available_width(), 24.0));
 
-            if ui.add(terminal_button).clicked() {
-                app.active_module = Module::Terminal;
-            }
+//             if ui.add(terminal_button).clicked() {
+//                 app.active_module = Module::Terminal;
+//             }
 
-            ui.add_space(4.0);
+//             ui.add_space(4.0);
 
-            // 管理插件
-            let tools_button = egui::Button::new("🔧 管理插件")
-                .min_size(egui::vec2(ui.available_width(), 24.0));
+//             // 管理插件
+//             let tools_button = egui::Button::new("🔧 管理插件")
+//                 .min_size(egui::vec2(ui.available_width(), 24.0));
 
-            if ui.add(tools_button).clicked() {
-                app.active_module = Module::ITools;
-            }
+//             if ui.add(tools_button).clicked() {
+//                 app.active_module = Module::ITools;
+//             }
 
-            ui.add_space(4.0);
+//             ui.add_space(4.0);
 
-            // 打开设置
-            let settings_button = egui::Button::new("⚙️ 应用设置")
-                .min_size(egui::vec2(ui.available_width(), 24.0));
+//             // 打开设置
+//             let settings_button = egui::Button::new("⚙️ 应用设置")
+//                 .min_size(egui::vec2(ui.available_width(), 24.0));
 
-            if ui.add(settings_button).clicked() {
-                app.active_module = Module::Settings;
-            }
-        });
-    });
-}
+//             if ui.add(settings_button).clicked() {
+//                 app.active_module = Module::Settings;
+//             }
+//         });
+//     });
+// }
 
-/// 渲染快速操作区域（保留原版本）
-fn render_quick_actions(ui: &mut egui::Ui, app: &mut SeeUApp) {
-    let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(15.0))
-        .stroke(egui::Stroke::new(1.5, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
-        .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
+// /// 渲染快速操作区域（保留原版本）
+// fn render_quick_actions(ui: &mut egui::Ui, app: &mut SeeUApp) {
+//     let card_frame = egui::Frame::group(ui.style())
+//         .inner_margin(egui::Margin::same(15.0))
+//         .stroke(egui::Stroke::new(1.5, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
+//         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
-    card_frame.show(ui, |ui| {
-        ui.vertical(|ui| {
-            // 标题
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("⚡").size(20.0));
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("快速操作").heading().strong());
-            });
+//     card_frame.show(ui, |ui| {
+//         ui.vertical(|ui| {
+//             // 标题
+//             ui.horizontal(|ui| {
+//                 ui.label(egui::RichText::new("⚡").size(20.0));
+//                 ui.add_space(8.0);
+//                 ui.label(egui::RichText::new("快速操作").heading().strong());
+//             });
 
-            ui.add_space(12.0);
-            ui.separator();
-            ui.add_space(10.0);
+//             ui.add_space(12.0);
+//             ui.separator();
+//             ui.add_space(10.0);
 
-            // 创建新笔记
-            let create_note_button = egui::Button::new("📝 创建新笔记")
-                .min_size(egui::vec2(ui.available_width(), 32.0));
+//             // 创建新笔记
+//             let create_note_button = egui::Button::new("📝 创建新笔记")
+//                 .min_size(egui::vec2(ui.available_width(), 32.0));
 
-            if ui.add(create_note_button).clicked() {
-                app.active_module = Module::Note;
-                // 如果有笔记本，创建新笔记
-                if !app.inote_state.notebooks.is_empty() {
-                    // 如果没有选中笔记本，选择第一个
-                    if app.inote_state.current_notebook.is_none() {
-                        app.inote_state.select_notebook(0);
-                    }
-                    // 创建新笔记
-                    let note_id = app.inote_state.create_note(
-                        "新笔记".to_string(),
-                        "".to_string()
-                    );
-                    // 如果创建成功，选择这个笔记
-                    if let Some(note_id) = note_id {
-                        app.inote_state.select_note(&note_id);
-                    }
-                }
-            }
+//             if ui.add(create_note_button).clicked() {
+//                 app.active_module = Module::Note;
+//                 // 如果有笔记本，创建新笔记
+//                 if !app.inote_state.notebooks.is_empty() {
+//                     // 如果没有选中笔记本，选择第一个
+//                     if app.inote_state.current_notebook.is_none() {
+//                         app.inote_state.select_notebook(0);
+//                     }
+//                     // 创建新笔记
+//                     let note_id = app.inote_state.create_note(
+//                         "新笔记".to_string(),
+//                         "".to_string()
+//                     );
+//                     // 如果创建成功，选择这个笔记
+//                     if let Some(note_id) = note_id {
+//                         app.inote_state.select_note(&note_id);
+//                     }
+//                 }
+//             }
 
-            ui.add_space(8.0);
+//             ui.add_space(8.0);
 
-            // 打开搜索
-            let search_button = egui::Button::new("🔍 开始搜索")
-                .min_size(egui::vec2(ui.available_width(), 32.0));
+//             // 打开搜索
+//             let search_button = egui::Button::new("🔍 开始搜索")
+//                 .min_size(egui::vec2(ui.available_width(), 32.0));
 
-            if ui.add(search_button).clicked() {
-                app.active_module = Module::Search;
-            }
+//             if ui.add(search_button).clicked() {
+//                 app.active_module = Module::Search;
+//             }
 
-            ui.add_space(8.0);
+//             ui.add_space(8.0);
 
-            // 管理插件
-            let tools_button = egui::Button::new("🔧 管理插件")
-                .min_size(egui::vec2(ui.available_width(), 32.0));
+//             // 管理插件
+//             let tools_button = egui::Button::new("🔧 管理插件")
+//                 .min_size(egui::vec2(ui.available_width(), 32.0));
 
-            if ui.add(tools_button).clicked() {
-                app.active_module = Module::ITools;
-            }
+//             if ui.add(tools_button).clicked() {
+//                 app.active_module = Module::ITools;
+//             }
 
-            ui.add_space(8.0);
+//             ui.add_space(8.0);
 
-            // 打开设置
-            let settings_button = egui::Button::new("⚙️ 应用设置")
-                .min_size(egui::vec2(ui.available_width(), 32.0));
+//             // 打开设置
+//             let settings_button = egui::Button::new("⚙️ 应用设置")
+//                 .min_size(egui::vec2(ui.available_width(), 32.0));
 
-            if ui.add(settings_button).clicked() {
-                app.active_module = Module::Settings;
-            }
-        });
-    });
-}
+//             if ui.add(settings_button).clicked() {
+//                 app.active_module = Module::Settings;
+//             }
+//         });
+//     });
+// }
 
 /// Render iNote search results
 fn render_inote_results(ui: &mut egui::Ui, app: &mut SeeUApp) {
@@ -1112,83 +1112,83 @@ fn render_isearch_results(ui: &mut egui::Ui, app: &mut SeeUApp) {
     }
 }
 
-/// 渲染紧凑版底部信息区域
-fn render_footer_section_compact(ui: &mut egui::Ui) {
-    ui.separator();
-    ui.add_space(8.0);
+// /// 渲染紧凑版底部信息区域
+// fn render_footer_section_compact(ui: &mut egui::Ui) {
+//     ui.separator();
+//     ui.add_space(8.0);
 
-    // 提示信息 - 紧凑版
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("💡").size(14.0));
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("提示:").size(12.0).strong());
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("使用顶部搜索栏快速搜索").size(12.0).weak());
+//     // 提示信息 - 紧凑版
+//     ui.horizontal(|ui| {
+//         ui.label(egui::RichText::new("💡").size(14.0));
+//         ui.add_space(4.0);
+//         ui.label(egui::RichText::new("提示:").size(12.0).strong());
+//         ui.add_space(4.0);
+//         ui.label(egui::RichText::new("使用顶部搜索栏快速搜索").size(12.0).weak());
 
-        ui.add_space(12.0);
+//         ui.add_space(12.0);
 
-        ui.label(egui::RichText::new("🎯").size(14.0));
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("快捷键:").size(12.0).strong());
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("Ctrl+/ 命令面板").size(12.0).weak());
-    });
-}
+//         ui.label(egui::RichText::new("🎯").size(14.0));
+//         ui.add_space(4.0);
+//         ui.label(egui::RichText::new("快捷键:").size(12.0).strong());
+//         ui.add_space(4.0);
+//         ui.label(egui::RichText::new("Ctrl+/ 命令面板").size(12.0).weak());
+//     });
+// }
 
-/// 渲染底部信息区域（保留原版本）
-fn render_footer_section(ui: &mut egui::Ui) {
-    ui.separator();
-    ui.add_space(15.0);
+// /// 渲染底部信息区域（保留原版本）
+// fn render_footer_section(ui: &mut egui::Ui) {
+//     ui.separator();
+//     ui.add_space(15.0);
 
-    // 提示信息卡片
-    let card_frame = egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12.0))
-        .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
-        .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
+//     // 提示信息卡片
+//     let card_frame = egui::Frame::group(ui.style())
+//         .inner_margin(egui::Margin::same(12.0))
+//         .stroke(egui::Stroke::new(1.0, ui.style().visuals.widgets.noninteractive.bg_stroke.color))
+//         .fill(ui.style().visuals.widgets.noninteractive.weak_bg_fill);
 
-    card_frame.show(ui, |ui| {
-        ui.vertical(|ui| {
-            // 使用提示
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("💡").size(16.0));
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("使用提示:").strong());
-                ui.add_space(8.0);
-                ui.label("使用顶部搜索栏可以快速搜索文件和内容");
-            });
+//     card_frame.show(ui, |ui| {
+//         ui.vertical(|ui| {
+//             // 使用提示
+//             ui.horizontal(|ui| {
+//                 ui.label(egui::RichText::new("💡").size(16.0));
+//                 ui.add_space(6.0);
+//                 ui.label(egui::RichText::new("使用提示:").strong());
+//                 ui.add_space(8.0);
+//                 ui.label("使用顶部搜索栏可以快速搜索文件和内容");
+//             });
 
-            ui.add_space(8.0);
+//             ui.add_space(8.0);
 
-            // 快捷键提示
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("🎯").size(16.0));
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("快捷键:").strong());
-                ui.add_space(8.0);
-                ui.label("Ctrl+/ 打开命令面板，Ctrl+K 快速搜索");
-            });
+//             // 快捷键提示
+//             ui.horizontal(|ui| {
+//                 ui.label(egui::RichText::new("🎯").size(16.0));
+//                 ui.add_space(6.0);
+//                 ui.label(egui::RichText::new("快捷键:").strong());
+//                 ui.add_space(8.0);
+//                 ui.label("Ctrl+/ 打开命令面板，Ctrl+K 快速搜索");
+//             });
 
-            ui.add_space(4.0);
+//             ui.add_space(4.0);
 
-            // 模块快捷键提示
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("⌨️").size(16.0));
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("模块快捷键:").strong());
-                ui.add_space(8.0);
-                ui.label("终端: Ctrl+C 中断, Ctrl+L 清屏 | 编辑器: Ctrl+S 保存, Ctrl+Z 撤销");
-            });
+//             // 模块快捷键提示
+//             ui.horizontal(|ui| {
+//                 ui.label(egui::RichText::new("⌨️").size(16.0));
+//                 ui.add_space(6.0);
+//                 ui.label(egui::RichText::new("模块快捷键:").strong());
+//                 ui.add_space(8.0);
+//                 ui.label("终端: Ctrl+C 中断, Ctrl+L 清屏 | 编辑器: Ctrl+S 保存, Ctrl+Z 撤销");
+//             });
 
-            ui.add_space(8.0);
+//             ui.add_space(8.0);
 
-            // 版权信息
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("ℹ️").size(16.0));
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("关于:").strong());
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("SeeU Desktop - 智能桌面助手").weak());
-            });
-        });
-    });
-}
+//             // 版权信息
+//             ui.horizontal(|ui| {
+//                 ui.label(egui::RichText::new("ℹ️").size(16.0));
+//                 ui.add_space(6.0);
+//                 ui.label(egui::RichText::new("关于:").strong());
+//                 ui.add_space(8.0);
+//                 ui.label(egui::RichText::new("SeeU Desktop - 智能桌面助手").weak());
+//             });
+//         });
+//     });
+// }

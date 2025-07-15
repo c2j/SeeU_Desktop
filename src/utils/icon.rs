@@ -12,27 +12,27 @@ pub enum IconSize {
 }
 
 impl IconSize {
-    /// Get all available icon sizes
-    pub fn all() -> Vec<IconSize> {
-        vec![
-            IconSize::Small,
-            IconSize::Medium,
-            IconSize::Large,
-            IconSize::ExtraLarge,
-            IconSize::Huge,
-            IconSize::Massive,
-        ]
-    }
+    // /// Get all available icon sizes
+    // pub fn all() -> Vec<IconSize> {
+    //     vec![
+    //         IconSize::Small,
+    //         IconSize::Medium,
+    //         IconSize::Large,
+    //         IconSize::ExtraLarge,
+    //         IconSize::Huge,
+    //         IconSize::Massive,
+    //     ]
+    // }
 
-    /// Get the size as u32
-    pub fn as_u32(self) -> u32 {
-        self as u32
-    }
+    // /// Get the size as u32
+    // pub fn as_u32(self) -> u32 {
+    //     self as u32
+    // }
 
-    /// Get the filename for this size
-    pub fn filename(self) -> String {
-        format!("icon-{}x{}.png", self.as_u32(), self.as_u32())
-    }
+    // /// Get the filename for this size
+    // pub fn filename(self) -> String {
+    //     format!("icon-{}x{}.png", self.as_u32(), self.as_u32())
+    // }
 }
 
 /// Load application icon data for window icon
@@ -54,61 +54,61 @@ pub fn load_window_icon() -> Result<egui::IconData, Box<dyn std::error::Error>> 
     })
 }
 
-/// Load icon for specific size
-pub fn load_icon_for_size(size: IconSize) -> Result<egui::IconData, Box<dyn std::error::Error>> {
-    let icon_data: &[u8] = match size {
-        IconSize::Small => include_bytes!("../../assets/icons/sizes/icon-16x16.png"),
-        IconSize::Medium => include_bytes!("../../assets/icons/sizes/icon-32x32.png"),
-        IconSize::Large => include_bytes!("../../assets/icons/sizes/icon-48x48.png"),
-        IconSize::ExtraLarge => include_bytes!("../../assets/icons/sizes/icon-64x64.png"),
-        IconSize::Huge => include_bytes!("../../assets/icons/sizes/icon-128x128.png"),
-        IconSize::Massive => include_bytes!("../../assets/icons/sizes/icon-256x256.png"),
-    };
+// /// Load icon for specific size
+// pub fn load_icon_for_size(size: IconSize) -> Result<egui::IconData, Box<dyn std::error::Error>> {
+//     let icon_data: &[u8] = match size {
+//         IconSize::Small => include_bytes!("../../assets/icons/sizes/icon-16x16.png"),
+//         IconSize::Medium => include_bytes!("../../assets/icons/sizes/icon-32x32.png"),
+//         IconSize::Large => include_bytes!("../../assets/icons/sizes/icon-48x48.png"),
+//         IconSize::ExtraLarge => include_bytes!("../../assets/icons/sizes/icon-64x64.png"),
+//         IconSize::Huge => include_bytes!("../../assets/icons/sizes/icon-128x128.png"),
+//         IconSize::Massive => include_bytes!("../../assets/icons/sizes/icon-256x256.png"),
+//     };
 
-    // Decode the PNG image
-    let image = image::load_from_memory(icon_data)?;
-    let rgba_image = image.to_rgba8();
+//     // Decode the PNG image
+//     let image = image::load_from_memory(icon_data)?;
+//     let rgba_image = image.to_rgba8();
 
-    let (width, height) = rgba_image.dimensions();
-    let pixels = rgba_image.into_raw();
+//     let (width, height) = rgba_image.dimensions();
+//     let pixels = rgba_image.into_raw();
 
-    Ok(egui::IconData {
-        rgba: pixels,
-        width: width as u32,
-        height: height as u32,
-    })
-}
+//     Ok(egui::IconData {
+//         rgba: pixels,
+//         width: width as u32,
+//         height: height as u32,
+//     })
+// }
 
-/// Load the main application icon (original size)
-pub fn load_main_icon() -> Result<egui::IconData, Box<dyn std::error::Error>> {
-    let icon_data = include_bytes!("../../assets/icons/c-see.png");
+// /// Load the main application icon (original size)
+// pub fn load_main_icon() -> Result<egui::IconData, Box<dyn std::error::Error>> {
+//     let icon_data = include_bytes!("../../assets/icons/c-see.png");
     
-    // Decode the PNG image
-    let image = image::load_from_memory(icon_data)?;
-    let rgba_image = image.to_rgba8();
+//     // Decode the PNG image
+//     let image = image::load_from_memory(icon_data)?;
+//     let rgba_image = image.to_rgba8();
     
-    let (width, height) = rgba_image.dimensions();
-    let pixels = rgba_image.into_raw();
+//     let (width, height) = rgba_image.dimensions();
+//     let pixels = rgba_image.into_raw();
     
-    Ok(egui::IconData {
-        rgba: pixels,
-        width: width as u32,
-        height: height as u32,
-    })
-}
+//     Ok(egui::IconData {
+//         rgba: pixels,
+//         width: width as u32,
+//         height: height as u32,
+//     })
+// }
 
-/// Create egui texture from icon data
-pub fn create_texture_from_icon(
-    ctx: &egui::Context,
-    icon_data: &egui::IconData,
-) -> egui::TextureHandle {
-    let color_image = egui::ColorImage::from_rgba_unmultiplied(
-        [icon_data.width as usize, icon_data.height as usize],
-        &icon_data.rgba,
-    );
+// /// Create egui texture from icon data
+// pub fn create_texture_from_icon(
+//     ctx: &egui::Context,
+//     icon_data: &egui::IconData,
+// ) -> egui::TextureHandle {
+//     let color_image = egui::ColorImage::from_rgba_unmultiplied(
+//         [icon_data.width as usize, icon_data.height as usize],
+//         &icon_data.rgba,
+//     );
     
-    ctx.load_texture("app_icon", color_image, egui::TextureOptions::default())
-}
+//     ctx.load_texture("app_icon", color_image, egui::TextureOptions::default())
+// }
 
 /// Get platform-specific icon recommendations
 pub fn get_platform_icon_sizes() -> Vec<IconSize> {

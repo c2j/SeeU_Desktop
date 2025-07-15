@@ -379,19 +379,19 @@ fn get_line_text(buffer: &TextBuffer, line_num: usize) -> String {
     }
 }
 
-/// 渲染带语法高亮的行 (已弃用 - 现在使用 egui_code_editor)
-fn render_line_with_syntax_highlighting(ui: &mut egui::Ui, line_text: &str, _buffer: &TextBuffer) {
-    // 语法高亮现在由 egui_code_editor 处理
-    // 这里只需要简单渲染文本
-    render_plain_text(ui, line_text);
-}
+// /// 渲染带语法高亮的行 (已弃用 - 现在使用 egui_code_editor)
+// fn render_line_with_syntax_highlighting(ui: &mut egui::Ui, line_text: &str, _buffer: &TextBuffer) {
+//     // 语法高亮现在由 egui_code_editor 处理
+//     // 这里只需要简单渲染文本
+//     render_plain_text(ui, line_text);
+// }
 
-/// 使用 syntect 渲染语法高亮 (已弃用 - 现在使用 egui_code_editor)
-fn render_syntect_highlighting(_ui: &mut egui::Ui, _line_text: &str, _language: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // 这个函数已经被 egui_code_editor 替代
-    // 保留函数签名以避免编译错误，但不执行任何操作
-    Err("Syntect highlighting is deprecated, use egui_code_editor instead".into())
-}
+// /// 使用 syntect 渲染语法高亮 (已弃用 - 现在使用 egui_code_editor)
+// fn render_syntect_highlighting(_ui: &mut egui::Ui, _line_text: &str, _language: &str) -> Result<(), Box<dyn std::error::Error>> {
+//     // 这个函数已经被 egui_code_editor 替代
+//     // 保留函数签名以避免编译错误，但不执行任何操作
+//     Err("Syntect highlighting is deprecated, use egui_code_editor instead".into())
+// }
 
 /// 渲染纯文本
 fn render_plain_text(ui: &mut egui::Ui, text: &str) {

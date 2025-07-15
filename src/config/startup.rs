@@ -40,50 +40,50 @@ impl Default for StartupConfig {
 }
 
 impl StartupConfig {
-    /// Load configuration from file
-    pub fn load() -> Self {
-        let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        let config_path = base_path.join("seeu_desktop").join("startup.toml");
+    // Load configuration from file
+    // pub fn load() -> Self {
+    //     let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    //     let config_path = base_path.join("seeu_desktop").join("startup.toml");
         
-        if config_path.exists() {
-            match std::fs::read_to_string(&config_path) {
-                Ok(content) => {
-                    match toml::from_str(&content) {
-                        Ok(config) => {
-                            return config;
-                        }
-                        Err(_e) => {
-                            // Failed to parse config, use default
-                        }
-                    }
-                }
-                Err(_e) => {
-                    // Failed to read config file, use default
-                }
-            }
-        }
+    //     if config_path.exists() {
+    //         match std::fs::read_to_string(&config_path) {
+    //             Ok(content) => {
+    //                 match toml::from_str(&content) {
+    //                     Ok(config) => {
+    //                         return config;
+    //                     }
+    //                     Err(_e) => {
+    //                         // Failed to parse config, use default
+    //                     }
+    //                 }
+    //             }
+    //             Err(_e) => {
+    //                 // Failed to read config file, use default
+    //             }
+    //         }
+    //     }
         
-        // Return default config and save it
-        let default_config = Self::default();
-        let _ = default_config.save(); // Ignore save errors during startup
-        default_config
-    }
+    //     // Return default config and save it
+    //     let default_config = Self::default();
+    //     let _ = default_config.save(); // Ignore save errors during startup
+    //     default_config
+    // }
     
-    /// Save configuration to file
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        let config_path = base_path.join("seeu_desktop").join("startup.toml");
+    // /// Save configuration to file
+    // pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+    //     let base_path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    //     let config_path = base_path.join("seeu_desktop").join("startup.toml");
         
-        // Create parent directory if it doesn't exist
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+    //     // Create parent directory if it doesn't exist
+    //     if let Some(parent) = config_path.parent() {
+    //         std::fs::create_dir_all(parent)?;
+    //     }
         
-        let content = toml::to_string_pretty(self)?;
-        std::fs::write(&config_path, content)?;
+    //     let content = toml::to_string_pretty(self)?;
+    //     std::fs::write(&config_path, content)?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
     
 
 }

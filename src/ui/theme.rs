@@ -21,10 +21,10 @@ impl Theme {
         }
     }
 
-    /// Get all available themes
-    pub fn all() -> Vec<Theme> {
-        vec![Theme::DarkModern, Theme::LightModern]
-    }
+    // /// Get all available themes
+    // pub fn all() -> Vec<Theme> {
+    //     vec![Theme::DarkModern, Theme::LightModern]
+    // }
 
     /// Convert from string
     pub fn from_string(s: &str) -> Theme {

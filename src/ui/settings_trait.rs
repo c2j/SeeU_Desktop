@@ -19,10 +19,10 @@ impl SettingsCategory {
         }
     }
 
-    /// Get the full display name with icon
-    pub fn full_display_name(&self) -> String {
-        format!("{} {}", self.icon, self.display_name)
-    }
+    // /// Get the full display name with icon
+    // pub fn full_display_name(&self) -> String {
+    //     format!("{} {}", self.icon, self.display_name)
+    // }
 }
 
 /// Trait for settings modules
@@ -80,15 +80,15 @@ impl SettingsRegistry {
         self.modules.push(module);
     }
 
-    /// Get all available categories
-    pub fn get_categories(&self) -> Vec<SettingsCategory> {
-        self.modules.iter().map(|m| m.get_category()).collect()
-    }
+    // /// Get all available categories
+    // pub fn get_categories(&self) -> Vec<SettingsCategory> {
+    //     self.modules.iter().map(|m| m.get_category()).collect()
+    // }
 
-    /// Get current selected category ID
-    pub fn get_current_category_id(&self) -> Option<&String> {
-        self.current_category_id.as_ref()
-    }
+    // /// Get current selected category ID
+    // pub fn get_current_category_id(&self) -> Option<&String> {
+    //     self.current_category_id.as_ref()
+    // }
 
     /// Set current category
     pub fn set_current_category(&mut self, category_id: String) {
@@ -122,22 +122,22 @@ impl SettingsRegistry {
         }
     }
 
-    /// Load all settings
-    pub fn load_all_settings(&mut self) -> Result<(), Vec<Box<dyn std::error::Error>>> {
-        let mut errors = Vec::new();
+    // /// Load all settings
+    // pub fn load_all_settings(&mut self) -> Result<(), Vec<Box<dyn std::error::Error>>> {
+    //     let mut errors = Vec::new();
         
-        for module in &mut self.modules {
-            if let Err(e) = module.load_settings() {
-                errors.push(e);
-            }
-        }
+    //     for module in &mut self.modules {
+    //         if let Err(e) = module.load_settings() {
+    //             errors.push(e);
+    //         }
+    //     }
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
+    //     if errors.is_empty() {
+    //         Ok(())
+    //     } else {
+    //         Err(errors)
+    //     }
+    // }
 
     /// Reset all settings to default
     pub fn reset_all_to_default(&mut self) -> Result<(), Vec<Box<dyn std::error::Error>>> {
@@ -173,12 +173,12 @@ impl SettingsRegistry {
         }
     }
 
-    /// Get settings summary for all modules
-    pub fn get_all_summaries(&self) -> Vec<(SettingsCategory, String)> {
-        self.modules.iter()
-            .map(|m| (m.get_category(), m.get_settings_summary()))
-            .collect()
-    }
+    // /// Get settings summary for all modules
+    // pub fn get_all_summaries(&self) -> Vec<(SettingsCategory, String)> {
+    //     self.modules.iter()
+    //         .map(|m| (m.get_category(), m.get_settings_summary()))
+    //         .collect()
+    // }
 }
 
 impl Default for SettingsRegistry {
