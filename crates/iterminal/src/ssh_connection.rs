@@ -120,48 +120,94 @@ impl SshConnectionBuilder {
         })
     }
 
-    /// 构建简化的SSH命令（用于终端后端）
+    /// 构建SSH命令，优先使用原生SSH
     pub fn build_ssh_command(server: &RemoteServer) -> Result<(String, Vec<String>), String> {
         log::info!("构建SSH命令，服务器: {}@{}:{}", server.username, server.host, server.port);
+
+        // 首先检查是否可以使用原生SSH连接
+        if crate::native_ssh::NativeSshConnection::is_available() {
+            log::info!("使用原生SSH连接 (ssh2 crate)");
+            return Self::build_native_ssh_command(server);
+        }
 
         // 对于密码认证，尝试多种方式
         if let AuthMethod::Password(password) = &server.auth_method {
             if !password.is_empty() {
-                // 尝试多种密码认证方式
                 if let Some((command, args)) = Self::try_password_authentication_methods(server, password)? {
                     return Ok((command, args));
                 }
-
-                log::warn!("所有自动密码认证方法都不可用，将使用交互式密码输入");
-
-                // 提供用户建议
-                Self::log_password_auth_suggestions();
+                log::warn!("所有自动密码认证方法都不可用，回退到原生SSH");
             }
         }
 
-        // 对于其他认证方式，使用原有逻辑
-        let mut config = Self::build_ssh_config(server)?;
-
-
-        // 检查SSH客户端是否可用，如果不可用则返回错误
+        // 检查外部SSH客户端
         if let Some(ssh_command) = Self::get_ssh_command() {
+            let mut config = Self::build_ssh_config(server)?;
             config.command = ssh_command;
             log::info!("SSH命令构建完成: {} {}", config.command, config.args.join(" "));
             Ok((config.command, config.args))
         } else {
-            Err("SSH客户端不可用。请安装OpenSSH或其他SSH客户端。".to_string())
+            // 如果没有外部SSH客户端，强制使用原生SSH
+            log::warn!("外部SSH客户端不可用，强制使用原生SSH连接");
+            Self::build_native_ssh_command(server)
         }
     }
 
-    /// 测试SSH连接
+    /// 构建原生SSH命令
+    fn build_native_ssh_command(server: &RemoteServer) -> Result<(String, Vec<String>), String> {
+        // 使用特殊的命令标识符来表示原生SSH连接
+        let args = vec![
+            "native-ssh".to_string(),
+            server.host.clone(),
+            server.port.to_string(),
+            server.username.clone(),
+            match &server.auth_method {
+                AuthMethod::Password(pwd) => format!("password:{}", pwd),
+                AuthMethod::PrivateKey { key_path, passphrase } => {
+                    if let Some(pass) = passphrase {
+                        format!("key:{}:{}", key_path.display(), pass)
+                    } else {
+                        format!("key:{}", key_path.display())
+                    }
+                }
+                AuthMethod::Agent => "agent".to_string(),
+            }
+        ];
+
+        Ok(("native-ssh-client".to_string(), args))
+    }
+
+    /// 测试连接，支持原生SSH回退
     pub fn test_connection(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
         log::info!("开始测试SSH连接到 {}@{}:{}", server.username, server.host, server.port);
 
-        // 首先检查SSH客户端是否可用
-        if !Self::check_ssh_availability() {
-            return Ok(ConnectionTestResult::Failed("SSH客户端不可用".to_string()));
+        // 优先使用原生SSH进行连接测试
+        if crate::native_ssh::NativeSshConnection::is_available() {
+            log::info!("使用原生SSH进行连接测试");
+            return crate::native_ssh::NativeSshConnection::test_connection(server);
         }
 
+        // 检查外部SSH客户端可用性
+        if !Self::check_ssh_availability() {
+            log::warn!("SSH客户端不可用，尝试使用替代方案");
+            
+            #[cfg(target_os = "windows")]
+            {
+                if Self::check_plink_availability() {
+                    log::info!("检测到PuTTY plink，使用plink进行连接测试");
+                    return Self::test_connection_with_plink(server);
+                }
+            }
+            
+            return Ok(ConnectionTestResult::Failed("没有可用的SSH客户端，请安装OpenSSH或启用原生SSH支持".to_string()));
+        }
+
+        // 使用外部SSH客户端进行测试
+        Self::test_connection_with_external_ssh(server)
+    }
+
+    /// 使用外部SSH客户端测试连接
+    fn test_connection_with_external_ssh(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
         let mut args = vec![
             "-o".to_string(),
             "ConnectTimeout=10".to_string(),
@@ -169,101 +215,112 @@ impl SshConnectionBuilder {
             "StrictHostKeyChecking=no".to_string(),
         ];
 
-        // 根据操作系统添加特定参数
+        // Windows特定参数
         #[cfg(target_os = "windows")]
         {
-            // Windows下使用NUL设备
             args.extend_from_slice(&[
                 "-o".to_string(),
                 "UserKnownHostsFile=NUL".to_string(),
                 "-o".to_string(),
-                "PasswordAuthentication=no".to_string(),
+                "BatchMode=yes".to_string(),
             ]);
         }
 
+        // Unix特定参数
         #[cfg(not(target_os = "windows"))]
         {
-            // Unix系统使用/dev/null和BatchMode
             args.extend_from_slice(&[
                 "-o".to_string(),
-                "BatchMode=yes".to_string(),
-                "-o".to_string(),
                 "UserKnownHostsFile=/dev/null".to_string(),
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
             ]);
         }
 
-        // 添加端口
         if server.port != 22 {
             args.extend_from_slice(&["-p".to_string(), server.port.to_string()]);
         }
 
-        // 添加认证配置
-        match &server.auth_method {
-            AuthMethod::PrivateKey { key_path, .. } => {
-                if !key_path.exists() {
-                    return Ok(ConnectionTestResult::Failed(format!("私钥文件不存在: {}", key_path.display())));
+        args.push(format!("{}@{}", server.username, server.host));
+        args.push("echo 'connection_test_success'".to_string());
+
+        log::debug!("执行SSH命令: ssh {}", args.join(" "));
+        
+        match std::process::Command::new("ssh").args(&args).output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                
+                log::debug!("SSH输出: {}", stdout);
+                if !stderr.is_empty() {
+                    log::debug!("SSH错误: {}", stderr);
                 }
-                args.extend_from_slice(&["-i".to_string(), key_path.to_string_lossy().to_string()]);
-                args.extend_from_slice(&["-o".to_string(), "PreferredAuthentications=publickey".to_string()]);
+                
+                if output.status.success() && stdout.contains("connection_test_success") {
+                    Ok(ConnectionTestResult::Success)
+                } else {
+                    let error_msg = if !stderr.is_empty() {
+                        stderr.to_string()
+                    } else {
+                        "连接测试失败".to_string()
+                    };
+                    Ok(ConnectionTestResult::Failed(error_msg))
+                }
             }
-            AuthMethod::Agent => {
-                args.extend_from_slice(&["-o".to_string(), "IdentitiesOnly=no".to_string()]);
-                args.extend_from_slice(&["-o".to_string(), "PreferredAuthentications=publickey".to_string()]);
-            }
-            AuthMethod::Password(_) => {
-                // 密码认证需要特殊处理
-                log::info!("密码认证模式，测试SSH服务可用性");
-                return Self::test_ssh_service_availability(server);
+            Err(e) => {
+                log::error!("执行SSH命令失败: {}", e);
+                Err(format!("执行SSH命令失败: {}", e))
             }
         }
+    }
 
-        // 添加连接目标和测试命令
+    #[cfg(target_os = "windows")]
+    fn check_plink_availability() -> bool {
+        std::process::Command::new("plink")
+            .arg("-V")
+            .output()
+            .is_ok()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn test_connection_with_plink(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
+        let mut args = vec![
+            "-ssh".to_string(),
+            "-batch".to_string(),
+            "-v".to_string(), // 详细输出
+        ];
+
+        if server.port != 22 {
+            args.extend_from_slice(&["-P".to_string(), server.port.to_string()]);
+        }
+
         args.push(format!("{}@{}", server.username, server.host));
-        args.push("echo 'connection_test_ok'".to_string());
+        args.push("echo connection_test_success".to_string());
 
-        // 获取SSH命令路径
-        let ssh_command = Self::get_ssh_command()
-            .ok_or_else(|| "找不到可用的SSH客户端".to_string())?;
+        log::debug!("执行plink命令: plink {}", args.join(" "));
 
-        log::debug!("执行SSH测试命令: {} {}", ssh_command, args.join(" "));
-
-        // 执行测试命令
-        let output = Command::new(&ssh_command)
+        match std::process::Command::new("plink")
             .args(&args)
             .output()
-            .map_err(|e| format!("执行SSH命令失败: {}", e))?;
-
-        log::debug!("SSH测试命令退出码: {}", output.status.code().unwrap_or(-1));
-        log::debug!("SSH测试命令stdout: {}", String::from_utf8_lossy(&output.stdout));
-        log::debug!("SSH测试命令stderr: {}", String::from_utf8_lossy(&output.stderr));
-
-        // 分析结果
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("connection_test_ok") {
-                log::info!("SSH连接测试成功");
-                Ok(ConnectionTestResult::Success)
-            } else {
-                Ok(ConnectionTestResult::Failed("连接测试命令执行失败".to_string()))
-            }
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            if stderr.contains("Connection timed out") || stderr.contains("timeout") {
-                Ok(ConnectionTestResult::Timeout)
-            } else if stderr.contains("Permission denied") || stderr.contains("Authentication failed") {
-                Ok(ConnectionTestResult::AuthenticationFailed)
-            } else if stderr.contains("No route to host") || stderr.contains("Connection refused") {
-                Ok(ConnectionTestResult::HostUnreachable)
-            } else if stderr.contains("Permission denied") {
-                Ok(ConnectionTestResult::PermissionDenied)
-            } else {
-                let error_msg = if stderr.trim().is_empty() {
-                    format!("SSH连接失败，退出码: {}", output.status.code().unwrap_or(-1))
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                
+                log::debug!("plink输出: {}", stdout);
+                if !stderr.is_empty() {
+                    log::debug!("plink错误: {}", stderr);
+                }
+                
+                if stdout.contains("connection_test_success") {
+                    Ok(ConnectionTestResult::Success)
                 } else {
-                    stderr.trim().to_string()
-                };
-                Ok(ConnectionTestResult::Failed(error_msg))
+                    Ok(ConnectionTestResult::Failed(format!("plink连接失败: {}", stderr)))
+                }
+            }
+            Err(e) => {
+                log::error!("执行plink命令失败: {}", e);
+                Err(format!("执行plink命令失败: {}", e))
             }
         }
     }

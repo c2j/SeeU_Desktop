@@ -1079,7 +1079,7 @@ fn render_list_view_internal<F>(
     let total_available = available_width; // Use full available width
 
     // Debug: log column width calculation
-    log::info!("iSearch table - available_width: {}, total_available: {}", available_width, total_available);
+    // log::info!("iSearch table - available_width: {}, total_available: {}", available_width, total_available);
 
     // Define column width strategy - use fixed widths for some columns, remainder for path
     let (filename_width, size_width, time_width, actions_width) = if total_available < 600.0 {
@@ -1106,8 +1106,8 @@ fn render_list_view_internal<F>(
     };
 
     // Debug: log final column widths
-    log::info!("iSearch table - column widths: filename={}, size={}, time={}, actions={}, path=remainder",
-               filename_width, size_width, time_width, actions_width);
+    // log::info!("iSearch table - column widths: filename={}, size={}, time={}, actions={}, path=remainder",
+    //            filename_width, size_width, time_width, actions_width);
 
     // Use most available height for the table, reserve space for statistics and spacing
     let available_height = ui.available_height();

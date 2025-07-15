@@ -5,10 +5,12 @@ use crate::session_history::SessionHistoryManager;
 use crate::session_history_ui::SessionHistoryUI;
 use crate::help_ui::TerminalHelpUI;
 use crate::remote_server_ui::{RemoteServerUI, RemoteServerAction};
-use crate::ssh_connection::SshConnectionBuilder;
+use crate::ssh_connection::{SshConnectionBuilder, ConnectionTestResult};
+use crate::remote_server::RemoteServer;
 use egui_term::BackendSettings;
 use eframe::egui;
 use uuid::Uuid;
+use std::collections::HashMap;
 
 /// Main state for the iTerminal module
 #[derive(Debug)]
@@ -362,5 +364,78 @@ impl ITerminalState {
 impl Default for ITerminalState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// 连接测试状态
+#[derive(Debug, Clone)]
+pub enum ConnectionTestState {
+    None,
+    Testing,
+    Completed,
+}
+
+/// 应用状态（用于连接测试管理）
+#[derive(Debug)]
+pub struct AppState {
+    pub remote_servers: HashMap<String, RemoteServer>,
+    pub connection_test_results: HashMap<String, ConnectionTestResult>,
+    pub connection_test_states: HashMap<String, ConnectionTestState>,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            remote_servers: HashMap::new(),
+            connection_test_results: HashMap::new(),
+            connection_test_states: HashMap::new(),
+        }
+    }
+}
+
+// 改进服务器状态管理
+impl AppState {
+    pub fn handle_connection_test_request(&mut self, server_id: String) {
+        log::info!("处理连接测试请求，服务器ID: {}", server_id);
+        
+        // 验证服务器ID是否存在
+        if !self.remote_servers.contains_key(&server_id) {
+            log::error!("找不到服务器ID: {}", server_id);
+            self.connection_test_results.insert(
+                server_id.clone(),
+                ConnectionTestResult::Failed("服务器不存在".to_string())
+            );
+            return;
+        }
+        
+        // 获取服务器信息
+        if let Some(server) = self.remote_servers.get(&server_id) {
+            // 设置测试状态
+            self.connection_test_states.insert(
+                server_id.clone(),
+                ConnectionTestState::Testing
+            );
+            
+            // 执行连接测试
+            match crate::ssh_connection::SshConnectionBuilder::test_connection(server) {
+                Ok(result) => {
+                    log::info!("连接测试成功，服务器ID: {}", server_id);
+                    self.connection_test_results.insert(server_id.clone(), result);
+                }
+                Err(e) => {
+                    log::error!("连接测试失败，服务器ID: {}, 错误: {}", server_id, e);
+                    self.connection_test_results.insert(
+                        server_id.clone(),
+                        ConnectionTestResult::Failed(e)
+                    );
+                }
+            }
+            
+            // 更新测试状态
+            self.connection_test_states.insert(
+                server_id,
+                ConnectionTestState::Completed
+            );
+        }
     }
 }

@@ -1,4 +1,5 @@
 use crate::remote_server::{AuthMethod, RemoteServer};
+use crate::ssh_connection::ConnectionTestResult;
 use ssh2::{Session, Channel};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -35,18 +36,15 @@ impl NativeSshConnection {
         }
     }
 
-    /// 检查原生SSH支持是否可用
+    /// 检查原生SSH是否可用
     pub fn is_available() -> bool {
-        // ssh2 crate总是可用的，因为它是纯Rust实现
+        // ssh2 crate 是纯Rust实现，总是可用的
         true
     }
 
     /// 获取支持信息
     pub fn get_support_info() -> String {
-        format!(
-            "✅ 原生SSH支持可用 (ssh2 crate v{})\n   - 不依赖外部SSH客户端\n   - 纯Rust实现\n   - 支持所有平台",
-            env!("CARGO_PKG_VERSION")
-        )
+        "✅ 原生SSH (ssh2 crate) - 纯Rust实现，无需外部依赖".to_string()
     }
 
     /// 连接到远程服务器
@@ -199,39 +197,97 @@ impl NativeSshConnection {
     }
 
     /// 测试连接
-    pub fn test_connection(server: &RemoteServer) -> Result<bool, String> {
-        log::info!("测试原生SSH连接到 {}@{}:{}", 
-                   server.username, server.host, server.port);
+    pub fn test_connection(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
+        log::info!("使用原生SSH测试连接到 {}@{}:{}", server.username, server.host, server.port);
 
-        let mut connection = Self::new(server.clone());
-        match connection.connect() {
-            Ok(_) => {
-                // 发送测试命令
-                if let Err(e) = connection.send_command("echo 'test_ok'") {
-                    log::warn!("发送测试命令失败: {}", e);
-                }
+        use ssh2::Session;
+        use std::net::TcpStream;
+        use std::time::Duration;
 
-                // 等待一下让命令执行
-                thread::sleep(Duration::from_millis(100));
+        // 建立TCP连接
+        let tcp = match TcpStream::connect_timeout(
+            &format!("{}:{}", server.host, server.port).parse().unwrap(),
+            Duration::from_secs(10)
+        ) {
+            Ok(tcp) => tcp,
+            Err(e) => {
+                return Ok(ConnectionTestResult::Failed(format!("TCP连接失败: {}", e)));
+            }
+        };
 
-                // 尝试读取输出
-                match connection.read_output() {
-                    Ok(output) => {
-                        log::info!("测试命令输出: {}", output);
-                    }
-                    Err(e) => {
-                        log::warn!("读取测试输出失败: {}", e);
-                    }
-                }
+        // 创建SSH会话
+        let mut sess = Session::new().map_err(|e| format!("创建SSH会话失败: {}", e))?;
+        sess.set_tcp_stream(tcp);
+        sess.handshake().map_err(|e| format!("SSH握手失败: {}", e))?;
 
-                connection.disconnect();
-                Ok(true)
+        // 尝试认证
+        let auth_result = match &server.auth_method {
+            AuthMethod::Password(password) => {
+                sess.userauth_password(&server.username, password)
+            }
+            AuthMethod::PrivateKey { key_path, passphrase } => {
+                let passphrase = passphrase.as_deref();
+                sess.userauth_pubkey_file(&server.username, None, key_path, passphrase)
+            }
+            AuthMethod::Agent => {
+                sess.userauth_agent(&server.username)
+            }
+        };
+
+        match auth_result {
+            Ok(()) => {
+                log::info!("原生SSH连接测试成功");
+                Ok(ConnectionTestResult::Success)
             }
             Err(e) => {
-                log::error!("原生SSH连接测试失败: {}", e);
-                Ok(false)
+                log::warn!("原生SSH认证失败: {}", e);
+                Ok(ConnectionTestResult::AuthenticationFailed)
             }
         }
+    }
+
+    /// 创建SSH连接
+    pub fn create_connection(server: &RemoteServer) -> Result<Self, String> {
+        log::info!("创建原生SSH连接到 {}@{}:{}", server.username, server.host, server.port);
+
+        use ssh2::Session;
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        // 建立TCP连接
+        let tcp = TcpStream::connect_timeout(
+            &format!("{}:{}", server.host, server.port).parse().unwrap(),
+            Duration::from_secs(10)
+        ).map_err(|e| format!("TCP连接失败: {}", e))?;
+
+        // 创建SSH会话
+        let mut sess = Session::new().map_err(|e| format!("创建SSH会话失败: {}", e))?;
+        sess.set_tcp_stream(tcp);
+        sess.handshake().map_err(|e| format!("SSH握手失败: {}", e))?;
+
+        // 认证
+        match &server.auth_method {
+            AuthMethod::Password(password) => {
+                sess.userauth_password(&server.username, password)
+                    .map_err(|e| format!("密码认证失败: {}", e))?;
+            }
+            AuthMethod::PrivateKey { key_path, passphrase } => {
+                let passphrase = passphrase.as_deref();
+                sess.userauth_pubkey_file(&server.username, None, key_path, passphrase)
+                    .map_err(|e| format!("私钥认证失败: {}", e))?;
+            }
+            AuthMethod::Agent => {
+                sess.userauth_agent(&server.username)
+                    .map_err(|e| format!("SSH Agent认证失败: {}", e))?;
+            }
+        }
+
+        Ok(NativeSshConnection {
+            session: Some(sess),
+            channel: None,
+            state: Arc::new(Mutex::new(NativeSshState::Connected)),
+            server: server.clone(),
+        })
     }
 }
 
