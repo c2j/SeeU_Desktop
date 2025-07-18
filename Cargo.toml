@@ -69,6 +69,7 @@ aiAssist = { path = "crates/aiAssist" }
 itools = { path = "crates/itools" }
 iterminal = { path = "crates/iterminal" }
 ifile_editor = { path = "crates/ifile_editor" }
+ibrowser = { path = "crates/ibrowser" }
 egui_term = { path = "crates/egui_term" }
 
 # 原生SSH支持
@@ -89,10 +90,12 @@ members = [
     "crates/itools",
     "crates/iterminal",
     "crates/ifile_editor",
+    "crates/ibrowser",
     "crates/egui_ltreeview",
     "crates/egui_code_editor",
     "crates/egui_term",
     "crates/alacritty_terminal", "timezone_test",
+    "crates/web-view/webview-examples",
 ]
 exclude = [
     "crates/egui_term/examples/*",

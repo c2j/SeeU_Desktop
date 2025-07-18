@@ -86,6 +86,16 @@ pub fn render_navigation(ui: &mut egui::Ui, active_module: &mut Module) {
 
         ui.add_space(4.0);
 
+        // Browser button
+        if ui.add(egui::Button::new("🌐")
+            .selected(*active_module == Module::Browser))
+            .on_hover_text("浏览器")
+            .clicked() {
+            *active_module = Module::Browser;
+        }
+
+        ui.add_space(4.0);
+
         // Settings button
         if ui.add(egui::Button::new("🔩")
             .selected(*active_module == Module::Settings))

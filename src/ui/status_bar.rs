@@ -138,6 +138,9 @@ pub fn render_status_bar(
                 Module::ITools => {
                     ui.label("iTools 模式");
                 },
+                Module::Browser => {
+                    ui.label("浏览器模式");
+                },
                 Module::Settings => {
                     ui.label("设置模式");
                 },

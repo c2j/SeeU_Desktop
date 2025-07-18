@@ -1,0 +1,29 @@
+[package]
+name = "ibrowser"
+version = "0.1.0"
+edition = "2021"
+authors = ["SeeU Team C&L"]
+description = "Browser module for SeeU Desktop application"
+
+[dependencies]
+# GUI Framework
+egui = { version = "0.28.1", default-features = false, features = ["default_fonts"] }
+eframe = { version = "0.28.1", default-features = false, features = ["default_fonts", "glow"] }
+egui_extras = { version = "0.28.1", default-features = false, features = ["image"] }
+
+# WebView integration - using system commands for better compatibility
+# wry = "0.24"  # Commented out due to main thread issues on macOS
+web-view = { path = "../web-view" }
+wry = { version = "0.24", optional = true }  # Optional for embedded WebView
+
+# Utilities
+log = "0.4.20"
+anyhow = "1.0.75"
+serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0.107"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+html2text = "0.6"
+scraper = "0.20"
+url = "2.5"
+image = "0.24"

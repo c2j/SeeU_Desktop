@@ -28,6 +28,7 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                     Module::Note => "笔记",
                     Module::Search => "搜索",
                     Module::ITools => "iTools - AI 工具集成",
+                    Module::Browser => "浏览器",
                     Module::Settings => "设置",
                 });
 
@@ -85,6 +86,9 @@ pub fn render_workspace(ui: &mut egui::Ui, active_module: &Module, app: &mut cra
                         },
                         Module::ITools => {
                             itools::render_itools(ui, &mut app.itools_state);
+                        },
+                        Module::Browser => {
+                            ibrowser::render_ibrowser(ui, &mut app.ibrowser_state);
                         },
                         Module::Settings => {
                             crate::ui::modular_settings::render_modular_settings(ui, app);

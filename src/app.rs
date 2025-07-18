@@ -24,6 +24,7 @@ use aiAssist::mcp_integration::McpIntegrationManager;
 use itools::IToolsState;
 use iterminal::ITerminalState;
 use itools::mcp::rmcp_client::McpEvent;
+use ibrowser::IBrowserState;
 
 /// Main application state
 pub struct SeeUApp {
@@ -44,6 +45,7 @@ pub struct SeeUApp {
     pub itools_state: IToolsState,
     pub iterminal_state: ITerminalState,
     pub ifile_editor_state: ifile_editor::IFileEditorState,
+    pub ibrowser_state: IBrowserState,
     pub modular_settings_state: crate::ui::settings_trait::ModularSettingsState,
 
     // Services
@@ -145,6 +147,7 @@ pub enum Module {
     Note,
     Search,
     ITools,
+    Browser,         // 新增：浏览器
     Settings,
 }
 
@@ -318,6 +321,7 @@ impl SeeUApp {
             itools_state,
             iterminal_state,
             ifile_editor_state,
+            ibrowser_state: IBrowserState::new(),
             modular_settings_state: crate::ui::settings_trait::ModularSettingsState::default(),
             system_service: SystemService::new(),
             mcp_integration: McpIntegrationManager::new(),
