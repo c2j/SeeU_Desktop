@@ -20,9 +20,84 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
         });
     });
 
+    // 视图模式切换控件
+    ui.horizontal(|ui| {
+        ui.label("视图：");
+
+        let current_mode = state.get_note_view_mode().clone();
+
+        // 树状视图按钮
+        let tree_button_text = if current_mode == crate::db_state::NoteViewMode::TreeView {
+            "🌳 树状 ✓"
+        } else {
+            "🌳 树状"
+        };
+
+        if ui.button(tree_button_text).clicked() {
+            state.set_note_view_mode(crate::db_state::NoteViewMode::TreeView);
+        }
+
+        // 时间视图按钮
+        let time_button_text = if current_mode == crate::db_state::NoteViewMode::TimeView {
+            "⏰ 时间 ✓"
+        } else {
+            "⏰ 时间"
+        };
+
+        if ui.button(time_button_text).clicked() {
+            state.set_note_view_mode(crate::db_state::NoteViewMode::TimeView);
+        }
+
+        // 在时间视图模式下显示排序控件
+        if current_mode == crate::db_state::NoteViewMode::TimeView {
+            ui.separator();
+            ui.label("排序：");
+
+            let current_sort = state.get_note_sort_by().clone();
+
+            // 按添加顺序排序按钮
+            let created_button_text = if current_sort == crate::db_state::NoteSortBy::CreatedTime {
+                "📅 添加 ✓"
+            } else {
+                "📅 添加"
+            };
+
+            if ui.small_button(created_button_text).clicked() {
+                state.set_note_sort_by(crate::db_state::NoteSortBy::CreatedTime);
+                state.load_global_notes(); // 重新加载全局笔记
+            }
+
+            // 按更新时间排序按钮
+            let updated_button_text = if current_sort == crate::db_state::NoteSortBy::UpdatedTime {
+                "🕒 更新 ✓"
+            } else {
+                "🕒 更新"
+            };
+
+            if ui.small_button(updated_button_text).clicked() {
+                state.set_note_sort_by(crate::db_state::NoteSortBy::UpdatedTime);
+                state.load_global_notes(); // 重新加载全局笔记
+            }
+        }
+    });
+
     ui.separator();
 
-    // 笔记本和笔记的树状视图 - 移除内部滚动区域，使用外层统一滚动
+    // 根据视图模式渲染不同内容
+    let current_mode = state.get_note_view_mode().clone();
+
+    match current_mode {
+        crate::db_state::NoteViewMode::TreeView => {
+            render_tree_mode(ui, state);
+        },
+        crate::db_state::NoteViewMode::TimeView => {
+            render_time_mode(ui, state);
+        }
+    }
+}
+
+/// 渲染树状视图模式
+fn render_tree_mode(ui: &mut egui::Ui, state: &mut DbINoteState) {
     let notebooks = state.notebooks.clone();
 
     if notebooks.is_empty() {
@@ -34,7 +109,7 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
             let is_notebook_selected = state.current_notebook == Some(notebook_idx);
 
             // 笔记本行
-            ui.horizontal(|ui| {
+            let notebook_response = ui.horizontal(|ui| {
                 // 展开/折叠图标
                 if ui.button(if notebook.expanded { "▼" } else { "▶" }).clicked() {
                     // 切换展开状态并加载笔记
@@ -49,8 +124,9 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 }
 
                 // 笔记本名称
-                if ui.selectable_label(is_notebook_selected && state.current_note.is_none(),
-                                      format!("📓 {}", notebook.name)).clicked() {
+                let name_response = ui.selectable_label(is_notebook_selected && state.current_note.is_none(),
+                                      format!("📓 {}", notebook.name));
+                if name_response.clicked() {
                     state.select_notebook(notebook_idx);
                     // 选择笔记本时清除当前笔记选择
                     state.current_note = None;
@@ -64,40 +140,45 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
                     }
                 }
 
-                // 排序按钮
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // 删除按钮
-                    if ui.button("🗑").clicked() {
-                        state.delete_notebook(notebook_idx);
-                        return;
-                    }
+                // 检测鼠标是否悬停在笔记本行上
+                let is_hovered = name_response.hovered();
 
-                    // 添加笔记按钮
-                    if ui.button("+ 笔记").clicked() {
-                        // 先选择笔记本，然后创建笔记
-                        state.select_notebook(notebook_idx);
-                        let note_id = state.create_note("新笔记".to_string(), "".to_string());
-                        if let Some(id) = note_id {
-                            state.select_note(&id);
+                // 排序按钮 - 只在悬停时显示
+                if is_hovered {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // 删除按钮
+                        if ui.button("🗑").clicked() {
+                            state.delete_notebook(notebook_idx);
+                            return;
                         }
-                    }
 
-                    // 下移按钮
-                    if ui.add_enabled(notebook_idx < notebooks.len() - 1,
-                                     egui::Button::new("↓").small())
-                        .on_hover_text("向下移动笔记本")
-                        .clicked() {
-                        state.move_notebook_down(notebook_idx);
-                    }
+                        // 添加笔记按钮
+                        if ui.button("+ 笔记").clicked() {
+                            // 先选择笔记本，然后创建笔记
+                            state.select_notebook(notebook_idx);
+                            let note_id = state.create_note("新笔记".to_string(), "".to_string());
+                            if let Some(id) = note_id {
+                                state.select_note(&id);
+                            }
+                        }
 
-                    // 上移按钮
-                    if ui.add_enabled(notebook_idx > 0,
-                                     egui::Button::new("↑").small())
-                        .on_hover_text("向上移动笔记本")
-                        .clicked() {
-                        state.move_notebook_up(notebook_idx);
-                    }
-                });
+                        // 下移按钮
+                        if ui.add_enabled(notebook_idx < notebooks.len() - 1,
+                                         egui::Button::new("↓").small())
+                            .on_hover_text("向下移动笔记本")
+                            .clicked() {
+                            state.move_notebook_down(notebook_idx);
+                        }
+
+                        // 上移按钮
+                        if ui.add_enabled(notebook_idx > 0,
+                                         egui::Button::new("↑").small())
+                            .on_hover_text("向上移动笔记本")
+                            .clicked() {
+                            state.move_notebook_up(notebook_idx);
+                        }
+                    });
+                }
             });
 
             // 如果笔记本展开，显示其中的笔记
@@ -214,6 +295,94 @@ pub fn render_tree_view(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 });
             }
         }
+}
+
+/// 渲染时间视图模式（全局笔记按时间排序）
+fn render_time_mode(ui: &mut egui::Ui, state: &mut DbINoteState) {
+    // 确保全局笔记列表已加载
+    if state.global_notes.is_empty() {
+        state.load_global_notes();
+    }
+
+    let global_notes = state.global_notes.clone();
+
+    if global_notes.is_empty() {
+        ui.label("没有笔记");
+        return;
+    }
+
+    ui.label(format!("共 {} 个笔记", global_notes.len()));
+    ui.add_space(5.0);
+
+    for note_id in global_notes {
+        // 获取笔记信息
+        let note_info = if let Some(note) = state.notes.get(&note_id) {
+            (note.title.clone(), note.created_at.clone(), note.updated_at.clone())
+        } else {
+            continue;
+        };
+
+        let is_note_selected = state.current_note.as_ref() == Some(&note_id);
+        let note_id_clone = note_id.clone();
+
+        // 获取笔记所属的笔记本名称
+        let notebook_name = state.notebooks.iter()
+            .find(|nb| nb.note_ids.contains(&note_id))
+            .map(|nb| nb.name.clone())
+            .unwrap_or_else(|| "未知笔记本".to_string());
+
+        // 获取标签信息
+        let note_tags = state.get_note_tags(&note_id);
+        let tag_info: Vec<(String, String, String)> = note_tags.iter()
+            .take(2)
+            .map(|tag| (tag.id.clone(), tag.name.clone(), tag.color.clone()))
+            .collect();
+        let tag_count = note_tags.len();
+
+        ui.horizontal(|ui| {
+            // 笔记标题和选择
+            let truncated_title = crate::truncate_note_title(&note_info.0);
+            if ui.selectable_label(is_note_selected, format!("📝 {}", truncated_title)).clicked() {
+                // 找到笔记所属的笔记本并选择
+                if let Some((notebook_idx, _)) = state.notebooks.iter().enumerate()
+                    .find(|(_, nb)| nb.note_ids.contains(&note_id)) {
+                    state.select_notebook(notebook_idx);
+                }
+                state.select_note(&note_id_clone);
+            }
+
+            // 显示笔记本名称
+            ui.label(format!("📓 {}", notebook_name));
+
+            // 显示标签
+            ui.horizontal(|ui| {
+                for (tag_id, tag_name, tag_color) in tag_info {
+                    let color = hex_to_color32(&tag_color);
+                    ui.colored_label(color, format!("#{}", tag_name));
+                }
+
+                if tag_count > 2 {
+                    ui.label(format!("+{}", tag_count - 2));
+                }
+            });
+
+            // 显示时间信息
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let current_sort = state.get_note_sort_by();
+                let time_text = match current_sort {
+                    crate::db_state::NoteSortBy::CreatedTime => {
+                        format!("创建: {}", note_info.1)
+                    },
+                    crate::db_state::NoteSortBy::UpdatedTime => {
+                        format!("更新: {}", note_info.2)
+                    }
+                };
+                ui.label(egui::RichText::new(time_text).small());
+            });
+        });
+
+        ui.add_space(2.0);
+    }
 }
 
 /// 渲染标签列表

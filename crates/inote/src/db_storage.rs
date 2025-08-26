@@ -10,7 +10,7 @@ use crate::notebook::Notebook;
 use crate::note::Note;
 use crate::tag::Tag;
 use crate::mcp_server::McpServerRecord;
-use crate::db_state::RecentNoteAccess;
+use crate::db_state::{RecentNoteAccess, NoteSortBy};
 
 /// Database schema version
 const DB_VERSION: i32 = 2;
@@ -859,15 +859,27 @@ impl DbStorageManager {
 
     /// Get notes for a notebook
     pub fn get_notes_for_notebook(&self, notebook_id: &str) -> Result<Vec<Note>, Box<dyn std::error::Error>> {
+        self.get_notes_for_notebook_sorted(notebook_id, &NoteSortBy::CreatedTime)
+    }
+
+    /// Get notes for a notebook with specified sorting
+    pub fn get_notes_for_notebook_sorted(&self, notebook_id: &str, sort_by: &NoteSortBy) -> Result<Vec<Note>, Box<dyn std::error::Error>> {
         let conn = self.get_connection()?;
         let mut notes = Vec::new();
 
-        let mut stmt = conn.prepare(
+        let order_clause = match sort_by {
+            NoteSortBy::CreatedTime => "ORDER BY created_at DESC",
+            NoteSortBy::UpdatedTime => "ORDER BY updated_at DESC",
+        };
+
+        let query = format!(
             "SELECT id, title, content, created_at, updated_at
              FROM notes
              WHERE notebook_id = ?
-             ORDER BY created_at DESC"
-        )?;
+             {}", order_clause
+        );
+
+        let mut stmt = conn.prepare(&query)?;
 
         let note_iter = stmt.query_map(params![notebook_id], |row| {
             let id: String = row.get(0)?;
@@ -914,6 +926,76 @@ impl DbStorageManager {
             if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
                 log::error!("Error loading attachments for note {}: {}", note.id, err);
             }
+            notes.push(note);
+        }
+
+        Ok(notes)
+    }
+
+    /// Get all notes sorted by specified criteria
+    pub fn get_all_notes_sorted(&self, sort_by: &NoteSortBy) -> Result<Vec<Note>, Box<dyn std::error::Error>> {
+        let conn = self.get_connection()?;
+        let mut notes = Vec::new();
+
+        let order_clause = match sort_by {
+            NoteSortBy::CreatedTime => "ORDER BY created_at DESC",
+            NoteSortBy::UpdatedTime => "ORDER BY updated_at DESC",
+        };
+
+        let query = format!(
+            "SELECT id, title, content, created_at, updated_at
+             FROM notes
+             {}", order_clause
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+        let note_iter = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let content: String = row.get(2)?;
+            let created_at_str: String = row.get(3)?;
+            let updated_at_str: String = row.get(4)?;
+
+            // Parse datetime strings
+            let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| rusqlite::Error::InvalidColumnType(3, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&chrono::Utc);
+            let updated_at = chrono::DateTime::parse_from_rfc3339(&updated_at_str)
+                .map_err(|e| rusqlite::Error::InvalidColumnType(4, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .with_timezone(&chrono::Utc);
+
+            let note = Note {
+                id,
+                title,
+                content,
+                created_at,
+                updated_at,
+                tag_ids: Vec::new(),
+                attachments: Vec::new(),
+            };
+
+            Ok(note)
+        })?;
+
+        for note_result in note_iter {
+            let mut note = note_result?;
+
+            // Load tag IDs for this note
+            let mut tag_stmt = conn.prepare("SELECT tag_id FROM note_tags WHERE note_id = ?")?;
+            let tag_ids_iter = tag_stmt.query_map(params![note.id], |row| {
+                let id: String = row.get(0)?;
+                Ok(id)
+            })?;
+
+            for tag_id in tag_ids_iter {
+                note.tag_ids.push(tag_id?);
+            }
+
+            // Load attachments for this note
+            if let Err(err) = Self::load_attachments_for_note(&mut note, &conn) {
+                log::error!("Error loading attachments for note {}: {}", note.id, err);
+            }
+
             notes.push(note);
         }
 
