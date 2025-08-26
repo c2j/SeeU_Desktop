@@ -13,6 +13,24 @@ use crate::slide::{SlidePlayState, SlideParser, SlideStyleManager};
 use crate::document_converter::DocumentConverter;
 use crate::notebook_selector::NotebookSelectorState;
 
+/// 笔记排序方式
+#[derive(Debug, Clone, PartialEq)]
+pub enum NoteSortBy {
+    /// 按添加顺序（最新添加的在前）
+    CreatedTime,
+    /// 按更新时间（最近更新的在前）
+    UpdatedTime,
+}
+
+/// 笔记视图模式
+#[derive(Debug, Clone, PartialEq)]
+pub enum NoteViewMode {
+    /// 树状视图 - 按笔记本分组显示
+    TreeView,
+    /// 时间视图 - 所有笔记按时间排序的扁平列表
+    TimeView,
+}
+
 /// 删除确认类型
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeleteConfirmationType {
@@ -92,6 +110,13 @@ pub struct DbINoteState {
     pub settings_syntax_highlight: bool,           // 语法高亮
     pub settings_show_line_numbers: bool,          // 显示行号
 
+    // 笔记排序设置
+    pub note_sort_by: NoteSortBy,                  // 笔记排序方式
+    pub note_view_mode: NoteViewMode,              // 笔记视图模式
+
+    // 全局笔记列表（用于时间视图）
+    pub global_notes: Vec<String>,                 // 全局笔记ID列表，按时间排序
+
     // 高级功能设置
     pub settings_enable_plugin_system: bool,       // 启用插件系统
     pub settings_enable_ai_integration: bool,      // 启用AI集成
@@ -162,6 +187,13 @@ impl Default for DbINoteState {
             settings_auto_save: true,                   // 自动保存
             settings_syntax_highlight: true,            // 语法高亮
             settings_show_line_numbers: false,          // 不显示行号
+
+            // 笔记排序设置默认值
+            note_sort_by: NoteSortBy::CreatedTime,       // 默认按添加顺序排序
+            note_view_mode: NoteViewMode::TreeView,      // 默认树状视图
+
+            // 全局笔记列表
+            global_notes: Vec::new(),                    // 初始为空
 
             // 高级功能设置默认值
             settings_enable_plugin_system: false,       // 默认禁用插件系统
@@ -647,9 +679,19 @@ impl DbINoteState {
     /// Load notes for notebook
     pub fn load_notes_for_notebook(&mut self, notebook_id: &str) -> Result<(), String> {
         if let Ok(storage) = self.storage.lock() {
-            match storage.get_notes_for_notebook(notebook_id) {
+            match storage.get_notes_for_notebook_sorted(notebook_id, &self.note_sort_by) {
                 Ok(notes) => {
                     log::debug!("重新加载笔记本 {} 的 {} 个笔记", notebook_id, notes.len());
+
+                    // 更新笔记本的note_ids以反映新的排序
+                    if let Some(notebook) = self.notebooks.iter_mut().find(|nb| nb.id == notebook_id) {
+                        notebook.note_ids.clear();
+                        for note in &notes {
+                            notebook.note_ids.push(note.id.clone());
+                        }
+                    }
+
+                    // 更新notes HashMap
                     for note in notes {
                         self.notes.insert(note.id.clone(), note);
                     }
@@ -1322,5 +1364,65 @@ impl DbINoteState {
         self.insert_image_at_cursor(&image_markdown);
         log::info!("Image pasted and inserted into note");
         Ok(())
+    }
+
+    /// 设置笔记排序方式
+    pub fn set_note_sort_by(&mut self, sort_by: NoteSortBy) {
+        if self.note_sort_by != sort_by {
+            self.note_sort_by = sort_by;
+            // 重新加载当前笔记本的笔记以应用新的排序
+            if let Some(notebook_idx) = self.current_notebook {
+                if notebook_idx < self.notebooks.len() {
+                    let notebook_id = self.notebooks[notebook_idx].id.clone();
+                    self.load_notes_for_notebook(&notebook_id);
+                }
+            }
+        }
+    }
+
+    /// 获取当前笔记排序方式
+    pub fn get_note_sort_by(&self) -> &NoteSortBy {
+        &self.note_sort_by
+    }
+
+    /// 设置笔记视图模式
+    pub fn set_note_view_mode(&mut self, view_mode: NoteViewMode) {
+        if self.note_view_mode != view_mode {
+            self.note_view_mode = view_mode;
+            // 如果切换到时间视图，加载全局笔记列表
+            if self.note_view_mode == NoteViewMode::TimeView {
+                self.load_global_notes();
+            }
+        }
+    }
+
+    /// 获取当前笔记视图模式
+    pub fn get_note_view_mode(&self) -> &NoteViewMode {
+        &self.note_view_mode
+    }
+
+    /// 加载全局笔记列表（按时间排序）
+    pub fn load_global_notes(&mut self) {
+        if let Ok(storage) = self.storage.lock() {
+            match storage.get_all_notes_sorted(&self.note_sort_by) {
+                Ok(notes) => {
+                    log::debug!("加载全局笔记列表: {} 个笔记", notes.len());
+
+                    // 更新全局笔记ID列表
+                    self.global_notes.clear();
+                    for note in &notes {
+                        self.global_notes.push(note.id.clone());
+                    }
+
+                    // 更新notes HashMap
+                    for note in notes {
+                        self.notes.insert(note.id.clone(), note);
+                    }
+                },
+                Err(e) => {
+                    log::error!("加载全局笔记列表失败: {}", e);
+                }
+            }
+        }
     }
 }

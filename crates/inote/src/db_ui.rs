@@ -240,6 +240,35 @@ pub fn render_note_list(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 });
             });
 
+            // 排序控件
+            ui.horizontal(|ui| {
+                ui.label("排序：");
+
+                let current_sort = state.get_note_sort_by().clone();
+
+                // 按添加顺序排序按钮
+                let created_button_text = if current_sort == crate::db_state::NoteSortBy::CreatedTime {
+                    "📅 添加顺序 ✓"
+                } else {
+                    "📅 添加顺序"
+                };
+
+                if ui.button(created_button_text).clicked() {
+                    state.set_note_sort_by(crate::db_state::NoteSortBy::CreatedTime);
+                }
+
+                // 按更新时间排序按钮
+                let updated_button_text = if current_sort == crate::db_state::NoteSortBy::UpdatedTime {
+                    "🕒 更新时间 ✓"
+                } else {
+                    "🕒 更新时间"
+                };
+
+                if ui.button(updated_button_text).clicked() {
+                    state.set_note_sort_by(crate::db_state::NoteSortBy::UpdatedTime);
+                }
+            });
+
             ui.separator();
 
             // Notes list
