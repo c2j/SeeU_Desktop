@@ -74,6 +74,7 @@ pub struct ChatResponseMessage {
     pub content: Option<String>,  // 可选，当有tool_calls时可能为空
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    // 注意：serde默认会忽略未知字段，如某些LLM可能返回的 name 字段
 }
 
 /// 聊天响应 (OpenAI compatible)
@@ -86,6 +87,7 @@ pub struct ChatResponse {
     pub model: Option<String>,
     pub choices: Vec<Choice>,  // 唯一必需的字段
     pub usage: Option<Usage>,
+    // 注意：serde默认会忽略未知字段，增强对不同LLM服务的兼容性
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +113,7 @@ pub struct ChatStreamResponse {
     pub created: Option<u64>,
     pub model: Option<String>,
     pub choices: Vec<StreamChoice>,  // 唯一必需的字段
+    // 注意：serde默认会忽略未知字段，增强对不同LLM服务的兼容性
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +129,7 @@ pub struct Delta {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    // 注意：serde默认会忽略未知字段，如某些LLM可能返回的 name 字段
 }
 
 /// Tool definition for Function Calling (OpenAI compatible)
@@ -280,8 +284,60 @@ impl ApiService {
             return Err(anyhow!(ApiError::ApiResponseError(error_text)));
         }
 
-        // 解析响应
-        let chat_response: ChatResponse = response.json().await?;
+        // 解析响应，增强容错性
+        let response_text = response.text().await?;
+        log::debug!("📥 原始响应文本: {}", response_text);
+
+        let chat_response: ChatResponse = match serde_json::from_str(&response_text) {
+            Ok(response) => response,
+            Err(e) => {
+                log::error!("❌ JSON解析失败: {}", e);
+                log::error!("📄 原始响应内容: {}", response_text);
+
+                // 尝试解析为通用JSON值，提取关键信息
+                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&response_text) {
+                    log::info!("🔧 尝试从通用JSON中提取响应信息");
+
+                    // 尝试手动构建ChatResponse
+                    if let Some(choices) = json_value.get("choices").and_then(|v| v.as_array()) {
+                        if let Some(first_choice) = choices.first() {
+                            if let Some(message) = first_choice.get("message") {
+                                let content = message.get("content")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+
+                                let role = message.get("role")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+
+                                log::info!("✅ 成功从通用JSON中提取内容，长度: {}", content.len());
+
+                                // 构建兼容的响应
+                                return Ok(ChatResponse {
+                                    id: json_value.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    object: json_value.get("object").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    created: json_value.get("created").and_then(|v| v.as_u64()),
+                                    model: json_value.get("model").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    choices: vec![Choice {
+                                        index: first_choice.get("index").and_then(|v| v.as_u64()).map(|v| v as u32),
+                                        message: ChatResponseMessage {
+                                            role,
+                                            content: Some(content),
+                                            tool_calls: None,
+                                        },
+                                        finish_reason: first_choice.get("finish_reason").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    }],
+                                    usage: None,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                return Err(anyhow!(ApiError::JsonError(e)));
+            }
+        };
 
         // 打印完整的响应JSON信息
         log::info!("📥 完整响应JSON:");
@@ -408,8 +464,69 @@ impl ApiService {
             return Err(anyhow!(ApiError::ApiResponseError(error_text)));
         }
 
-        // 解析响应
-        let chat_response: ChatResponse = response.json().await?;
+        // 解析响应，增强容错性
+        let response_text = response.text().await?;
+        log::debug!("📥 原始响应文本: {}", response_text);
+
+        let chat_response: ChatResponse = match serde_json::from_str(&response_text) {
+            Ok(response) => response,
+            Err(e) => {
+                log::error!("❌ JSON解析失败: {}", e);
+                log::error!("📄 原始响应内容: {}", response_text);
+
+                // 尝试解析为通用JSON值，提取关键信息
+                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&response_text) {
+                    log::info!("🔧 尝试从通用JSON中提取响应信息");
+
+                    // 尝试手动构建ChatResponse
+                    if let Some(choices) = json_value.get("choices").and_then(|v| v.as_array()) {
+                        if let Some(first_choice) = choices.first() {
+                            if let Some(message) = first_choice.get("message") {
+                                let content = message.get("content")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+
+                                let role = message.get("role")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+
+                                log::info!("✅ 成功从通用JSON中提取内容，长度: {}", content.len());
+
+                                // 构建兼容的响应
+                                let fallback_response = ChatResponse {
+                                    id: json_value.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    object: json_value.get("object").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    created: json_value.get("created").and_then(|v| v.as_u64()),
+                                    model: json_value.get("model").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    choices: vec![Choice {
+                                        index: first_choice.get("index").and_then(|v| v.as_u64()).map(|v| v as u32),
+                                        message: ChatResponseMessage {
+                                            role,
+                                            content: Some(content),
+                                            tool_calls: None,
+                                        },
+                                        finish_reason: first_choice.get("finish_reason").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                    }],
+                                    usage: None,
+                                };
+
+                                // 继续执行后续的响应处理逻辑
+                                fallback_response
+                            } else {
+                                return Err(anyhow!(ApiError::JsonError(e)));
+                            }
+                        } else {
+                            return Err(anyhow!(ApiError::JsonError(e)));
+                        }
+                    } else {
+                        return Err(anyhow!(ApiError::JsonError(e)));
+                    }
+                } else {
+                    return Err(anyhow!(ApiError::JsonError(e)));
+                }
+            }
+        };
 
         // 打印完整的响应JSON信息
         log::info!("📥 完整响应JSON:");
@@ -615,7 +732,32 @@ impl ApiService {
                                     }
                                 },
                                 Err(e) => {
-                                    log::error!("Failed to parse stream response: {} - Line: {}", e, json_str);
+                                    log::error!("❌ 流式响应JSON解析失败: {} - Line: {}", e, json_str);
+
+                                    // 尝试从通用JSON中提取流式内容
+                                    if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                        log::info!("🔧 尝试从通用JSON中提取流式响应信息");
+
+                                        if let Some(choices) = json_value.get("choices").and_then(|v| v.as_array()) {
+                                            if let Some(first_choice) = choices.first() {
+                                                if let Some(delta) = first_choice.get("delta") {
+                                                    if let Some(delta_content) = delta.get("content").and_then(|v| v.as_str()) {
+                                                        content.push_str(delta_content);
+                                                        callback(content.clone());
+                                                        log::info!("✅ 成功从通用JSON中提取流式内容");
+                                                    }
+                                                }
+
+                                                if let Some(finish_reason) = first_choice.get("finish_reason") {
+                                                    if !finish_reason.is_null() {
+                                                        return Ok(());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        log::error!("🚫 无法解析为通用JSON，跳过此行");
+                                    }
                                 }
                             }
                         }

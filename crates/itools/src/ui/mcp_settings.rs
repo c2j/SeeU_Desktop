@@ -350,9 +350,11 @@ impl McpSettingsUi {
         }
 
         // Server directory tree
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            self.render_server_directories(ui);
-        });
+        egui::ScrollArea::vertical()
+            .id_source("mcp_server_directory_tree")
+            .show(ui, |ui| {
+                self.render_server_directories(ui);
+            });
 
         // Dialogs
         self.render_add_server_dialog(ctx);
@@ -524,6 +526,7 @@ impl McpSettingsUi {
                                     if !stdout.is_empty() {
                                         ui.label(egui::RichText::new("标准输出 (stdout):").strong().color(egui::Color32::DARK_GREEN));
                                         egui::ScrollArea::vertical()
+                                            .id_source(format!("server_test_stdout_{}", server_id))
                                             .max_height(100.0)
                                             .show(ui, |ui| {
                                                 ui.add(
@@ -540,6 +543,7 @@ impl McpSettingsUi {
                                     if !stderr.is_empty() {
                                         ui.label(egui::RichText::new("错误输出 (stderr):").strong().color(egui::Color32::DARK_BLUE));
                                         egui::ScrollArea::vertical()
+                                            .id_source(format!("server_test_stderr_{}", server_id))
                                             .max_height(100.0)
                                             .show(ui, |ui| {
                                                 ui.add(
@@ -581,6 +585,7 @@ impl McpSettingsUi {
                                     if !stdout.is_empty() {
                                         ui.label(egui::RichText::new("标准输出 (stdout):").strong());
                                         egui::ScrollArea::vertical()
+                                            .id_source(format!("server_error_stdout_{}", server_id))
                                             .max_height(100.0)
                                             .show(ui, |ui| {
                                                 ui.add(
@@ -597,6 +602,7 @@ impl McpSettingsUi {
                                     if !stderr.is_empty() {
                                         ui.label(egui::RichText::new("错误输出 (stderr):").strong().color(egui::Color32::LIGHT_RED));
                                         egui::ScrollArea::vertical()
+                                            .id_source(format!("server_error_stderr_{}", server_id))
                                             .max_height(100.0)
                                             .show(ui, |ui| {
                                                 ui.add(
@@ -619,7 +625,7 @@ impl McpSettingsUi {
                 if let Some(capabilities) = self.server_capabilities.get(&server_id).cloned() {
                     log::debug!("Rendering capabilities for server {}: {} tools, {} resources, {} prompts",
                                server_id, capabilities.tools.len(), capabilities.resources.len(), capabilities.prompts.len());
-                    self.render_server_capabilities(ui, &capabilities);
+                    self.render_server_capabilities(ui, server_id, &capabilities);
                 } else {
                     log::debug!("No capabilities found for server {} in UI cache", server_id);
                 }
@@ -811,6 +817,7 @@ impl McpSettingsUi {
 
                     // JSON text area
                     egui::ScrollArea::vertical()
+                        .id_source("edit_server_json_text_area")
                         .max_height(400.0)
                         .show(ui, |ui| {
                             ui.add(
@@ -1004,6 +1011,7 @@ impl McpSettingsUi {
 
         // JSON text area
         egui::ScrollArea::vertical()
+            .id_source("add_server_json_text_area")
             .max_height(250.0)
             .show(ui, |ui| {
                 ui.add(
@@ -1863,7 +1871,9 @@ impl McpSettingsUi {
     }
 
     /// Render server capabilities information
-    fn render_server_capabilities(&mut self, ui: &mut Ui, capabilities: &ServerCapabilities) {
+    fn render_server_capabilities(&mut self, ui: &mut Ui, server_id: Uuid, capabilities: &ServerCapabilities) {
+        // Generate a unique context ID for this capabilities display using server_id
+        let context_id = format!("capabilities_{}", server_id);
         ui.indent("capabilities", |ui| {
             ui.separator();
             ui.label(RichText::new("🔧 服务器能力").strong().color(Color32::BLUE));
@@ -1878,7 +1888,7 @@ impl McpSettingsUi {
                 ui.indent("tools", |ui| {
                     // 为工具列表添加滚动区域，支持长列表和长描述
                     ScrollArea::vertical()
-                        .id_source("server_capabilities_tools")
+                        .id_source(format!("{}_tools", context_id))
                         .max_height(150.0)  // 限制最大高度为150像素
                         .show(ui, |ui| {
                             for tool in &capabilities.tools {
@@ -1904,7 +1914,7 @@ impl McpSettingsUi {
                 ui.indent("resources", |ui| {
                     // 为资源列表添加滚动区域，支持长列表和长描述
                     ScrollArea::vertical()
-                        .id_source("server_capabilities_resources")
+                        .id_source(format!("{}_resources", context_id))
                         .max_height(150.0)  // 限制最大高度为150像素
                         .show(ui, |ui| {
                             for resource in &capabilities.resources {
@@ -1930,7 +1940,7 @@ impl McpSettingsUi {
                 ui.indent("prompts", |ui| {
                     // 为提示列表添加滚动区域，支持长列表和长描述
                     ScrollArea::vertical()
-                        .id_source("server_capabilities_prompts")
+                        .id_source(format!("{}_prompts", context_id))
                         .max_height(150.0)  // 限制最大高度为150像素
                         .show(ui, |ui| {
                             for prompt in &capabilities.prompts {
@@ -2423,6 +2433,7 @@ impl McpSettingsUi {
 
                             // Tab content with scrollable area
                             ScrollArea::vertical()
+                                .id_source("test_result_dialog_content")
                                 .max_height(300.0)
                                 .show(ui, |ui| {
                                     match dialog.active_tab {
@@ -3520,6 +3531,7 @@ impl McpSettingsUi {
 
             // Tab content with scrollable area
             ScrollArea::vertical()
+                .id_source("functionality_test_dialog_content")
                 .max_height(300.0)
                 .show(ui, |ui| {
                     match dialog.active_tab {

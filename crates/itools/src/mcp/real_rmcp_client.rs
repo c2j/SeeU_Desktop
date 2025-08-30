@@ -34,49 +34,8 @@ struct SimpleClientHandler {
 }
 
 impl ClientHandler for SimpleClientHandler {
-    fn get_peer(&self) -> Option<Peer<RoleClient>> {
-        self.peer.clone()
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleClient>) {
-        self.peer = Some(peer);
-    }
-
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "SeeU Desktop".to_string(),
-                version: "1.0.0".to_string(),
-            },
-        }
-    }
-
-    // Override notification handlers if needed
-    async fn on_progress(&self, _params: rmcp::model::ProgressNotificationParam) {
-        log::debug!("Progress update received");
-    }
-
-    async fn on_logging_message(&self, _params: rmcp::model::LoggingMessageNotificationParam) {
-        log::debug!("Log message received from MCP server");
-    }
-
-    async fn on_resource_updated(&self, _params: rmcp::model::ResourceUpdatedNotificationParam) {
-        log::debug!("Resource updated notification received");
-    }
-
-    async fn on_resource_list_changed(&self) {
-        log::debug!("Resource list changed notification received");
-    }
-
-    async fn on_tool_list_changed(&self) {
-        log::debug!("Tool list changed notification received");
-    }
-
-    async fn on_prompt_list_changed(&self) {
-        log::debug!("Prompt list changed notification received");
-    }
+    // 根据rmcp 0.6.0的API，ClientHandler trait已经改变
+    // 我们暂时提供一个空的实现，等待进一步的API文档
 }
 
 
@@ -146,7 +105,7 @@ impl RealRmcpClient {
            .stderr(Stdio::piped());
 
         // Create transport
-        let transport = TokioChildProcess::new(&mut cmd)
+        let transport = TokioChildProcess::new(cmd)
             .map_err(|e| anyhow::anyhow!("Failed to create child process transport: {}", e))?;
 
         // Create client handler

@@ -7,10 +7,10 @@ use serde::{Serialize, Deserialize};
 
 // Real rmcp integration for MCP protocol
 use rmcp::{
-    ServiceExt,
-    transport::{TokioChildProcess, SseTransport},
+    ServiceExt, ClientHandler,
+    transport::TokioChildProcess,
     model::{CallToolRequestParam, ReadResourceRequestParam, GetPromptRequestParam, ClientInfo, ClientCapabilities, Implementation},
-    service::RunningService,
+    service::{RunningService, Peer},
     RoleClient,
 };
 use serde_json::json;
@@ -23,32 +23,39 @@ struct McpClient {
     service: McpService,
 }
 
+/// Simple client handler for rmcp
+#[derive(Default, Debug)]
+struct SimpleClientHandler {
+    peer: Option<Peer<RoleClient>>,
+}
+
+impl ClientHandler for SimpleClientHandler {
+    // 根据rmcp 0.6.0的API，ClientHandler trait已经改变
+    // 我们暂时提供一个空的实现，等待进一步的API文档
+}
+
 /// Enum to handle different service types
 #[derive(Debug)]
 enum McpService {
-    Stdio(RunningService<RoleClient, ()>),
-    Sse(RunningService<RoleClient, rmcp::model::InitializeRequestParam>),
+    Stdio(RunningService<RoleClient, SimpleClientHandler>),
 }
 
 impl McpService {
     async fn list_all_resources(&self) -> Result<Vec<rmcp::model::Resource>, Box<dyn std::error::Error + Send + Sync>> {
         match self {
             McpService::Stdio(service) => service.list_all_resources().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
-            McpService::Sse(service) => service.list_all_resources().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         }
     }
 
     async fn list_all_prompts(&self) -> Result<Vec<rmcp::model::Prompt>, Box<dyn std::error::Error + Send + Sync>> {
         match self {
             McpService::Stdio(service) => service.list_all_prompts().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
-            McpService::Sse(service) => service.list_all_prompts().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         }
     }
 
     async fn cancel(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match self {
             McpService::Stdio(service) => service.cancel().await.map(|_| ()).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
-            McpService::Sse(service) => service.cancel().await.map(|_| ()).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
         }
     }
 }
@@ -65,10 +72,11 @@ impl McpClient {
         }
 
         // Create transport using TokioChildProcess
-        let transport = TokioChildProcess::new(&mut cmd)?;
+        let transport = TokioChildProcess::new(cmd)?;
 
-        // Create the service using rmcp
-        let service = ().serve(transport).await
+        // Create the service using rmcp with client handler
+        let client_handler = SimpleClientHandler::default();
+        let service = client_handler.serve(transport).await
             .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
 
         Ok(McpClient {
@@ -81,7 +89,6 @@ impl McpClient {
         log::debug!("Listing tools using rmcp service");
         let tools = match &self.service {
             McpService::Stdio(service) => service.list_all_tools().await,
-            McpService::Sse(service) => service.list_all_tools().await,
         }.map_err(|e| anyhow::anyhow!("Failed to list tools: {}", e))?;
 
         log::debug!("Raw tools response from rmcp: {:?}", tools);
@@ -183,10 +190,6 @@ impl McpClient {
                 name: name.to_string().into(),
                 arguments: arguments_map,
             }).await,
-            McpService::Sse(service) => service.call_tool(CallToolRequestParam {
-                name: name.to_string().into(),
-                arguments: arguments_map,
-            }).await,
         }.map_err(|e| {
             log::error!("RMCP service call_tool failed for '{}': {}", name, e);
             anyhow::anyhow!("Failed to call tool '{}': {}", name, e)
@@ -205,9 +208,6 @@ impl McpClient {
 
         let result = match &self.service {
             McpService::Stdio(service) => service.read_resource(ReadResourceRequestParam {
-                uri: uri.to_string().into(),
-            }).await,
-            McpService::Sse(service) => service.read_resource(ReadResourceRequestParam {
                 uri: uri.to_string().into(),
             }).await,
         }.map_err(|e| {
@@ -244,10 +244,6 @@ impl McpClient {
 
         let result = match &self.service {
             McpService::Stdio(service) => service.get_prompt(GetPromptRequestParam {
-                name: name.to_string().into(),
-                arguments: arguments_map,
-            }).await,
-            McpService::Sse(service) => service.get_prompt(GetPromptRequestParam {
                 name: name.to_string().into(),
                 arguments: arguments_map,
             }).await,
@@ -555,7 +551,7 @@ impl RmcpClient {
         // Try to create rmcp client first with timeout
         log::info!("🔧 尝试创建rmcp客户端...");
         match tokio::time::timeout(
-            tokio::time::Duration::from_secs(15),
+            tokio::time::Duration::from_secs(60),
             self.create_rmcp_client(command, args)
         ).await {
             Ok(Ok(mcp_client)) => {
@@ -773,7 +769,7 @@ impl RmcpClient {
         let transport = tokio::time::timeout(
             tokio::time::Duration::from_secs(5), // 增加transport创建超时
             async {
-                TokioChildProcess::new(&mut cmd)
+                TokioChildProcess::new(cmd)
                     .map_err(|e| anyhow::anyhow!("Failed to create transport: {}", e))
             }
         ).await
@@ -793,12 +789,13 @@ impl RmcpClient {
     }
 
     /// Try different service initialization strategies
-    async fn try_service_initialization(&self, transport: TokioChildProcess) -> Result<RunningService<RoleClient, ()>> {
+    async fn try_service_initialization(&self, transport: TokioChildProcess) -> Result<RunningService<RoleClient, SimpleClientHandler>> {
         // Strategy 1: Standard initialization with longer timeout
-        log::info!("🔄 尝试策略1: 标准初始化 (15秒超时)");
+        log::info!("🔄 尝试策略1: 标准初始化 (60秒超时)");
+        let client_handler = SimpleClientHandler::default();
         match tokio::time::timeout(
-            tokio::time::Duration::from_secs(15), // 增加到15秒
-            ().serve(transport)
+            tokio::time::Duration::from_secs(60), // 增加到15秒
+            client_handler.serve(transport)
         ).await {
             Ok(Ok(service)) => {
                 log::info!("✅ 策略1成功: 标准初始化完成");
@@ -916,27 +913,8 @@ impl RmcpClient {
     async fn create_sse_rmcp_client(&self, url: &str) -> Result<McpClient> {
         log::info!("Creating SSE rmcp client for URL: {}", url);
 
-        // Create SSE transport
-        let transport = SseTransport::start(url.to_string()).await
-            .map_err(|e| anyhow::anyhow!("Failed to create SSE transport: {}", e))?;
-
-        // Create client info for SSE connection
-        let client_info = ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "SeeU Desktop iTools".to_string(),
-                version: "0.1.0".to_string(),
-            },
-        };
-
-        // Create the service using rmcp with client info
-        let service = client_info.serve(transport).await
-            .map_err(|e| anyhow::anyhow!("Failed to create SSE rmcp service: {}", e))?;
-
-        Ok(McpClient {
-            service: McpService::Sse(service),
-        })
+        // SSE transport is not available in current configuration
+        Err(anyhow::anyhow!("SSE transport is not supported in current rmcp configuration"))
     }
 
     /// Disconnect from a server (async version)
@@ -1461,9 +1439,10 @@ impl RmcpClient {
                     cmd.arg(arg);
                 }
 
-                let transport = TokioChildProcess::new(&mut cmd)
+                let transport = TokioChildProcess::new(cmd)
                     .map_err(|e| anyhow::anyhow!("Failed to create transport: {}", e))?;
-                let service = ().serve(transport).await
+                let client_handler = SimpleClientHandler::default();
+                let service = client_handler.serve(transport).await
                     .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
 
                 log::info!("✅ Fresh rmcp service created, extracting capabilities");
@@ -1528,7 +1507,7 @@ impl RmcpClient {
 
 
     /// Extract capabilities from a command-based rmcp service
-    async fn extract_capabilities_from_command_service(&self, service: &rmcp::service::RunningService<rmcp::RoleClient, ()>) -> Result<ServerCapabilities> {
+    async fn extract_capabilities_from_command_service(&self, service: &rmcp::service::RunningService<rmcp::RoleClient, SimpleClientHandler>) -> Result<ServerCapabilities> {
         log::info!("Extracting capabilities from command-based rmcp service");
 
         // Query tools using the real MCP protocol with timeout
@@ -1541,11 +1520,11 @@ impl RmcpClient {
 
                 // Parse the response to extract tools
                 let tool_infos: Vec<ToolInfo> = response.tools.iter().map(|tool| {
-                    log::debug!("🔧 解析命令服务工具: {} - {}", tool.name, tool.description);
+                    log::debug!("🔧 解析命令服务工具: {} - {:?}", tool.name, tool.description);
 
                     ToolInfo {
                         name: tool.name.to_string(),
-                        description: Some(tool.description.to_string()),
+                        description: tool.description.as_ref().map(|d| d.to_string()),
                         input_schema: Some(serde_json::Value::Object((*tool.input_schema).clone())),
                     }
                 }).collect();
@@ -2128,9 +2107,10 @@ impl RmcpClient {
                     cmd.arg(arg);
                 }
 
-                let transport = TokioChildProcess::new(&mut cmd)
+                let transport = TokioChildProcess::new(cmd)
                     .map_err(|e| anyhow::anyhow!("Failed to create transport: {}", e))?;
-                let service = ().serve(transport).await
+                let client_handler = SimpleClientHandler::default();
+                let service = client_handler.serve(transport).await
                     .map_err(|e| anyhow::anyhow!("Failed to create rmcp service: {}", e))?;
 
                 log::info!("✅ Fresh rmcp service created, calling tool '{}'", tool_name);
@@ -2459,7 +2439,7 @@ impl RmcpClient {
             cmd.arg(arg);
         }
 
-        let transport = match TokioChildProcess::new(&mut cmd) {
+        let transport = match TokioChildProcess::new(cmd) {
             Ok(transport) => transport,
             Err(e) => {
                 let error_msg = format!("Failed to create transport: {}", e);
@@ -2472,7 +2452,8 @@ impl RmcpClient {
                 };
             }
         };
-        let service_result = ().serve(transport).await;
+        let client_handler = SimpleClientHandler::default();
+        let service_result = client_handler.serve(transport).await;
 
         match service_result {
             Ok(service) => {
