@@ -108,7 +108,7 @@ fn render_tree_mode(ui: &mut egui::Ui, state: &mut DbINoteState) {
         for (notebook_idx, notebook) in notebooks.iter().enumerate() {
             let is_notebook_selected = state.current_notebook == Some(notebook_idx);
 
-            // 笔记本行
+            // 笔记本行 - 使用延时隐藏机制
             let notebook_response = ui.horizontal(|ui| {
                 // 展开/折叠图标
                 if ui.button(if notebook.expanded { "▼" } else { "▶" }).clicked() {
@@ -141,10 +141,31 @@ fn render_tree_mode(ui: &mut egui::Ui, state: &mut DbINoteState) {
                 }
 
                 // 检测鼠标是否悬停在笔记本行上
-                let is_hovered = name_response.hovered();
+                let is_hovered = name_response.hovered() || ui.ui_contains_pointer();
 
-                // 排序按钮 - 只在悬停时显示
+                // 更新悬停状态和时间戳
+                let current_time = std::time::Instant::now();
+                let notebook_key = format!("notebook_hover_{}", notebook_idx);
+
                 if is_hovered {
+                    // 鼠标悬停时，更新最后悬停时间
+                    state.last_hover_times.insert(notebook_key.clone(), current_time);
+                }
+
+                // 检查是否应该显示按钮（悬停中或延时期内）
+                let should_show_buttons = if is_hovered {
+                    true
+                } else {
+                    // 检查是否在延时期内（2秒）
+                    if let Some(last_hover_time) = state.last_hover_times.get(&notebook_key) {
+                        current_time.duration_since(*last_hover_time).as_secs_f32() < 2.0
+                    } else {
+                        false
+                    }
+                };
+
+                // 操作按钮 - 在悬停或延时期内显示
+                if should_show_buttons {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // 删除按钮
                         if ui.button("🗑").clicked() {

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use chrono::{DateTime, Utc};
 use log;
 
@@ -117,6 +118,9 @@ pub struct DbINoteState {
     // 全局笔记列表（用于时间视图）
     pub global_notes: Vec<String>,                 // 全局笔记ID列表，按时间排序
 
+    // UI交互状态
+    pub last_hover_times: HashMap<String, Instant>, // 记录各个UI元素的最后悬停时间
+
     // 高级功能设置
     pub settings_enable_plugin_system: bool,       // 启用插件系统
     pub settings_enable_ai_integration: bool,      // 启用AI集成
@@ -194,6 +198,9 @@ impl Default for DbINoteState {
 
             // 全局笔记列表
             global_notes: Vec::new(),                    // 初始为空
+
+            // UI交互状态
+            last_hover_times: HashMap::new(),           // 初始为空
 
             // 高级功能设置默认值
             settings_enable_plugin_system: false,       // 默认禁用插件系统

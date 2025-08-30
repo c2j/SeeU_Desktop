@@ -43,8 +43,7 @@ wasmtime = "13.0"
 wasmtime-wasi = "13.0"
 
 # MCP Protocol SDK
-rmcp = { version = "0.1.5", features = ["client", "transport-child-process", "transport-sse"] }
-
+rmcp = { version = "0.6.0", features = ["client", "transport-child-process"] }
 # JSON-RPC for MCP protocol (legacy)
 jsonrpc-core = "18.0"
 jsonrpc-derive = "18.0"
