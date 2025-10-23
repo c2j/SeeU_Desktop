@@ -54,6 +54,18 @@ pub fn load_window_icon() -> Result<egui::IconData, Box<dyn std::error::Error>> 
     })
 }
 
+/// Load tray icon data (returns raw RGBA bytes)
+pub fn load_tray_icon() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // Use the 16x16 icon for tray icon (standard size for system tray)
+    let icon_data = include_bytes!("../../assets/icons/sizes/icon-16x16.png");
+
+    // Decode the PNG image
+    let image = image::load_from_memory(icon_data)?;
+    let rgba_image = image.to_rgba8();
+
+    Ok(rgba_image.into_raw())
+}
+
 // /// Load icon for specific size
 // pub fn load_icon_for_size(size: IconSize) -> Result<egui::IconData, Box<dyn std::error::Error>> {
 //     let icon_data: &[u8] = match size {

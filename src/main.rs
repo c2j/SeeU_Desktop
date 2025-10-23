@@ -5,6 +5,8 @@ mod services;
 mod utils;
 mod platform;
 mod config;
+mod tray;
+mod sidebar;
 
 use eframe::{self, egui};
 

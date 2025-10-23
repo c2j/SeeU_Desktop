@@ -15,6 +15,7 @@ use crate::services::{
 };
 
 use crate::config::{StartupConfig, StartupMetrics};
+use crate::tray::Tray;
 
 // 导入模块
 use inote::db_state::DbINoteState;
@@ -79,6 +80,15 @@ pub struct SeeUApp {
 
     // MCP sync state
     pub mcp_sync_pending: bool,
+
+    // System tray
+    pub tray: Option<crate::tray::PlatformTray>,
+    pub window_visible: bool,
+    pub minimize_to_tray: bool,
+
+    // Sidebar
+    pub sidebar: Option<crate::sidebar::SidebarWindow>,
+    pub show_sidebar: bool,
 }
 
 /// Window state for saving and restoring
@@ -333,6 +343,11 @@ impl SeeUApp {
             startup_metrics,
             request_ui_repaint: false,
             mcp_sync_pending: false,
+            tray: None,
+            window_visible: true,
+            minimize_to_tray: true,
+            sidebar: None,
+            show_sidebar: false,
         };
 
         // 设置命令通道
@@ -372,6 +387,12 @@ impl SeeUApp {
 
         // TEMPORARILY DISABLED: Adjust window state for DPI scaling after egui context is available
         // app.adjust_window_state_for_dpi(&cc.egui_ctx);
+
+        // Initialize system tray
+        app.initialize_tray();
+
+        // Initialize sidebar
+        app.initialize_sidebar();
 
         app
     }
@@ -2248,10 +2269,165 @@ impl SeeUApp {
             egui::Color32::from_rgb(100, 116, 139),
         );
     }
+
+    /// Initialize system tray
+    fn initialize_tray(&mut self) {
+        // Load tray icon
+        let icon_data = match crate::utils::icon::load_tray_icon() {
+            Ok(data) => data,
+            Err(e) => {
+                log::warn!("Failed to load tray icon: {}, using default", e);
+                // Use a simple default icon (1x1 transparent pixel)
+                vec![0, 0, 0, 0]
+            }
+        };
+
+        // Create default menu
+        let menu = crate::tray::default_menu();
+
+        // Create tray
+        match crate::tray::create_tray(&icon_data, menu) {
+            Ok(tray) => {
+                self.tray = Some(tray);
+                log::info!("System tray initialized successfully");
+            }
+            Err(e) => {
+                log::error!("Failed to initialize system tray: {}", e);
+            }
+        }
+    }
+
+    /// Handle tray events
+    fn handle_tray_events(&mut self, ctx: &egui::Context) {
+        // Collect events first to avoid borrowing conflicts
+        let mut events = Vec::new();
+        if let Some(ref mut tray) = self.tray {
+            while let Some(event) = tray.try_recv_event() {
+                events.push(event);
+            }
+        }
+
+        // Process events
+        for event in events {
+            match event {
+                crate::tray::TrayEvent::LeftClick | crate::tray::TrayEvent::DoubleClick => {
+                    self.toggle_window_visibility(ctx);
+                }
+                crate::tray::TrayEvent::RightClick => {
+                    // Right click is handled by the tray menu
+                }
+                crate::tray::TrayEvent::MenuItemClick(item_id) => {
+                    self.handle_tray_menu_click(&item_id, ctx);
+                }
+            }
+        }
+    }
+
+    /// Handle tray menu item clicks
+    fn handle_tray_menu_click(&mut self, item_id: &str, ctx: &egui::Context) {
+        match item_id {
+            "show" => {
+                self.show_window(ctx);
+            }
+            "hide" => {
+                self.hide_window(ctx);
+            }
+            "sidebar" => {
+                self.show_sidebar = !self.show_sidebar;
+                log::info!("Sidebar toggled: {}", self.show_sidebar);
+            }
+            "settings" => {
+                self.show_window(ctx);
+                self.active_module = Module::Settings;
+            }
+            "quit" => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            _ => {
+                log::debug!("Unknown tray menu item clicked: {}", item_id);
+            }
+        }
+    }
+
+    /// Toggle window visibility
+    fn toggle_window_visibility(&mut self, ctx: &egui::Context) {
+        if self.window_visible {
+            self.hide_window(ctx);
+        } else {
+            self.show_window(ctx);
+        }
+    }
+
+    /// Show the main window
+    fn show_window(&mut self, ctx: &egui::Context) {
+        self.window_visible = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    /// Hide the main window to tray
+    fn hide_window(&mut self, ctx: &egui::Context) {
+        if self.minimize_to_tray {
+            self.window_visible = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            // 当主窗口隐藏时，显示侧边栏
+            self.show_sidebar = true;
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+    }
+
+    /// Initialize sidebar
+    fn initialize_sidebar(&mut self) {
+        let config = crate::sidebar::SidebarConfig::default();
+
+        // 暂时在所有平台都使用内嵌侧边栏
+        match crate::sidebar::create_sidebar_window(config) {
+            Ok(sidebar) => {
+                self.sidebar = Some(sidebar);
+                log::info!("Sidebar initialized successfully");
+            }
+            Err(e) => {
+                log::error!("Failed to initialize sidebar: {}", e);
+            }
+        }
+    }
+
+    /// Handle sidebar events and rendering
+    fn handle_sidebar(&mut self, ctx: &egui::Context) {
+        if self.show_sidebar {
+            if let Some(ref mut sidebar) = self.sidebar {
+                // Update sidebar
+                sidebar.update(ctx);
+
+                // Render sidebar and handle events
+                if let Some(event) = sidebar.render(ctx) {
+                    match event {
+                        crate::sidebar::SidebarEvent::Close => {
+                            self.show_sidebar = false;
+                        }
+                        crate::sidebar::SidebarEvent::Hide => {
+                            self.show_sidebar = false;
+                        }
+                        _ => {
+                            sidebar.handle_event(event);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for SeeUApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Clean up system tray
+        if let Some(tray) = self.tray.take() {
+            if let Err(e) = tray.shutdown() {
+                log::error!("Failed to shutdown tray: {}", e);
+            }
+        }
+
         // Save settings when the application exits
         self.save_all_settings();
     }
@@ -2266,6 +2442,12 @@ impl eframe::App for SeeUApp {
 
         // TEMPORARILY DISABLED: Update window state for saving later
         // self.update_window_state(ctx);
+
+        // Handle tray events
+        self.handle_tray_events(ctx);
+
+        // Handle sidebar
+        self.handle_sidebar(ctx);
 
         // Refresh system information for accurate CPU and memory usage
         self.system_service.refresh();

@@ -76,6 +76,31 @@ ssh2 = "0.9"
 # 网络连接
 # tokio = { version = "1.0", features = ["full"] }
 
+# 系统托盘和窗口管理
+# tray-icon = "0.14.3"  # 暂时注释掉，使用自定义实现
+# winit = "0.29.15"     # 已经通过 eframe 包含
+
+# 平台特定依赖
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.52.0", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libappindicator = "0.9.0"
+gtk = "0.18.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# cocoa = "0.25.0"
+# objc2 = "0.4.1"
+# objc2-foundation = "0.2.0"
+# objc2-app-kit = "0.2.0"
+
 
 
 
