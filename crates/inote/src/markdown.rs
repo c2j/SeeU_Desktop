@@ -525,10 +525,9 @@ impl<'a> MarkdownRenderer<'a> {
             return;
         }
 
-        self.ui.add_space(10.0);
+        self.ui.add_space(8.0);
 
         let max_cols = self.current_table.rows.iter().map(|row| row.len()).max().unwrap_or(0);
-
         if max_cols == 0 {
             return;
         }
@@ -538,68 +537,71 @@ impl<'a> MarkdownRenderer<'a> {
         let is_header_rows = self.current_table.is_header_row.clone();
         let column_alignments = self.current_table.column_alignments.clone();
 
-        // Calculate table dimensions for border drawing
-        let cell_padding = egui::vec2(8.0, 4.0);
-        let min_cell_width = 80.0;
+        // Visual tuning for slide readability
+        let cell_padding = egui::vec2(14.0, 8.0);
+        let min_cell_width = 110.0;
 
         // Get adaptive colors based on current UI theme
         let table_colors = Self::get_adaptive_table_colors(self.ui);
 
-        // Use a frame to create table border
+        // Subtle outer background and rounded border to make the table feel like a card
+        let visuals = self.ui.visuals().clone();
+        let outer_bg = if visuals.dark_mode {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 12)
+        } else {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 6)
+        };
+        let inner_border = Color32::from_rgba_unmultiplied(
+            table_colors.border.r(),
+            table_colors.border.g(),
+            table_colors.border.b(),
+            160,
+        );
+
         egui::Frame::none()
+            .fill(outer_bg)
+            .rounding(egui::Rounding::same(6.0))
             .stroke(egui::Stroke::new(1.0, table_colors.border))
-            .inner_margin(egui::Margin::same(1.0))
+            .inner_margin(egui::Margin::symmetric(4.0, 4.0))
             .show(self.ui, |ui| {
                 // Create unique grid ID for each table
                 let grid_id = format!("markdown_table_{}", self.table_counter);
 
                 egui::Grid::new(grid_id)
-                    .striped(false) // We'll handle striping manually
-                    .spacing([0.0, 0.0]) // No spacing, we'll draw borders
+                    .striped(false)
+                    .spacing([1.0, 1.0])  // 1px spacing between cells for grid lines
                     .min_col_width(min_cell_width)
                     .show(ui, |ui| {
                         for (row_index, row) in table_rows.iter().enumerate() {
                             let is_header = is_header_rows.get(row_index).unwrap_or(&false);
 
                             for (col_index, cell) in row.iter().enumerate() {
-                                if col_index >= max_cols {
-                                    break;
-                                }
+                                if col_index >= max_cols { break; }
 
-                                // Create a frame for each cell with borders
-                                let cell_frame = if *is_header {
-                                    egui::Frame::none()
-                                        .fill(table_colors.header_bg)
-                                        .stroke(egui::Stroke::new(1.0, table_colors.border))
-                                        .inner_margin(cell_padding)
-                                } else if row_index % 2 == 0 {
-                                    egui::Frame::none()
-                                        .fill(table_colors.even_row_bg)
-                                        .stroke(egui::Stroke::new(1.0, table_colors.border))
-                                        .inner_margin(cell_padding)
-                                } else {
-                                    egui::Frame::none()
-                                        .fill(table_colors.odd_row_bg)
-                                        .stroke(egui::Stroke::new(1.0, table_colors.border))
-                                        .inner_margin(cell_padding)
-                                };
-
-                                cell_frame.show(ui, |ui| {
-                                    ui.set_min_width(min_cell_width);
-                                    Self::render_table_cell_static(ui, cell, *is_header, col_index, &column_alignments, &table_colors);
-                                });
-                            }
-
-                            // Fill empty cells with borders
-                            for _ in row.len()..max_cols {
+                                // Frame with stroke creates the cell border
+                                // The stroke is drawn OUTSIDE the inner_margin, so it won't box the text
                                 egui::Frame::none()
-                                    .fill(table_colors.even_row_bg)
-                                    .stroke(egui::Stroke::new(1.0, table_colors.border))
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::new(1.0, inner_border))
                                     .inner_margin(cell_padding)
                                     .show(ui, |ui| {
                                         ui.set_min_width(min_cell_width);
-                                        ui.label("");
+                                        Self::render_table_cell_static(ui, cell, *is_header, col_index, &column_alignments, &table_colors);
                                     });
+                            }
+
+                            // Fill empty trailing cells
+                            if row.len() < max_cols {
+                                for _col_index in row.len()..max_cols {
+                                    egui::Frame::none()
+                                        .fill(Color32::TRANSPARENT)
+                                        .stroke(egui::Stroke::new(1.0, inner_border))
+                                        .inner_margin(cell_padding)
+                                        .show(ui, |ui| {
+                                            ui.set_min_width(min_cell_width);
+                                            ui.label("");
+                                        });
+                                }
                             }
 
                             ui.end_row();
@@ -607,7 +609,7 @@ impl<'a> MarkdownRenderer<'a> {
                     });
             });
 
-        self.ui.add_space(10.0);
+        self.ui.add_space(8.0);
         self.current_table = TableInfo::new();
     }
 
@@ -615,8 +617,16 @@ impl<'a> MarkdownRenderer<'a> {
     fn get_adaptive_table_colors(ui: &egui::Ui) -> TableColors {
         let visuals = ui.visuals();
 
-        // 检测当前是否为深色主题
-        let is_dark_theme = visuals.dark_mode;
+        // 根据 override_text_color（如果存在）来推断背景明暗：
+        // 明亮的文字颜色通常意味着深色背景（例如幻灯片的深色模板）。
+        let infer_dark_from_override = visuals.override_text_color.map(|c| {
+            let br = (c.r() as f32 * 0.299 + c.g() as f32 * 0.587 + c.b() as f32 * 0.114) / 255.0;
+            // 当文字较亮时，推断背景为深色
+            br > 0.6
+        });
+
+        // 优先使用 override 推断结果，否则退回到全局 dark_mode
+        let is_dark_theme = infer_dark_from_override.unwrap_or(visuals.dark_mode);
 
         if is_dark_theme {
             // 深色主题配色
@@ -651,11 +661,11 @@ impl<'a> MarkdownRenderer<'a> {
     ) {
         let mut rich_text = egui::RichText::new(&cell.content);
 
-        // Apply cell formatting with adaptive colors
+        // Apply cell formatting with adaptive colors and tuned sizes for readability
         if is_header {
-            rich_text = rich_text.strong().color(table_colors.header_text);
+            rich_text = rich_text.strong().size(15.0).color(table_colors.header_text);
         } else {
-            rich_text = rich_text.color(table_colors.text);
+            rich_text = rich_text.size(14.0).color(table_colors.text);
         }
 
         if cell.is_bold {
