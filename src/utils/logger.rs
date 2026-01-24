@@ -1,9 +1,9 @@
+use crate::platform;
 use log::{LevelFilter, Log, Metadata, Record};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use crate::platform;
 
 /// Custom logger for the application
 pub struct Logger {

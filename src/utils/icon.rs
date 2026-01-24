@@ -39,14 +39,14 @@ impl IconSize {
 pub fn load_window_icon() -> Result<egui::IconData, Box<dyn std::error::Error>> {
     // Use the 32x32 icon for window icon (good balance of quality and size)
     let icon_data = include_bytes!("../../assets/icons/sizes/icon-32x32.png");
-    
+
     // Decode the PNG image
     let image = image::load_from_memory(icon_data)?;
     let rgba_image = image.to_rgba8();
-    
+
     let (width, height) = rgba_image.dimensions();
     let pixels = rgba_image.into_raw();
-    
+
     Ok(egui::IconData {
         rgba: pixels,
         width: width as u32,
@@ -82,14 +82,14 @@ pub fn load_window_icon() -> Result<egui::IconData, Box<dyn std::error::Error>> 
 // /// Load the main application icon (original size)
 // pub fn load_main_icon() -> Result<egui::IconData, Box<dyn std::error::Error>> {
 //     let icon_data = include_bytes!("../../assets/icons/c-see.png");
-    
+
 //     // Decode the PNG image
 //     let image = image::load_from_memory(icon_data)?;
 //     let rgba_image = image.to_rgba8();
-    
+
 //     let (width, height) = rgba_image.dimensions();
 //     let pixels = rgba_image.into_raw();
-    
+
 //     Ok(egui::IconData {
 //         rgba: pixels,
 //         width: width as u32,
@@ -106,7 +106,7 @@ pub fn load_window_icon() -> Result<egui::IconData, Box<dyn std::error::Error>> 
 //         [icon_data.width as usize, icon_data.height as usize],
 //         &icon_data.rgba,
 //     );
-    
+
 //     ctx.load_texture("app_icon", color_image, egui::TextureOptions::default())
 // }
 
@@ -115,15 +115,25 @@ pub fn get_platform_icon_sizes() -> Vec<IconSize> {
     #[cfg(target_os = "windows")]
     {
         // Windows typically uses 16x16, 32x32, 48x48, 256x256
-        vec![IconSize::Small, IconSize::Medium, IconSize::Large, IconSize::Massive]
+        vec![
+            IconSize::Small,
+            IconSize::Medium,
+            IconSize::Large,
+            IconSize::Massive,
+        ]
     }
-    
+
     #[cfg(target_os = "macos")]
     {
         // macOS typically uses 16x16, 32x32, 128x128, 256x256
-        vec![IconSize::Small, IconSize::Medium, IconSize::Huge, IconSize::Massive]
+        vec![
+            IconSize::Small,
+            IconSize::Medium,
+            IconSize::Huge,
+            IconSize::Massive,
+        ]
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         // Linux typically uses 16x16, 32x32, 48x48, 64x64, 128x128
@@ -135,7 +145,7 @@ pub fn get_platform_icon_sizes() -> Vec<IconSize> {
             IconSize::Huge,
         ]
     }
-    
+
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         // Default for other platforms
@@ -146,14 +156,18 @@ pub fn get_platform_icon_sizes() -> Vec<IconSize> {
 /// Log icon loading information
 pub fn log_icon_info() {
     log::info!("Loading application icons...");
-    
+
     let platform_sizes = get_platform_icon_sizes();
     log::info!("Platform-recommended icon sizes: {:?}", platform_sizes);
-    
+
     // Test loading the window icon
     match load_window_icon() {
         Ok(icon) => {
-            log::info!("Successfully loaded window icon: {}x{}", icon.width, icon.height);
+            log::info!(
+                "Successfully loaded window icon: {}x{}",
+                icon.width,
+                icon.height
+            );
         }
         Err(e) => {
             log::error!("Failed to load window icon: {}", e);
