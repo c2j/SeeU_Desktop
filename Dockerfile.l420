@@ -1,4 +1,5 @@
-FROM --platform=linux/arm64 seeu-desktop-linux-builder-arm64v8-base
+# --platform=linux/arm64
+FROM seeu-desktop-linux-builder-arm64v8-base:latest
 
 WORKDIR /app
 COPY . .
