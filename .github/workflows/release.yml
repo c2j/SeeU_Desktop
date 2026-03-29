@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Windows ──────────────────────────────────────
+          - name: Windows x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
+            binary: seeu_desktop.exe
+
+          - name: Windows ARM64
+            runner: windows-latest
+            target: aarch64-pc-windows-msvc
+            platform: windows-arm64
+            binary: seeu_desktop.exe
+
+          # ── Linux ────────────────────────────────────────
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+            binary: seeu_desktop
+
+          # NOTE: ubuntu-24.04-arm 需要 GitHub Free (公开仓库) 或 GitHub Team (私有仓库)。
+          # 如果该 runner 不可用，可改为 ubuntu-latest 并添加交叉编译工具链，
+          # 或使用 cross 工具: cargo install cross --locked && cross build --release --target aarch64-unknown-linux-gnu
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64
+            binary: seeu_desktop
+
+          # ── macOS ────────────────────────────────────────
+          # macos-13 是最后一个 Intel runner
+          - name: macOS x86_64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            platform: macos-x86_64
+            binary: seeu_desktop
+
+          # macos-latest 指向 Apple Silicon (M1+) runner
+          - name: macOS ARM64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+            binary: seeu_desktop
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # ── 平台依赖安装 ──────────────────────────────────
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libssl-dev \
+            libsqlite3-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libgl-dev \
+            libegl-dev \
+            libwayland-dev \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libclang-dev
+
+      # ── 缓存 ──────────────────────────────────────────
+
+      - name: Cache Cargo registry and git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      # ── 构建 ──────────────────────────────────────────
+
+      - name: Build
+        env:
+          # 强制从源码构建 OpenSSL，避免系统库缺失问题
+          OPENSSL_STATIC: 1
+          OPENSSL_VENDORED: 1
+          # 禁用 pkg-config，避免交叉编译时查找错误的系统库
+          LIBSQLITE3_SYS_USE_PKG_CONFIG: 0
+          LIBZ_SYS_STATIC: 1
+          SYSTEM_DEPS_NO_PKG_CONFIG: 1
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # ── 打包 ──────────────────────────────────────────
+
+      - name: Prepare distribution directory
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/
+          if [ -d "assets" ]; then
+            cp -r assets dist/
+          fi
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "SeeU-Desktop-${{ github.ref_name }}-${{ matrix.platform }}.zip"
+          Compress-Archive -Path dist\* -DestinationPath $archive
+          Write-Host "Created $archive"
+
+      - name: Create archive (macOS / Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          archive="SeeU-Desktop-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz"
+          tar czf "$archive" -C dist .
+          echo "Created $archive"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SeeU-Desktop-${{ matrix.platform }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            *.zip
+            *.tar.gz
+
+  # ── 发布 Release ────────────────────────────────────
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Collect release files
+        run: |
+          mkdir -p release
+          find artifacts/ \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp {} release/ \;
+          echo "## Release Artifacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          for f in release/*; do
+            echo "- \`$(basename "$f")\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

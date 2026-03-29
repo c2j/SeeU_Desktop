@@ -110,6 +110,9 @@ codegen-units = 1
 # Fix crunchy crate cross-compilation issue with path separators
 # Use a fork that fixes the path separator issue for cross-compilation
 #crunchy = { path = "crates/crunchy" }
-#{ git = "https://github.com/est31/crunchy", branch = "fix_cross_compilation" }
+
+# Patch objc2 0.4.1 to backport relax-sign-encoding for macOS 26+ / Swift bridge classes
+# See: https://github.com/madsmtm/objc2/issues/566
+objc2 = { path = "patches/objc2" }
 
 
