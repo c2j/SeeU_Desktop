@@ -1,12 +1,11 @@
 use crate::remote_server::{AuthMethod, RemoteServer};
 use crate::ssh_connection::ConnectionTestResult;
-use ssh2::{Session, Channel};
+use ssh2::{Channel, Session};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 /// 原生SSH连接状态
 #[derive(Debug, Clone)]
@@ -49,8 +48,12 @@ impl NativeSshConnection {
 
     /// 连接到远程服务器
     pub fn connect(&mut self) -> Result<(), String> {
-        log::info!("开始原生SSH连接到 {}@{}:{}", 
-                   self.server.username, self.server.host, self.server.port);
+        log::info!(
+            "开始原生SSH连接到 {}@{}:{}",
+            self.server.username,
+            self.server.host,
+            self.server.port
+        );
 
         // 更新状态为连接中
         {
@@ -63,42 +66,46 @@ impl NativeSshConnection {
             .map_err(|e| format!("TCP连接失败: {}", e))?;
 
         // 创建SSH会话
-        let mut session = Session::new()
-            .map_err(|e| format!("创建SSH会话失败: {}", e))?;
+        let mut session = Session::new().map_err(|e| format!("创建SSH会话失败: {}", e))?;
 
         session.set_tcp_stream(tcp);
-        session.handshake()
+        session
+            .handshake()
             .map_err(|e| format!("SSH握手失败: {}", e))?;
 
         // 根据认证方式进行认证
         match &self.server.auth_method {
             AuthMethod::Password(password) => {
                 log::info!("使用密码认证");
-                session.userauth_password(&self.server.username, password)
+                session
+                    .userauth_password(&self.server.username, password)
                     .map_err(|e| format!("密码认证失败: {}", e))?;
             }
-            AuthMethod::PrivateKey { key_path, passphrase } => {
+            AuthMethod::PrivateKey {
+                key_path,
+                passphrase,
+            } => {
                 log::info!("使用私钥认证: {}", key_path.display());
-                
+
                 if let Some(passphrase) = passphrase {
-                    session.userauth_pubkey_file(
-                        &self.server.username,
-                        None,
-                        key_path,
-                        Some(passphrase)
-                    ).map_err(|e| format!("私钥认证失败: {}", e))?;
+                    session
+                        .userauth_pubkey_file(
+                            &self.server.username,
+                            None,
+                            key_path,
+                            Some(passphrase),
+                        )
+                        .map_err(|e| format!("私钥认证失败: {}", e))?;
                 } else {
-                    session.userauth_pubkey_file(
-                        &self.server.username,
-                        None,
-                        key_path,
-                        None
-                    ).map_err(|e| format!("私钥认证失败: {}", e))?;
+                    session
+                        .userauth_pubkey_file(&self.server.username, None, key_path, None)
+                        .map_err(|e| format!("私钥认证失败: {}", e))?;
                 }
             }
             AuthMethod::Agent => {
                 log::info!("使用SSH Agent认证");
-                session.userauth_agent(&self.server.username)
+                session
+                    .userauth_agent(&self.server.username)
                     .map_err(|e| format!("SSH Agent认证失败: {}", e))?;
             }
         }
@@ -111,21 +118,25 @@ impl NativeSshConnection {
         log::info!("SSH认证成功");
 
         // 创建shell通道
-        let mut channel = session.channel_session()
+        let mut channel = session
+            .channel_session()
             .map_err(|e| format!("创建SSH通道失败: {}", e))?;
 
         // 请求PTY
-        channel.request_pty("xterm", None, None)
+        channel
+            .request_pty("xterm", None, None)
             .map_err(|e| format!("请求PTY失败: {}", e))?;
 
         // 启动shell
-        channel.shell()
+        channel
+            .shell()
             .map_err(|e| format!("启动shell失败: {}", e))?;
 
         // 如果指定了工作目录，切换到该目录
         if let Some(ref dir) = self.server.working_directory {
             let cd_command = format!("cd '{}'\n", dir.replace('\'', "'\"'\"'"));
-            channel.write_all(cd_command.as_bytes())
+            channel
+                .write_all(cd_command.as_bytes())
                 .map_err(|e| format!("切换工作目录失败: {}", e))?;
         }
 
@@ -147,7 +158,8 @@ impl NativeSshConnection {
     pub fn send_command(&mut self, command: &str) -> Result<(), String> {
         if let Some(ref mut channel) = self.channel {
             let command_with_newline = format!("{}\n", command);
-            channel.write_all(command_with_newline.as_bytes())
+            channel
+                .write_all(command_with_newline.as_bytes())
                 .map_err(|e| format!("发送命令失败: {}", e))?;
             Ok(())
         } else {
@@ -198,7 +210,12 @@ impl NativeSshConnection {
 
     /// 测试连接
     pub fn test_connection(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
-        log::info!("使用原生SSH测试连接到 {}@{}:{}", server.username, server.host, server.port);
+        log::info!(
+            "使用原生SSH测试连接到 {}@{}:{}",
+            server.username,
+            server.host,
+            server.port
+        );
 
         use ssh2::Session;
         use std::net::TcpStream;
@@ -207,7 +224,7 @@ impl NativeSshConnection {
         // 建立TCP连接
         let tcp = match TcpStream::connect_timeout(
             &format!("{}:{}", server.host, server.port).parse().unwrap(),
-            Duration::from_secs(10)
+            Duration::from_secs(10),
         ) {
             Ok(tcp) => tcp,
             Err(e) => {
@@ -218,20 +235,20 @@ impl NativeSshConnection {
         // 创建SSH会话
         let mut sess = Session::new().map_err(|e| format!("创建SSH会话失败: {}", e))?;
         sess.set_tcp_stream(tcp);
-        sess.handshake().map_err(|e| format!("SSH握手失败: {}", e))?;
+        sess.handshake()
+            .map_err(|e| format!("SSH握手失败: {}", e))?;
 
         // 尝试认证
         let auth_result = match &server.auth_method {
-            AuthMethod::Password(password) => {
-                sess.userauth_password(&server.username, password)
-            }
-            AuthMethod::PrivateKey { key_path, passphrase } => {
+            AuthMethod::Password(password) => sess.userauth_password(&server.username, password),
+            AuthMethod::PrivateKey {
+                key_path,
+                passphrase,
+            } => {
                 let passphrase = passphrase.as_deref();
                 sess.userauth_pubkey_file(&server.username, None, key_path, passphrase)
             }
-            AuthMethod::Agent => {
-                sess.userauth_agent(&server.username)
-            }
+            AuthMethod::Agent => sess.userauth_agent(&server.username),
         };
 
         match auth_result {
@@ -248,7 +265,12 @@ impl NativeSshConnection {
 
     /// 创建SSH连接
     pub fn create_connection(server: &RemoteServer) -> Result<Self, String> {
-        log::info!("创建原生SSH连接到 {}@{}:{}", server.username, server.host, server.port);
+        log::info!(
+            "创建原生SSH连接到 {}@{}:{}",
+            server.username,
+            server.host,
+            server.port
+        );
 
         use ssh2::Session;
         use std::net::TcpStream;
@@ -257,13 +279,15 @@ impl NativeSshConnection {
         // 建立TCP连接
         let tcp = TcpStream::connect_timeout(
             &format!("{}:{}", server.host, server.port).parse().unwrap(),
-            Duration::from_secs(10)
-        ).map_err(|e| format!("TCP连接失败: {}", e))?;
+            Duration::from_secs(10),
+        )
+        .map_err(|e| format!("TCP连接失败: {}", e))?;
 
         // 创建SSH会话
         let mut sess = Session::new().map_err(|e| format!("创建SSH会话失败: {}", e))?;
         sess.set_tcp_stream(tcp);
-        sess.handshake().map_err(|e| format!("SSH握手失败: {}", e))?;
+        sess.handshake()
+            .map_err(|e| format!("SSH握手失败: {}", e))?;
 
         // 认证
         match &server.auth_method {
@@ -271,7 +295,10 @@ impl NativeSshConnection {
                 sess.userauth_password(&server.username, password)
                     .map_err(|e| format!("密码认证失败: {}", e))?;
             }
-            AuthMethod::PrivateKey { key_path, passphrase } => {
+            AuthMethod::PrivateKey {
+                key_path,
+                passphrase,
+            } => {
                 let passphrase = passphrase.as_deref();
                 sess.userauth_pubkey_file(&server.username, None, key_path, passphrase)
                     .map_err(|e| format!("私钥认证失败: {}", e))?;
@@ -334,7 +361,8 @@ impl SshConnectionMethodManager {
         let mut methods = Vec::new();
 
         // 外部SSH客户端
-        let external_available = crate::ssh_connection::SshConnectionBuilder::check_ssh_availability();
+        let external_available =
+            crate::ssh_connection::SshConnectionBuilder::check_ssh_availability();
         methods.push((
             SshConnectionMethod::External,
             "外部SSH客户端".to_string(),
@@ -357,18 +385,27 @@ impl SshConnectionMethodManager {
         match method {
             SshConnectionMethod::External => {
                 if crate::ssh_connection::SshConnectionBuilder::check_ssh_availability() {
-                    format!("✅ 外部SSH客户端\n{}", 
-                           crate::ssh_connection::SshConnectionBuilder::get_ssh_support_info())
+                    format!(
+                        "✅ 外部SSH客户端\n{}",
+                        crate::ssh_connection::SshConnectionBuilder::get_ssh_support_info()
+                    )
                 } else {
                     "❌ 外部SSH客户端不可用".to_string()
                 }
             }
             SshConnectionMethod::Native => {
-                format!("✅ 原生SSH支持\n{}", NativeSshConnection::get_support_info())
+                format!(
+                    "✅ 原生SSH支持\n{}",
+                    NativeSshConnection::get_support_info()
+                )
             }
             SshConnectionMethod::Auto => {
                 let recommended = Self::get_recommended_method();
-                format!("🔄 自动选择: {:?}\n{}", recommended, Self::get_method_info(&recommended))
+                format!(
+                    "🔄 自动选择: {:?}\n{}",
+                    recommended,
+                    Self::get_method_info(&recommended)
+                )
             }
         }
     }

@@ -106,15 +106,15 @@ jobs:
 
       # ── 构建 ──────────────────────────────────────────
 
-      - name: Build
+      - name: Build (macOS x86_64 cross-compile)
+        if: matrix.target == 'x86_64-apple-darwin'
         env:
-          # 强制从源码构建 OpenSSL，避免系统库缺失问题
-          OPENSSL_STATIC: 1
-          OPENSSL_VENDORED: 1
-          # 禁用 pkg-config，避免交叉编译时查找错误的系统库
-          LIBSQLITE3_SYS_USE_PKG_CONFIG: 0
-          LIBZ_SYS_STATIC: 1
-          SYSTEM_DEPS_NO_PKG_CONFIG: 1
+          CFLAGS: -arch x86_64
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build
+        if: matrix.target != 'x86_64-apple-darwin'
         run: cargo build --release --target ${{ matrix.target }}
 
       # ── 打包 ──────────────────────────────────────────
@@ -136,8 +136,8 @@ jobs:
           Compress-Archive -Path dist\* -DestinationPath $archive
           Write-Host "Created $archive"
 
-      - name: Create archive (macOS / Linux)
-        if: runner.os != 'Windows'
+      - name: "Create archive (macOS / Linux)"
+        if: "${{ runner.os != 'Windows' }}"
         shell: bash
         run: |
           archive="SeeU-Desktop-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz"

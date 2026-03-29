@@ -50,7 +50,7 @@ base64 = "0.21"
 keyring = "2.0"
 
 # 原生SSH支持（不依赖外部SSH客户端）
-ssh2 = "0.9"
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 # WebSocket支持（用于Web SSH）
 tokio-tungstenite = "0.20"
 # HTTP客户端（用于REST API SSH）

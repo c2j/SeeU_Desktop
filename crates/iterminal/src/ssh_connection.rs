@@ -65,21 +65,24 @@ impl SshConnectionBuilder {
                 // 密码认证 - 通过环境变量传递密码（更安全）
                 env_vars.insert("SSH_ASKPASS_REQUIRE".to_string(), "force".to_string());
                 env_vars.insert("DISPLAY".to_string(), ":0".to_string());
-                
+
                 // 注意：实际密码处理需要更安全的方式，这里仅作示例
                 args.extend_from_slice(&[
                     "-o".to_string(),
                     "PreferredAuthentications=password".to_string(),
                 ]);
             }
-            AuthMethod::PrivateKey { key_path, passphrase } => {
+            AuthMethod::PrivateKey {
+                key_path,
+                passphrase,
+            } => {
                 // 私钥认证
                 args.extend_from_slice(&["-i".to_string(), key_path.to_string_lossy().to_string()]);
                 args.extend_from_slice(&[
                     "-o".to_string(),
                     "PreferredAuthentications=publickey".to_string(),
                 ]);
-                
+
                 // 如果有私钥密码，设置相关环境变量
                 if passphrase.is_some() {
                     env_vars.insert("SSH_ASKPASS_REQUIRE".to_string(), "force".to_string());
@@ -105,7 +108,7 @@ impl SshConnectionBuilder {
         if let Some(ref dir) = server.working_directory {
             args.extend_from_slice(&[
                 "-t".to_string(),
-                format!("cd '{}' && exec $SHELL -l", dir.replace('\'', "'\"'\"'"))
+                format!("cd '{}' && exec $SHELL -l", dir.replace('\'', "'\"'\"'")),
             ]);
         } else {
             // 默认启动登录shell
@@ -122,7 +125,12 @@ impl SshConnectionBuilder {
 
     /// 构建SSH命令，优先使用原生SSH
     pub fn build_ssh_command(server: &RemoteServer) -> Result<(String, Vec<String>), String> {
-        log::info!("构建SSH命令，服务器: {}@{}:{}", server.username, server.host, server.port);
+        log::info!(
+            "构建SSH命令，服务器: {}@{}:{}",
+            server.username,
+            server.host,
+            server.port
+        );
 
         // 首先检查是否可以使用原生SSH连接
         if crate::native_ssh::NativeSshConnection::is_available() {
@@ -133,7 +141,9 @@ impl SshConnectionBuilder {
         // 对于密码认证，尝试多种方式
         if let AuthMethod::Password(password) = &server.auth_method {
             if !password.is_empty() {
-                if let Some((command, args)) = Self::try_password_authentication_methods(server, password)? {
+                if let Some((command, args)) =
+                    Self::try_password_authentication_methods(server, password)?
+                {
                     return Ok((command, args));
                 }
                 log::warn!("所有自动密码认证方法都不可用，回退到原生SSH");
@@ -144,7 +154,11 @@ impl SshConnectionBuilder {
         if let Some(ssh_command) = Self::get_ssh_command() {
             let mut config = Self::build_ssh_config(server)?;
             config.command = ssh_command;
-            log::info!("SSH命令构建完成: {} {}", config.command, config.args.join(" "));
+            log::info!(
+                "SSH命令构建完成: {} {}",
+                config.command,
+                config.args.join(" ")
+            );
             Ok((config.command, config.args))
         } else {
             // 如果没有外部SSH客户端，强制使用原生SSH
@@ -163,7 +177,10 @@ impl SshConnectionBuilder {
             server.username.clone(),
             match &server.auth_method {
                 AuthMethod::Password(pwd) => format!("password:{}", pwd),
-                AuthMethod::PrivateKey { key_path, passphrase } => {
+                AuthMethod::PrivateKey {
+                    key_path,
+                    passphrase,
+                } => {
                     if let Some(pass) = passphrase {
                         format!("key:{}:{}", key_path.display(), pass)
                     } else {
@@ -171,7 +188,7 @@ impl SshConnectionBuilder {
                     }
                 }
                 AuthMethod::Agent => "agent".to_string(),
-            }
+            },
         ];
 
         Ok(("native-ssh-client".to_string(), args))
@@ -179,7 +196,12 @@ impl SshConnectionBuilder {
 
     /// 测试连接，支持原生SSH回退
     pub fn test_connection(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
-        log::info!("开始测试SSH连接到 {}@{}:{}", server.username, server.host, server.port);
+        log::info!(
+            "开始测试SSH连接到 {}@{}:{}",
+            server.username,
+            server.host,
+            server.port
+        );
 
         // 优先使用原生SSH进行连接测试
         if crate::native_ssh::NativeSshConnection::is_available() {
@@ -190,7 +212,7 @@ impl SshConnectionBuilder {
         // 检查外部SSH客户端可用性
         if !Self::check_ssh_availability() {
             log::warn!("SSH客户端不可用，尝试使用替代方案");
-            
+
             #[cfg(target_os = "windows")]
             {
                 if Self::check_plink_availability() {
@@ -198,8 +220,10 @@ impl SshConnectionBuilder {
                     return Self::test_connection_with_plink(server);
                 }
             }
-            
-            return Ok(ConnectionTestResult::Failed("没有可用的SSH客户端，请安装OpenSSH或启用原生SSH支持".to_string()));
+
+            return Ok(ConnectionTestResult::Failed(
+                "没有可用的SSH客户端，请安装OpenSSH或启用原生SSH支持".to_string(),
+            ));
         }
 
         // 使用外部SSH客户端进行测试
@@ -207,7 +231,9 @@ impl SshConnectionBuilder {
     }
 
     /// 使用外部SSH客户端测试连接
-    fn test_connection_with_external_ssh(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
+    fn test_connection_with_external_ssh(
+        server: &RemoteServer,
+    ) -> Result<ConnectionTestResult, String> {
         let mut args = vec![
             "-o".to_string(),
             "ConnectTimeout=10".to_string(),
@@ -245,17 +271,17 @@ impl SshConnectionBuilder {
         args.push("echo 'connection_test_success'".to_string());
 
         log::debug!("执行SSH命令: ssh {}", args.join(" "));
-        
+
         match std::process::Command::new("ssh").args(&args).output() {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                
+
                 log::debug!("SSH输出: {}", stdout);
                 if !stderr.is_empty() {
                     log::debug!("SSH错误: {}", stderr);
                 }
-                
+
                 if output.status.success() && stdout.contains("connection_test_success") {
                     Ok(ConnectionTestResult::Success)
                 } else {
@@ -274,12 +300,13 @@ impl SshConnectionBuilder {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    fn check_plink_availability() -> bool {
-        std::process::Command::new("plink")
+    #[cfg(windows)]
+    pub fn check_plink_availability() -> bool {
+        Command::new("plink")
             .arg("-V")
             .output()
-            .is_ok()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
     }
 
     #[cfg(target_os = "windows")]
@@ -299,23 +326,23 @@ impl SshConnectionBuilder {
 
         log::debug!("执行plink命令: plink {}", args.join(" "));
 
-        match std::process::Command::new("plink")
-            .args(&args)
-            .output()
-        {
+        match std::process::Command::new("plink").args(&args).output() {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                
+
                 log::debug!("plink输出: {}", stdout);
                 if !stderr.is_empty() {
                     log::debug!("plink错误: {}", stderr);
                 }
-                
+
                 if stdout.contains("connection_test_success") {
                     Ok(ConnectionTestResult::Success)
                 } else {
-                    Ok(ConnectionTestResult::Failed(format!("plink连接失败: {}", stderr)))
+                    Ok(ConnectionTestResult::Failed(format!(
+                        "plink连接失败: {}",
+                        stderr
+                    )))
                 }
             }
             Err(e) => {
@@ -326,7 +353,9 @@ impl SshConnectionBuilder {
     }
 
     /// 测试SSH服务可用性（用于密码认证）
-    fn test_ssh_service_availability(server: &RemoteServer) -> Result<ConnectionTestResult, String> {
+    fn test_ssh_service_availability(
+        server: &RemoteServer,
+    ) -> Result<ConnectionTestResult, String> {
         log::info!("测试SSH服务可用性到 {}:{}", server.host, server.port);
 
         // 首先测试网络连接性
@@ -425,12 +454,11 @@ impl SshConnectionBuilder {
                             Ok(ConnectionTestResult::Failed("不是SSH服务".to_string()))
                         }
                     }
-                    Ok(_) => {
-                        Ok(ConnectionTestResult::Failed("未收到SSH banner".to_string()))
-                    }
-                    Err(e) => {
-                        Ok(ConnectionTestResult::Failed(format!("读取SSH banner失败: {}", e)))
-                    }
+                    Ok(_) => Ok(ConnectionTestResult::Failed("未收到SSH banner".to_string())),
+                    Err(e) => Ok(ConnectionTestResult::Failed(format!(
+                        "读取SSH banner失败: {}",
+                        e
+                    ))),
                 }
             }
             Err(e) => {
@@ -455,7 +483,10 @@ impl SshConnectionBuilder {
                     log::debug!("找到标准SSH客户端");
                     return true;
                 } else {
-                    log::debug!("标准SSH命令执行失败: {}", String::from_utf8_lossy(&output.stderr));
+                    log::debug!(
+                        "标准SSH命令执行失败: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
                 }
             }
             Err(e) => {
@@ -476,7 +507,10 @@ impl SshConnectionBuilder {
                         log::debug!("找到Windows OpenSSH客户端");
                         return true;
                     } else {
-                        log::debug!("Windows OpenSSH执行失败: {}", String::from_utf8_lossy(&output.stderr));
+                        log::debug!(
+                            "Windows OpenSSH执行失败: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                     }
                 }
                 Err(e) => {
@@ -653,18 +687,26 @@ impl SshConnectionBuilder {
         }
 
         // 如果没有任何密码认证工具可用，提供建议
-        let has_password_auth_tool = Self::check_sshpass_availability() ||
-            {
+        let has_password_auth_tool = Self::check_sshpass_availability()
+            || {
                 #[cfg(unix)]
-                { Self::check_expect_availability() }
+                {
+                    Self::check_expect_availability()
+                }
                 #[cfg(not(unix))]
-                { false }
-            } ||
-            {
+                {
+                    false
+                }
+            }
+            || {
                 #[cfg(windows)]
-                { Self::check_powershell_ssh_availability() || Self::check_plink_availability() }
+                {
+                    Self::check_powershell_ssh_availability() || Self::check_plink_availability()
+                }
                 #[cfg(not(windows))]
-                { false }
+                {
+                    false
+                }
             };
 
         if !has_password_auth_tool {
@@ -679,7 +721,7 @@ impl SshConnectionBuilder {
     /// 尝试多种密码认证方法
     pub fn try_password_authentication_methods(
         server: &RemoteServer,
-        password: &str
+        password: &str,
     ) -> Result<Option<(String, Vec<String>)>, String> {
         use crate::remote_server::PasswordAuthMethod;
 
@@ -692,7 +734,9 @@ impl SshConnectionBuilder {
             PasswordAuthMethod::Sshpass => {
                 if Self::check_sshpass_availability() {
                     log::info!("使用用户指定的sshpass进行密码认证");
-                    Self::build_sshpass_command(server, password).map(Some).map_err(|e| e)
+                    Self::build_sshpass_command(server, password)
+                        .map(Some)
+                        .map_err(|e| e)
                 } else {
                     Err("sshpass工具不可用".to_string())
                 }
@@ -701,7 +745,9 @@ impl SshConnectionBuilder {
             PasswordAuthMethod::Expect => {
                 if Self::check_expect_availability() {
                     log::info!("使用用户指定的expect进行密码认证");
-                    Self::build_expect_command(server, password).map(Some).map_err(|e| e)
+                    Self::build_expect_command(server, password)
+                        .map(Some)
+                        .map_err(|e| e)
                 } else {
                     Err("expect工具不可用".to_string())
                 }
@@ -710,7 +756,9 @@ impl SshConnectionBuilder {
             PasswordAuthMethod::PowerShell => {
                 if Self::check_powershell_ssh_availability() {
                     log::info!("使用用户指定的PowerShell SSH进行密码认证");
-                    Self::build_powershell_ssh_command(server, password).map(Some).map_err(|e| e)
+                    Self::build_powershell_ssh_command(server, password)
+                        .map(Some)
+                        .map_err(|e| e)
                 } else {
                     Err("PowerShell SSH不可用".to_string())
                 }
@@ -719,7 +767,9 @@ impl SshConnectionBuilder {
             PasswordAuthMethod::Plink => {
                 if Self::check_plink_availability() {
                     log::info!("使用用户指定的PuTTY plink进行密码认证");
-                    Self::build_plink_command(server, password).map(Some).map_err(|e| e)
+                    Self::build_plink_command(server, password)
+                        .map(Some)
+                        .map_err(|e| e)
                 } else {
                     Err("PuTTY plink不可用".to_string())
                 }
@@ -734,7 +784,7 @@ impl SshConnectionBuilder {
     /// 自动选择密码认证方法
     pub fn try_auto_password_authentication(
         server: &RemoteServer,
-        password: &str
+        password: &str,
     ) -> Result<Option<(String, Vec<String>)>, String> {
         // 方法1: 使用sshpass
         if Self::check_sshpass_availability() {
@@ -777,15 +827,11 @@ impl SshConnectionBuilder {
     /// 构建sshpass命令
     pub fn build_sshpass_command(
         server: &RemoteServer,
-        password: &str
+        password: &str,
     ) -> Result<(String, Vec<String>), String> {
         let ssh_command = Self::get_ssh_command().unwrap_or_else(|| "ssh".to_string());
 
-        let mut args = vec![
-            "-p".to_string(),
-            password.to_string(),
-            ssh_command,
-        ];
+        let mut args = vec!["-p".to_string(), password.to_string(), ssh_command];
 
         // 添加SSH选项
         args.extend_from_slice(&[
@@ -814,7 +860,7 @@ impl SshConnectionBuilder {
         if let Some(ref dir) = server.working_directory {
             args.extend_from_slice(&[
                 "-t".to_string(),
-                format!("cd '{}' && exec $SHELL -l", dir.replace('\'', "'\"'\"'"))
+                format!("cd '{}' && exec $SHELL -l", dir.replace('\'', "'\"'\"'")),
             ]);
         } else {
             // 默认启动登录shell
@@ -829,7 +875,7 @@ impl SshConnectionBuilder {
     #[cfg(unix)]
     pub fn build_expect_command(
         server: &RemoteServer,
-        password: &str
+        password: &str,
     ) -> Result<(String, Vec<String>), String> {
         let ssh_command = Self::get_ssh_command().unwrap_or_else(|| "ssh".to_string());
 
@@ -856,7 +902,11 @@ expect {{
 interact
 "#,
             ssh_command,
-            if server.port != 22 { format!(" -p {}", server.port) } else { String::new() },
+            if server.port != 22 {
+                format!(" -p {}", server.port)
+            } else {
+                String::new()
+            },
             server.username,
             server.host,
             password.replace("\"", "\\\""),
@@ -864,10 +914,7 @@ interact
         );
 
         // 将expect脚本作为参数传递
-        let args = vec![
-            "-c".to_string(),
-            expect_script,
-        ];
+        let args = vec!["-c".to_string(), expect_script];
 
         Ok(("expect".to_string(), args))
     }
@@ -876,7 +923,7 @@ interact
     #[cfg(windows)]
     pub fn build_powershell_ssh_command(
         server: &RemoteServer,
-        password: &str
+        password: &str,
     ) -> Result<(String, Vec<String>), String> {
         // 使用PowerShell的SSH模块或者调用SSH客户端
         let powershell_script = format!(
@@ -892,7 +939,11 @@ try {{
 "#,
             password.replace("'", "''"),
             server.username,
-            if server.port != 22 { format!(", '-p', '{}'", server.port) } else { String::new() },
+            if server.port != 22 {
+                format!(", '-p', '{}'", server.port)
+            } else {
+                String::new()
+            },
             server.username,
             server.host
         );
@@ -912,11 +963,11 @@ try {{
     #[cfg(windows)]
     pub fn build_plink_command(
         server: &RemoteServer,
-        password: &str
+        password: &str,
     ) -> Result<(String, Vec<String>), String> {
         let mut args = vec![
             "-ssh".to_string(),
-            "-batch".to_string(),  // 非交互模式
+            "-batch".to_string(), // 非交互模式
             "-pw".to_string(),
             password.to_string(),
         ];
@@ -932,7 +983,10 @@ try {{
 
         // 如果指定了远程工作目录，添加cd命令
         if let Some(ref dir) = server.working_directory {
-            args.push(format!("cd '{}' && exec $SHELL -l", dir.replace('\'', "'\"'\"'")));
+            args.push(format!(
+                "cd '{}' && exec $SHELL -l",
+                dir.replace('\'', "'\"'\"'")
+            ));
         } else {
             args.push("exec $SHELL -l".to_string());
         }
@@ -955,16 +1009,6 @@ try {{
     pub fn check_powershell_ssh_availability() -> bool {
         Command::new("powershell")
             .args(&["-Command", "Get-Command ssh -ErrorAction SilentlyContinue"])
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-    }
-
-    /// 检查PuTTY plink是否可用 (Windows系统)
-    #[cfg(windows)]
-    pub fn check_plink_availability() -> bool {
-        Command::new("plink")
-            .arg("-V")
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
@@ -1028,10 +1072,7 @@ try {{
         let mut args = Vec::new();
 
         // 基本选项
-        args.extend_from_slice(&[
-            "-o".to_string(),
-            "ConnectTimeout=10".to_string(),
-        ]);
+        args.extend_from_slice(&["-o".to_string(), "ConnectTimeout=10".to_string()]);
 
         // 端口配置
         if server.port != 22 {
@@ -1053,7 +1094,7 @@ try {{
 
         // 构建源和目标路径
         let remote_target = format!("{}@{}:{}", server.username, server.host, remote_path);
-        
+
         if upload {
             // 上传：本地 -> 远程
             args.extend_from_slice(&[local_path.to_string(), remote_target]);
@@ -1196,7 +1237,10 @@ mod tests {
         #[cfg(windows)]
         {
             let powershell_available = SshConnectionBuilder::check_powershell_ssh_availability();
-            println!("PowerShell SSH: {}", if powershell_available { "✅" } else { "❌" });
+            println!(
+                "PowerShell SSH: {}",
+                if powershell_available { "✅" } else { "❌" }
+            );
 
             let plink_available = SshConnectionBuilder::check_plink_availability();
             println!("PuTTY plink: {}", if plink_available { "✅" } else { "❌" });
@@ -1217,7 +1261,8 @@ mod tests {
         // 测试自动选择
         server.password_auth_method = PasswordAuthMethod::Auto;
         if let AuthMethod::Password(password) = &server.auth_method {
-            let result = SshConnectionBuilder::try_password_authentication_methods(&server, password);
+            let result =
+                SshConnectionBuilder::try_password_authentication_methods(&server, password);
             match result {
                 Ok(Some((command, args))) => {
                     println!("自动选择成功: {} {}", command, args.join(" "));
@@ -1234,7 +1279,8 @@ mod tests {
         // 测试交互式方法
         server.password_auth_method = PasswordAuthMethod::Interactive;
         if let AuthMethod::Password(password) = &server.auth_method {
-            let result = SshConnectionBuilder::try_password_authentication_methods(&server, password);
+            let result =
+                SshConnectionBuilder::try_password_authentication_methods(&server, password);
             assert!(result.is_ok(), "交互式方法应该总是成功");
             assert!(result.unwrap().is_none(), "交互式方法应该返回None");
         }
@@ -1254,7 +1300,7 @@ mod tests {
         // 测试网络连接性检查
         let server = RemoteServer::new(
             "Test Server".to_string(),
-            "github.com".to_string(),  // 使用GitHub作为测试目标，因为它有SSH服务
+            "github.com".to_string(), // 使用GitHub作为测试目标，因为它有SSH服务
             "git".to_string(),
             AuthMethod::Password("testpass".to_string()),
         );

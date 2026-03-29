@@ -1,6 +1,6 @@
 [package]
 name = "seeu_desktop"
-version = "0.3.712"
+version = "0.4.330"
 edition = "2021"
 authors = ["SeeU Team C&L"]
 description = "A modern desktop application built with Rust, egui and eframe"
@@ -72,7 +72,7 @@ ifile_editor = { path = "crates/ifile_editor" }
 egui_term = { path = "crates/egui_term" }
 
 # 原生SSH支持
-ssh2 = "0.9"
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 # 网络连接
 # tokio = { version = "1.0", features = ["full"] }
 
