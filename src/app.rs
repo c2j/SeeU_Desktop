@@ -15,6 +15,7 @@ use crate::services::{
 };
 
 use crate::config::{StartupConfig, StartupMetrics};
+use crate::utils::safe_truncate_tail;
 
 // 导入模块
 use inote::db_state::DbINoteState;
@@ -1426,8 +1427,8 @@ impl SeeUApp {
                     Ok(content) => {
                         // 限制输出长度，避免过长的内容
                         let terminal_output = if content.len() > 2000 {
-                            format!("{}...\n[输出已截断，总长度: {} 字符]",
-                                &content[content.len().saturating_sub(2000)..], content.len())
+                            let tail = safe_truncate_tail(&content, 2000);
+                            format!("{}...\n[输出已截断，总长度: {} 字符]", tail, content.len())
                         } else {
                             content
                         };
@@ -1470,8 +1471,9 @@ impl SeeUApp {
                     Ok(content) => {
                         // 限制输出长度，避免过长的内容
                         if content.len() > 2000 {
+                            let tail = safe_truncate_tail(&content, 2000);
                             Some(format!("{}...\n[输出已截断，总长度: {} 字符]",
-                                &content[content.len().saturating_sub(2000)..], content.len()))
+                                tail, content.len()))
                         } else {
                             Some(content)
                         }

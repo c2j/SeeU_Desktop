@@ -6,9 +6,10 @@
 #FROM alpine:3.22
 #FROM rust:alpine
 #FROM alpine:edge
-FROM --platform=linux/arm64 arm64v8/ubuntu:20.04
+# --platform=linux/arm64
+FROM  arm64v8/ubuntu:20.04
 
-RUN rm /var/lib/dpkg/status && touch /var/lib/dpkg/status && apt-get update --fix-missing && apt-get install -y --no-install-recommends tzdata 
+RUN rm /var/lib/dpkg/status && touch /var/lib/dpkg/status && apt-get update --fix-missing && apt-get install -y --no-install-recommends tzdata
 RUN apt-get update &&    apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
