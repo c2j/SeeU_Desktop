@@ -49,14 +49,13 @@ jobs:
             binary: seeu_desktop
 
           # ── macOS ────────────────────────────────────────
-          # macos-13 是最后一个 Intel runner
+          # macOS Intel runner 已弃用，在 ARM runner 上交叉编译 x86_64
           - name: macOS x86_64
-            runner: macos-13
+            runner: macos-latest
             target: x86_64-apple-darwin
             platform: macos-x86_64
             binary: seeu_desktop
 
-          # macos-latest 指向 Apple Silicon (M1+) runner
           - name: macOS ARM64
             runner: macos-latest
             target: aarch64-apple-darwin
