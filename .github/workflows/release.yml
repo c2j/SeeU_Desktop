@@ -102,17 +102,17 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: quay.io/pypa/manylinux_2_28_x86_64
-          options: -v ${{ github.workspace }}:/workspace -w /workspace
+          options: -v ${{ github.workspace }}:/workspace -w /workspace -e OPENSSL_NO_VENDOR=1
           run: |
             # Install Rust toolchain in container
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             source $HOME/.cargo/env
             rustup target add x86_64-unknown-linux-gnu
 
-            # Install dependencies
+            # Install dependencies (including Perl modules for OpenSSL)
             yum install -y openssl-devel sqlite-devel libxcb-devel libxkbcommon-devel \
               mesa-libGL-devel mesa-libEGL-devel wayland-devel fontconfig-devel freetype-devel \
-              clang-devel libxcb-shape-devel libxcb-xfixes-devel
+              clang-devel libxcb-shape-devel libxcb-xfixes-devel perl-core perl-IPC-Cmd
 
             # Build
             cargo build --release --target x86_64-unknown-linux-gnu
@@ -122,17 +122,17 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: quay.io/pypa/manylinux_2_28_aarch64
-          options: -v ${{ github.workspace }}:/workspace -w /workspace
+          options: -v ${{ github.workspace }}:/workspace -w /workspace -e OPENSSL_NO_VENDOR=1
           run: |
             # Install Rust toolchain in container
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             source $HOME/.cargo/env
             rustup target add aarch64-unknown-linux-gnu
 
-            # Install dependencies
+            # Install dependencies (including Perl modules for OpenSSL)
             yum install -y openssl-devel sqlite-devel libxcb-devel libxkbcommon-devel \
               mesa-libGL-devel mesa-libEGL-devel wayland-devel fontconfig-devel freetype-devel \
-              clang-devel libxcb-shape-devel libxcb-xfixes-devel
+              clang-devel libxcb-shape-devel libxcb-xfixes-devel perl-core perl-IPC-Cmd
 
             # Build
             cargo build --release --target aarch64-unknown-linux-gnu
