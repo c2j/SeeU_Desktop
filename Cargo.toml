@@ -1,6 +1,6 @@
 [package]
 name = "seeu_desktop"
-version = "0.4.331"
+version = "0.4.332"
 edition = "2021"
 authors = ["SeeU Team C&L"]
 description = "A modern desktop application built with Rust, egui and eframe"
