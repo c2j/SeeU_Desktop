@@ -125,7 +125,7 @@ jobs:
 
             yum install -y sqlite-devel libxcb-devel libxkbcommon-devel \
               mesa-libGL-devel mesa-libEGL-devel wayland-devel fontconfig-devel freetype-devel \
-              clang-devel perl-core perl-IPC-Cmd
+              clang-devel perl-core perl-IPC-Cmd glibc-static
 
             cargo build --release --target aarch64-unknown-linux-gnu
 
